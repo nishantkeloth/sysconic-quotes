@@ -1,0 +1,303 @@
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import os, jwt, bcrypt, uuid, re, traceback, requests
+from datetime import datetime, timedelta
+from supabase import create_client
+
+app = Flask(__name__)
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+SUPABASE_URL = os.environ.get('SUPABASE_URL')
+SUPABASE_KEY = os.environ.get('SUPABASE_SERVICE_KEY')
+JWT_SECRET   = os.environ.get('JWT_SECRET', 'sysconic-quotes-secret-2026')
+MS_TENANT_ID = os.environ.get('MS_TENANT_ID', 'b36855d2-9d26-43a4-bec6-82268a7713fb')
+MS_CLIENT_ID = os.environ.get('MS_CLIENT_ID', '491f22c7-9dee-4c30-b828-acf8ba8d948c')
+MS_CLIENT_SECRET = os.environ.get('MS_CLIENT_SECRET', 'bvf8Q~92vTfsyfIpPXSUypbpeSZXImHQbEOXVapA')
+SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'nishant@sysconic.com')
+APP_URL = os.environ.get('APP_URL', 'https://sysconic-quotes.vercel.app')
+
+def get_sb():
+    return create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def make_token(user_id, company_id, role):
+    return jwt.encode({
+        'user_id': str(user_id),
+        'company_id': str(company_id),
+        'role': role,
+        'exp': datetime.utcnow() + timedelta(days=30)
+    }, JWT_SECRET, algorithm='HS256')
+
+def verify_token(req):
+    auth = req.headers.get('Authorization', '')
+    if not auth.startswith('Bearer '): return None
+    try:
+        return jwt.decode(auth[7:], JWT_SECRET, algorithms=['HS256'])
+    except:
+        return None
+
+def slugify(name):
+    return re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+
+def get_ms_token():
+    """Get Microsoft Graph access token using client credentials"""
+    url = f'https://login.microsoftonline.com/{MS_TENANT_ID}/oauth2/v2.0/token'
+    data = {
+        'client_id': MS_CLIENT_ID,
+        'client_secret': MS_CLIENT_SECRET,
+        'scope': 'https://graph.microsoft.com/.default',
+        'grant_type': 'client_credentials'
+    }
+    r = requests.post(url, data=data)
+    return r.json().get('access_token')
+
+def send_invite_email(to_email, invite_url, company_name, invited_by_name, role):
+    """Send invite email via Microsoft Graph"""
+    try:
+        token = get_ms_token()
+        if not token:
+            print('Failed to get MS token')
+            return False
+
+        subject = f"You're invited to join {company_name} on Sysconic Quote Manager"
+        body = f"""
+        <html><body style="font-family:Segoe UI,Arial,sans-serif;color:#1a1a1a;max-width:600px;margin:0 auto;padding:20px">
+            <div style="background:#1a3c6e;padding:24px;border-radius:8px 8px 0 0;text-align:center">
+                <div style="font-size:22px;font-weight:800;color:#fff;letter-spacing:.02em">SYSCONIC</div>
+                <div style="font-size:12px;color:rgba(255,255,255,.6);margin-top:4px">Quote Manager · SaaS Platform</div>
+            </div>
+            <div style="background:#fff;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;padding:32px">
+                <h2 style="color:#1a3c6e;margin:0 0 16px">You've been invited!</h2>
+                <p style="color:#555;line-height:1.6;margin-bottom:20px">
+                    <strong>{invited_by_name}</strong> has invited you to join <strong>{company_name}</strong> 
+                    on Sysconic Quote Manager as a <strong>{role}</strong>.
+                </p>
+                <p style="color:#555;line-height:1.6;margin-bottom:28px">
+                    Sysconic Quote Manager helps your team create professional LED wall installation 
+                    quotations quickly and efficiently.
+                </p>
+                <div style="text-align:center;margin-bottom:28px">
+                    <a href="{invite_url}" style="background:#1a3c6e;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:700;display:inline-block">
+                        Accept Invitation →
+                    </a>
+                </div>
+                <div style="background:#f8f9fc;border-radius:6px;padding:14px;margin-bottom:20px">
+                    <p style="font-size:12px;color:#888;margin:0 0 6px">Or copy this link:</p>
+                    <p style="font-size:12px;color:#1a3c6e;word-break:break-all;margin:0">{invite_url}</p>
+                </div>
+                <p style="font-size:12px;color:#aaa;margin:0">
+                    This invite expires in 7 days. If you didn't expect this invitation, you can ignore this email.
+                </p>
+            </div>
+            <div style="text-align:center;padding:16px;font-size:11px;color:#aaa">
+                Sysconic Technologies LLC · Abu Dhabi, UAE · www.sysconic.com
+            </div>
+        </body></html>
+        """
+
+        payload = {
+            "message": {
+                "subject": subject,
+                "body": {"contentType": "HTML", "content": body},
+                "toRecipients": [{"emailAddress": {"address": to_email}}],
+                "from": {"emailAddress": {"address": SENDER_EMAIL}}
+            }
+        }
+
+        r = requests.post(
+            f'https://graph.microsoft.com/v1.0/users/{SENDER_EMAIL}/sendMail',
+            json=payload,
+            headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+        )
+        print(f'Email send status: {r.status_code}')
+        return r.status_code == 202
+    except Exception as e:
+        print(f'Email error: {e}')
+        return False
+
+# ── Register ──────────────────────────────────────────────────────────────────
+@app.route('/api/auth/register', methods=['POST'])
+def register():
+    try:
+        sb = get_sb()
+        d = request.json or {}
+        email    = (d.get('email') or '').strip().lower()
+        password = d.get('password', '')
+        name     = d.get('name', '')
+        company  = d.get('company', '')
+
+        if not all([email, password, name, company]):
+            return jsonify({'error': 'All fields required'}), 400
+        if len(password) < 8:
+            return jsonify({'error': 'Password must be at least 8 characters'}), 400
+
+        existing = sb.table('users').select('id').eq('email', email).execute()
+        if existing.data:
+            return jsonify({'error': 'Email already registered'}), 409
+
+        slug = slugify(company)
+        slug_check = sb.table('companies').select('id').eq('slug', slug).execute()
+        if slug_check.data:
+            slug = slug + '-' + str(uuid.uuid4())[:4]
+
+        co = sb.table('companies').insert({'name': company, 'slug': slug}).execute().data[0]
+        pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        user = sb.table('users').insert({
+            'company_id': co['id'], 'email': email, 'name': name,
+            'role': 'admin', 'password_hash': pw_hash
+        }).execute().data[0]
+
+        token = make_token(user['id'], co['id'], 'admin')
+        return jsonify({
+            'token': token,
+            'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'role': 'admin'},
+            'company': {'id': co['id'], 'name': co['name'], 'slug': co['slug']}
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# ── Login ─────────────────────────────────────────────────────────────────────
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    try:
+        sb = get_sb()
+        d = request.json or {}
+        email    = (d.get('email') or '').strip().lower()
+        password = d.get('password', '')
+
+        if not email or not password:
+            return jsonify({'error': 'Email and password required'}), 400
+
+        rows = sb.table('users').select('*').eq('email', email).execute()
+        if not rows.data:
+            return jsonify({'error': 'Invalid email or password'}), 401
+
+        user = rows.data[0]
+        pw_hash = user.get('password_hash', '')
+        if not pw_hash or not bcrypt.checkpw(password.encode(), pw_hash.encode()):
+            return jsonify({'error': 'Invalid email or password'}), 401
+
+        co = sb.table('companies').select('*').eq('id', user['company_id']).execute().data[0]
+        token = make_token(user['id'], co['id'], user['role'])
+
+        return jsonify({
+            'token': token,
+            'user': {'id': user['id'], 'name': user.get('name', ''), 'email': user['email'], 'role': user['role']},
+            'company': {'id': co['id'], 'name': co['name'], 'slug': co['slug']}
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# ── Me ────────────────────────────────────────────────────────────────────────
+@app.route('/api/auth/me', methods=['GET'])
+def me():
+    try:
+        sb = get_sb()
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        user = sb.table('users').select('id,name,email,role,company_id').eq('id', claims['user_id']).execute().data[0]
+        co   = sb.table('companies').select('*').eq('id', claims['company_id']).execute().data[0]
+        return jsonify({'user': user, 'company': co})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ── Invite ────────────────────────────────────────────────────────────────────
+@app.route('/api/auth/invite', methods=['POST'])
+def invite():
+    try:
+        sb = get_sb()
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+
+        d     = request.json or {}
+        email = (d.get('email') or '').strip().lower()
+        role  = d.get('role', 'user')
+
+        if not email:
+            return jsonify({'error': 'Email required'}), 400
+
+        # Check if already a member
+        existing = sb.table('users').select('id').eq('email', email).eq('company_id', claims['company_id']).execute()
+        if existing.data:
+            return jsonify({'error': 'This email is already a team member'}), 409
+
+        token = str(uuid.uuid4())
+        sb.table('invites').insert({
+            'company_id': claims['company_id'],
+            'email': email, 'role': role,
+            'token': token, 'invited_by': claims['user_id']
+        }).execute()
+
+        invite_url = f"{APP_URL}?invite={token}"
+
+        # Get inviter details for email
+        inviter = sb.table('users').select('name').eq('id', claims['user_id']).execute()
+        inviter_name = inviter.data[0]['name'] if inviter.data else 'A team member'
+        company = sb.table('companies').select('name').eq('id', claims['company_id']).execute()
+        company_name = company.data[0]['name'] if company.data else 'Sysconic'
+
+        # Send email via Microsoft 365
+        email_sent = send_invite_email(email, invite_url, company_name, inviter_name, role)
+
+        return jsonify({
+            'invite_url': invite_url,
+            'token': token,
+            'email_sent': email_sent,
+            'message': f"Invite {'sent to ' + email if email_sent else 'created (email failed — share link manually)'}"
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# ── Accept invite ─────────────────────────────────────────────────────────────
+@app.route('/api/auth/accept-invite', methods=['POST'])
+def accept_invite():
+    try:
+        sb = get_sb()
+        d        = request.json or {}
+        token    = d.get('token', '')
+        name     = d.get('name', '')
+        password = d.get('password', '')
+
+        inv = sb.table('invites').select('*').eq('token', token).eq('accepted', False).execute()
+        if not inv.data:
+            return jsonify({'error': 'Invalid or expired invite'}), 400
+
+        invite = inv.data[0]
+        pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        user = sb.table('users').insert({
+            'company_id': invite['company_id'], 'email': invite['email'],
+            'name': name, 'role': invite['role'],
+            'password_hash': pw_hash, 'invited_by': invite['invited_by']
+        }).execute().data[0]
+
+        sb.table('invites').update({'accepted': True}).eq('token', token).execute()
+        co  = sb.table('companies').select('*').eq('id', invite['company_id']).execute().data[0]
+        tok = make_token(user['id'], co['id'], user['role'])
+
+        return jsonify({
+            'token': tok,
+            'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'role': user['role']},
+            'company': {'id': co['id'], 'name': co['name']}
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# ── Team ──────────────────────────────────────────────────────────────────────
+@app.route('/api/auth/team', methods=['GET'])
+def team():
+    try:
+        sb = get_sb()
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        members = sb.table('users').select('id,name,email,role,created_at').eq('company_id', claims['company_id']).execute()
+        pending = sb.table('invites').select('email,role,created_at,expires_at').eq('company_id', claims['company_id']).eq('accepted', False).execute()
+        return jsonify({'members': members.data, 'pending': pending.data})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True)
