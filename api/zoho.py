@@ -55,6 +55,31 @@ def zoho_get(path, params):
 def zoho_ready():
     return all([ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET, ZOHO_REFRESH_TOKEN, ZOHO_ORG_ID])
 
+# ── Cached customer list (refreshed every 10 minutes) ─────────────────────────
+_cust = {'list': None, 'exp': 0}
+
+def all_customers():
+    if _cust['list'] is not None and time.time() < _cust['exp']:
+        return _cust['list']
+    out, page = [], 1
+    while page <= 10:  # safety cap: 10 pages x 200 = 2000 customers
+        data = zoho_get('/contacts', {'contact_type': 'customer', 'per_page': 200,
+                                      'page': page, 'sort_column': 'contact_name'})
+        for ct in data.get('contacts', []):
+            out.append({
+                'id':      ct.get('contact_id'),
+                'name':    ct.get('contact_name') or ct.get('company_name') or '',
+                'company': ct.get('company_name') or '',
+                'email':   ct.get('email') or '',
+                'phone':   ct.get('phone') or ct.get('mobile') or '',
+            })
+        if not (data.get('page_context') or {}).get('has_more_page'):
+            break
+        page += 1
+    _cust['list'] = out
+    _cust['exp']  = time.time() + 600
+    return out
+
 # ── Connection status (for quick verification) ────────────────────────────────
 @app.route('/api/zoho/status', methods=['GET'])
 def status():
@@ -63,9 +88,7 @@ def status():
     if not zoho_ready():
         return jsonify({'error': 'Zoho is not configured (missing ZOHO_* environment variables)'}), 500
     try:
-        data = zoho_get('/contacts', {'contact_type': 'customer', 'per_page': 1})
-        total = (data.get('page_context') or {}).get('total', 0)
-        return jsonify({'ok': True, 'customers_in_zoho': total})
+        return jsonify({'ok': True, 'customers_in_zoho': len(all_customers())})
     except urllib.error.HTTPError as e:
         detail = e.read().decode('utf-8', 'ignore')[:200]
         return jsonify({'error': f'Zoho API error ({e.code}): {detail}'}), 502
@@ -80,35 +103,38 @@ def customers():
     if not zoho_ready():
         return jsonify({'error': 'Zoho is not configured'}), 500
 
-    search = (request.args.get('search') or '').strip()
+    search = (request.args.get('search') or '').strip().lower()
     if len(search) < 2:
         return jsonify({'customers': []})
 
     try:
-        data = zoho_get('/contacts', {
-            'contact_type': 'customer',
-            'search_text': search,
-            'per_page': 10,
-            'sort_column': 'contact_name',
-        })
+        custs = all_customers()
     except urllib.error.HTTPError as e:
         if e.code == 401:
             _tok['value'] = None  # force token refresh next call
-        detail = e.read().decode('utf-8', 'ignore')[:200]
         return jsonify({'error': f'Zoho API error ({e.code})'}), 502
     except Exception:
         return jsonify({'error': 'Zoho is unreachable right now'}), 502
 
-    out = []
-    for ct in data.get('contacts', [])[:10]:
-        out.append({
-            'id':      ct.get('contact_id'),
-            'name':    ct.get('contact_name') or ct.get('company_name') or '',
-            'company': ct.get('company_name') or '',
-            'email':   ct.get('email') or '',
-            'phone':   ct.get('phone') or ct.get('mobile') or '',
-        })
-    return jsonify({'customers': out})
+    def rank(ct):
+        name = (ct['name'] or '').lower()
+        comp = (ct['company'] or '').lower()
+        mail = (ct['email'] or '').lower()
+        # 0 = name starts with query, 1 = any word in name starts with it,
+        # 2 = name/company contains it, 3 = email contains it, None = no match
+        if name.startswith(search): return 0
+        if any(w.startswith(search) for w in name.split()): return 1
+        if search in name or search in comp: return 2
+        if search in mail: return 3
+        return None
+
+    matches = []
+    for ct in custs:
+        r = rank(ct)
+        if r is not None:
+            matches.append((r, ct['name'].lower(), ct))
+    matches.sort(key=lambda t: (t[0], t[1]))
+    return jsonify({'customers': [m[2] for m in matches[:10]]})
 
 if __name__ == '__main__':
     app.run(debug=True)
