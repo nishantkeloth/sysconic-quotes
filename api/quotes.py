@@ -9,7 +9,7 @@ CORS(app)
 
 SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_SERVICE_KEY')
-JWT_SECRET   = os.environ.get('JWT_SECRET', 'sysconic-quotes-secret-2026')
+JWT_SECRET   = os.environ.get('JWT_SECRET')
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 

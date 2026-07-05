@@ -9,10 +9,10 @@ CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_SERVICE_KEY')
-JWT_SECRET   = os.environ.get('JWT_SECRET', 'sysconic-quotes-secret-2026')
+JWT_SECRET   = os.environ.get('JWT_SECRET')
 MS_TENANT_ID = os.environ.get('MS_TENANT_ID', 'b36855d2-9d26-43a4-bec6-82268a7713fb')
 MS_CLIENT_ID = os.environ.get('MS_CLIENT_ID', '491f22c7-9dee-4c30-b828-acf8ba8d948c')
-MS_CLIENT_SECRET = os.environ.get('MS_CLIENT_SECRET', 'bvf8Q~92vTfsyfIpPXSUypbpeSZXImHQbEOXVapA')
+MS_CLIENT_SECRET = os.environ.get('MS_CLIENT_SECRET')
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'nishant@sysconic.com')
 APP_URL = os.environ.get('APP_URL', 'https://sysconic-quotes.vercel.app')
 
