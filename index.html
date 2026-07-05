@@ -161,9 +161,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 /* ── Column headers ── */
 .col-hd{display:grid;padding:9px 14px;background:var(--navy);border-radius:8px 8px 0 0;font-size:12px;font-weight:700;color:rgba(255,255,255,.85);text-transform:uppercase;letter-spacing:.05em}
 .col-hd.int{grid-template-columns:28px 90px 140px 1fr 90px 65px 75px 60px 95px 115px 28px}
-.col-hd.int.img{grid-template-columns:28px 44px 90px 140px 1fr 90px 65px 75px 60px 95px 115px 28px}
 .col-hd.cli{grid-template-columns:28px 90px 140px 1fr 60px 95px 115px 28px}
-.col-hd.cli.img{grid-template-columns:28px 44px 90px 140px 1fr 60px 95px 115px 28px}
 .col-hd div{padding:0 5px}
 
 /* ── Item rows ── */
@@ -172,9 +170,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .item-row:last-child{border-bottom:none}
 .item-row:hover{background:#f5f8ff}
 .item-row.int{grid-template-columns:28px 90px 140px 1fr 90px 65px 75px 60px 95px 115px 28px}
-.item-row.int.img{grid-template-columns:28px 44px 90px 140px 1fr 90px 65px 75px 60px 95px 115px 28px}
 .item-row.cli{grid-template-columns:28px 90px 140px 1fr 60px 95px 115px 28px}
-.item-row.cli.img{grid-template-columns:28px 44px 90px 140px 1fr 60px 95px 115px 28px}
 .item-row>*{padding:0 5px}
 .inum{font-size:12px;color:var(--gray-300);font-weight:700;text-align:center;padding-top:10px}
 .iinput{width:100%;padding:7px 8px;font-size:14px;border:1.5px solid transparent;border-radius:6px;font-family:inherit;color:var(--gray-900);background:transparent;transition:all .15s;resize:none;overflow:hidden;min-height:36px;line-height:1.4}
@@ -234,20 +230,6 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .team-avatar{width:42px;height:42px;border-radius:50%;background:var(--navy-light);color:var(--navy);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;flex-shrink:0}
 
 /* ── Modal ── */
-.prod-thumb{width:36px;height:36px;border-radius:6px;border:1.5px solid var(--gray-200);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;background:var(--white);font-size:15px;margin-top:2px}
-.prod-thumb img{width:100%;height:100%;object-fit:contain}
-.prod-thumb.empty{opacity:.45;border-style:dashed}
-.prod-thumb.empty:hover{opacity:1;border-color:var(--navy)}
-.img-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:6px 0}
-.img-opt{border:1.5px solid var(--gray-200);border-radius:8px;overflow:hidden;cursor:pointer;background:var(--white);transition:all .15s}
-.img-opt:hover{border-color:var(--navy);box-shadow:0 2px 8px rgba(26,60,110,.15)}
-.img-opt img{width:100%;height:92px;object-fit:contain;background:#fff}
-.img-src{font-size:10px;color:var(--gray-500);padding:4px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-top:1px solid var(--gray-100)}
-.prod-hd{display:grid;grid-template-columns:44px 110px 180px 1fr 90px 80px 110px;padding:9px 12px;background:var(--navy);border-radius:8px 8px 0 0;font-size:12px;font-weight:700;color:rgba(255,255,255,.85);text-transform:uppercase;letter-spacing:.05em}
-.prod-hd div{padding:0 5px}
-.prod-row{display:grid;grid-template-columns:44px 110px 180px 1fr 90px 80px 110px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--gray-100);font-size:14px}
-.prod-row>div{padding:0 5px;overflow:hidden}
-.prod-row:hover{background:#f5f8ff}
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px}
 .modal{background:var(--white);border-radius:14px;padding:32px;width:100%;max-width:440px;box-shadow:var(--shadow-lg)}
 .modal-title{font-size:19px;font-weight:700;margin-bottom:6px}
@@ -474,8 +456,6 @@ function closeReviewModal(){const el=document.getElementById('revOverlay');if(el
 
 // ── Shortcuts ─────────────────────────────────────────────────────────────────
 const opts=()=>A.activeQuote?.quote_data||[];
-const imgOn=()=>opts().some(o=>o&&o.catalogOn===true);
-function toggleImgOn(){const v=!imgOn();opts().forEach(o=>o.catalogOn=v);schedSave();draw();}
 const opt=()=>opts()[A.activeOpt];
 const sec=si=>opt()?.sections[si];
 function addOpt(){const n=opts().length+1;opts().push(mkOption(`Option ${n}`));A.activeOpt=opts().length-1;draw();}
@@ -493,7 +473,6 @@ function draw(){
   document.getElementById('app').innerHTML=appHTML();
   setTimeout(initTA,30);
   if(A.page==='team')setTimeout(loadTeam,50);
-  if(A.page==='products')setTimeout(loadProducts,50);
 }
 function initTA(){document.querySelectorAll('textarea.iinput').forEach(el=>{el.style.height='auto';el.style.height=el.scrollHeight+'px';el.oninput=()=>{el.style.height='auto';el.style.height=el.scrollHeight+'px';};});}
 
@@ -527,7 +506,7 @@ function authHTML(){
 // ── App shell ─────────────────────────────────────────────────────────────────
 function appHTML(){
   const init=(A.user?.name||'U').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
-  const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',team:'Team & Settings',products:'Product Catalog'};
+  const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',team:'Team & Settings'};
   const inEditor=['editor','terms','summary','vendor','print'].includes(A.page);
 
   const sidebar=`<div class="sidebar">
@@ -538,7 +517,6 @@ function appHTML(){
     <nav class="sb-nav">
       <div class="sb-sec">Workspace</div>
       <div class="sb-item ${A.page==='dashboard'?'active':''}" onclick="A.page='dashboard';draw()"><span class="sb-icon">🏠</span>Dashboard</div>
-      <div class="sb-item ${A.page==='products'?'active':''}" onclick="A.page='products';draw()"><span class="sb-icon">📦</span>Products</div>
       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="A.page='editor';draw()"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}
       <div class="sb-sec">Settings</div>
       <div class="sb-item ${A.page==='team'?'active':''}" onclick="A.page='team';draw()"><span class="sb-icon">👥</span>Team</div>
@@ -563,7 +541,6 @@ function appHTML(){
   else if(A.page==='summary')pageContent=summaryHTML();
   else if(A.page==='vendor')pageContent=vendorHTML();
   else if(A.page==='print')pageContent=printHTML();
-  else if(A.page==='products')pageContent=productsHTML();
   else if(A.page==='team')pageContent=teamHTML();
 
   return`<div class="shell">${sidebar}<div class="main">
@@ -582,7 +559,6 @@ function buildTopbarRight(){
     </div>
     <button class="btn" onclick="downloadTemplate()" title="Download Excel template">📄 Template</button>
     <label class="btn" style="cursor:pointer" title="Import from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importExcel(event)"></label>
-    <button class="btn${imgOn()?' btn-navy':''}" onclick="toggleImgOn()" title="Toggle product images & catalog assist for this quote">🖼 Images ${imgOn()?'ON':'OFF'}</button>
     <button class="btn" onclick="reviewQuote()">🔍 Review</button>
     <button class="btn" onclick="A.page='dashboard';draw()">← Back</button>
     <button class="btn btn-navy" onclick="saveQuote()">💾 Save</button>`;
@@ -592,10 +568,6 @@ function buildTopbarRight(){
       <option value="all">All options</option>
     </select>
     <button class="btn btn-navy print-controls" onclick="window.print()">🖨️ Print / PDF</button>`;
-  if(A.page==='products')return`
-    <button class="btn" onclick="downloadProdTemplate()">⬇ Template</button>
-    <label class="btn" style="cursor:pointer" title="Import products from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importProducts(event)"></label>
-    <button class="btn btn-navy" onclick="showProdModal()">+ Add product</button>`;
   if(A.page==='team')return A.user?.role==='admin'?`<button class="btn btn-navy" onclick="showInviteModal()">+ Invite member</button>`:'';
   return'';
 }
@@ -678,7 +650,6 @@ function editorHTML(){
   if(!q)return`<div class="empty-state"><div class="empty-icon">📄</div><button class="btn btn-navy" onclick="A.page='dashboard';draw()">← Back</button></div>`;
   const o=opt(); if(!o)return`<button class="btn btn-navy" onclick="addOpt()">+ Add option</button>`;
   const isInt=A.view==='internal';
-  const IMG=imgOn();
 
   let html=`<div class="opt-pills">`;
   opts().forEach((op,i)=>html+=`<button class="opt-pill ${i===A.activeOpt?'active':''}" onclick="A.activeOpt=${i};draw()">${esc(op.label)}</button>`);
@@ -702,16 +673,15 @@ function editorHTML(){
 
   (o.sections||[]).forEach((s,si)=>{
     let rn=1;
-    const IC=IMG?['']:[];const hds=isInt?['#',...IC,'Brand','Model','Description','Cost','Disc%','Margin %','Qty','Unit Price','Total','']:['#',...IC,'Brand','Model','Description','Qty','Unit Price','Total',''];
+    const hds=isInt?['#','Brand','Model','Description','Cost','Disc%','Margin %','Qty','Unit Price','Total','']:['#','Brand','Model','Description','Qty','Unit Price','Total',''];
     let rows='';
     s.items.forEach((it,ii)=>{
       const c=calcItem(it);
       if(isInt){
-        rows+=`<div class="item-row int${IMG?' img':''}">
+        rows+=`<div class="item-row int">
           <div class="inum">${rn++}</div>
-          ${IMG?thumbCell(si,ii,it):''}
-          <textarea class="iinput" oninput="sec(${si}).items[${ii}].brand=this.value;schedSave()" onblur="captureProduct(${si},${ii})" placeholder="Brand">${esc(it.brand)}</textarea>
-          <textarea class="iinput" oninput="sec(${si}).items[${ii}].model=this.value;schedSave()" onblur="captureProduct(${si},${ii})" placeholder="Model">${esc(it.model)}</textarea>
+          <textarea class="iinput" oninput="sec(${si}).items[${ii}].brand=this.value;schedSave()" placeholder="Brand">${esc(it.brand)}</textarea>
+          <textarea class="iinput" oninput="sec(${si}).items[${ii}].model=this.value;schedSave()" placeholder="Model">${esc(it.model)}</textarea>
           <textarea class="iinput" oninput="sec(${si}).items[${ii}].desc=this.value;schedSave()" placeholder="Description">${esc(it.desc)}</textarea>
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="cost" value="${it.cost}" onchange="liveCalc(this)" placeholder="0">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="disc" value="${it.disc||0}" onchange="liveCalc(this)" placeholder="0">
@@ -722,9 +692,8 @@ function editorHTML(){
           <button class="idel" onclick="delItem(${si},${ii})">×</button>
         </div>`;
       } else {
-        rows+=`<div class="item-row cli${IMG?' img':''}">
+        rows+=`<div class="item-row cli">
           <div class="inum">${rn++}</div>
-          ${IMG?thumbCell(si,ii,it):''}
           <div style="padding:8px 5px;font-size:14px">${esc(it.brand)}</div>
           <div style="padding:8px 5px;font-size:14px">${esc(it.model)}</div>
           <div style="padding:8px 5px;font-size:14px">${esc(it.desc)}</div>
@@ -748,7 +717,7 @@ function editorHTML(){
           <button class="btn btn-sm btn-red" onclick="delSec(${si})">Remove</button>
         </div>
       </div>
-      <div class="col-hd ${isInt?'int':'cli'}${IMG?' img':''}">${hds.map(h=>`<div>${h}</div>`).join('')}</div>
+      <div class="col-hd ${isInt?'int':'cli'}">${hds.map(h=>`<div>${h}</div>`).join('')}</div>
       <div class="items-wrap">${rows||`<div style="padding:20px;text-align:center;color:var(--gray-500);font-size:14px">No items yet — <button class="btn btn-sm" onclick="addItem(${si})">+ Add item</button></div>`}</div>
     </div>`;
   });
@@ -977,199 +946,6 @@ function printHTML(){
     </div>`;
   });
   return html;
-}
-
-// ── Products & dynamic catalog ───────────────────────────────────────────────
-let PRODS={list:[],total:0,search:'',t:null};
-
-function thumbCell(si,ii,it){
-  const id=`pthumb-${si}-${ii}`;
-  if(it.img)return`<div class="prod-thumb" id="${id}" title="Change image" onclick="openRowImage(${si},${ii})"><img src="${esc(it.img)}"></div>`;
-  if(A.view==='internal'&&((it.brand||'').trim()||(it.model||'').trim()))return`<div class="prod-thumb empty" id="${id}" title="Pick product image" onclick="openRowImage(${si},${ii})">📷</div>`;
-  return`<div id="${id}"></div>`;
-}
-function updThumb(si,ii){const el=document.getElementById(`pthumb-${si}-${ii}`);const it=sec(si)?.items?.[ii];if(el&&it)el.outerHTML=thumbCell(si,ii,it);}
-
-async function captureProduct(si,ii){
-  if(!imgOn())return;
-  const it=sec(si)?.items?.[ii];if(!it)return;
-  const brand=(it.brand||'').trim(),model=(it.model||'').trim();
-  if(!brand&&!model)return;
-  const key=(brand+'|'+model).toLowerCase();
-  if(it._pk===key&&it.product_id)return;
-  it._pk=key;
-  try{
-    const r=await api('GET','/api/products?limit=10&search='+encodeURIComponent(model||brand));
-    const hit=(r.products||[]).find(p=>(p.model||'').trim().toLowerCase()===model.toLowerCase()&&(!brand||!(p.brand||'').trim()||(p.brand||'').trim().toLowerCase()===brand.toLowerCase()));
-    if(hit){
-      it.product_id=hit.id;
-      let fill=false;
-      if(hit.image_url&&it.img!==hit.image_url){it.img=hit.image_url;fill=true;}
-      if(!it.desc&&hit.description){it.desc=hit.description;fill=true;}
-      if((!it.cost||+it.cost===0)&&+hit.default_cost>0){it.cost=+hit.default_cost;fill=true;}
-      schedSave();
-      if(fill&&document.activeElement===document.body)draw();else updThumb(si,ii);
-      return;
-    }
-    const cr=await api('POST','/api/products',{brand,model,description:it.desc||'',default_cost:+it.cost||0,default_margin:+it.margin||0.2});
-    if(cr.product){it.product_id=cr.product.id;schedSave();updThumb(si,ii);}
-  }catch(e){}
-}
-
-async function openRowImage(si,ii){
-  const it=sec(si)?.items?.[ii];if(!it)return;
-  const q=((it.brand||'')+' '+(it.model||'')).trim();
-  if(!q){alert('Enter a brand or model first.');return;}
-  if(!it.product_id)await captureProduct(si,ii);
-  if(!it.product_id){alert('Could not save this product to the catalog. Check your connection and try again.');return;}
-  showImagePicker(it.product_id,q,si,ii);
-}
-
-function showImagePicker(pid,query,si,ii){
-  closeImgPicker();
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="imgOverlay" onclick="if(event.target===this)closeImgPicker()">
-    <div class="modal" style="max-width:640px;max-height:85vh;overflow-y:auto">
-      <div class="modal-title">🖼 Product image</div>
-      <div class="modal-sub">${esc(query)}</div>
-      <div id="imgBody"><div style="text-align:center;padding:26px;color:var(--gray-500)">Searching your vendor sites…</div></div>
-      <div class="modal-actions" style="justify-content:space-between">
-        <label class="btn" style="cursor:pointer">📤 Upload image<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none" onchange="uploadProdImage(event,'${pid}',${si},${ii})"></label>
-        <button class="btn" onclick="closeImgPicker()">Cancel</button>
-      </div>
-    </div></div>`);
-  api('GET','/api/products/image-search?q='+encodeURIComponent(query)).then(r=>{
-    const el=document.getElementById('imgBody');if(!el)return;
-    if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div><div style="font-size:13px;color:var(--gray-500);margin-top:8px">You can still upload an image manually below.</div>`;return;}
-    if(!(r.images||[]).length){el.innerHTML=`<div style="color:var(--gray-500);padding:14px">No images found on your vendor sites for this model — upload one manually below.</div>`;return;}
-    el.innerHTML=`<div class="img-grid">${r.images.map(im=>{
-      const u=encodeURIComponent(im.url).replace(/'/g,'%27');
-      const src=(im.source||'').replace(/^https?:\/\/(www\.)?/,'').split('/')[0];
-      return`<div class="img-opt" onclick="pickProdImage('${pid}','${u}',${si},${ii})"><img src="${esc(im.thumb)}" loading="lazy" onerror="this.parentNode.style.display='none'"><div class="img-src">${esc(src)}</div></div>`;
-    }).join('')}</div><div style="font-size:12px;color:var(--gray-500)">Click the correct image — it will be saved to your catalog.</div>`;
-  });
-}
-function closeImgPicker(){const el=document.getElementById('imgOverlay');if(el)el.remove();}
-
-async function pickProdImage(pid,encUrl,si,ii){
-  const el=document.getElementById('imgBody');if(el)el.innerHTML='<div style="text-align:center;padding:26px;color:var(--gray-500)">Saving image…</div>';
-  const r=await api('POST','/api/products/'+pid+'/image',{url:decodeURIComponent(encUrl)});
-  if(r.error){if(el)el.innerHTML=`<div class="auth-err">${esc(r.error)}</div><div style="font-size:13px;color:var(--gray-500);margin-top:8px">Try another result or upload manually below.</div>`;return;}
-  finishImage(pid,r.product.image_url,si,ii);
-}
-function uploadProdImage(event,pid,si,ii){
-  const file=event.target.files[0];if(!file)return;event.target.value='';
-  if(file.size>4*1024*1024){alert('Image must be under 4 MB.');return;}
-  const el=document.getElementById('imgBody');if(el)el.innerHTML='<div style="text-align:center;padding:26px;color:var(--gray-500)">Uploading…</div>';
-  const reader=new FileReader();
-  reader.onload=async function(e){
-    const r=await api('POST','/api/products/'+pid+'/image',{data:e.target.result,content_type:file.type});
-    if(r.error){if(el)el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
-    finishImage(pid,r.product.image_url,si,ii);
-  };
-  reader.readAsDataURL(file);
-}
-function finishImage(pid,url,si,ii){
-  closeImgPicker();
-  let touched=false;
-  if(A.activeQuote)opts().forEach(op=>(op.sections||[]).forEach(s=>(s.items||[]).forEach(it=>{if(it.product_id===pid){it.img=url;touched=true;}})));
-  if(si>=0&&ii>=0){const it=sec(si)?.items?.[ii];if(it){it.img=url;it.product_id=pid;touched=true;}}
-  if(touched&&A.activeQuote)schedSave();
-  if(A.page==='editor')draw();
-  if(A.page==='products')loadProducts();
-}
-
-// ── Products page ─────────────────────────────────────────────────────────────
-function productsHTML(){return`<div class="card">
-  <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center">
-    <input id="prodSearch" placeholder="Search brand, model or description…" value="${esc(PRODS.search)}" oninput="prodSearchInput(this.value)" style="flex:1;max-width:380px;padding:10px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit">
-    <div id="prodCount" style="font-size:13px;color:var(--gray-500)"></div>
-  </div>
-  <div id="prodList"><div style="color:var(--gray-500)">Loading…</div></div>
-</div>`;}
-function prodSearchInput(v){PRODS.search=v;clearTimeout(PRODS.t);PRODS.t=setTimeout(loadProducts,350);}
-async function loadProducts(){
-  const r=await api('GET','/api/products?limit=100&search='+encodeURIComponent(PRODS.search||''));
-  const el=document.getElementById('prodList');if(!el)return;
-  if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
-  PRODS.list=r.products||[];PRODS.total=r.total||0;
-  const cnt=document.getElementById('prodCount');if(cnt)cnt.textContent=`${PRODS.total} product${PRODS.total!==1?'s':''}${PRODS.total>100?' — showing first 100, use search':''}`;
-  if(!PRODS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No products yet.<br><br>Add one manually, import from Excel — or just start quoting: new models are added to the catalog automatically.</div>`;return;}
-  el.innerHTML=`<div class="prod-hd"><div></div><div>Brand</div><div>Model</div><div>Description</div><div>Cost</div><div>Margin %</div><div></div></div>`+
-    PRODS.list.map(p=>`<div class="prod-row">
-      <div class="prod-thumb ${p.image_url?'':'empty'}" title="${p.image_url?'Change image':'Pick image'}" onclick="openCatalogImage('${p.id}')">${p.image_url?`<img src="${esc(p.image_url)}">`:'📷'}</div>
-      <div>${esc(p.brand)}</div><div>${esc(p.model)}</div>
-      <div style="color:var(--gray-500);font-size:13px">${esc((p.description||'').slice(0,90))}</div>
-      <div>${(+p.default_cost||0).toFixed(2)}</div>
-      <div>${((+p.default_margin||0)*100).toFixed(1)}</div>
-      <div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn btn-sm" onclick="showProdModal('${p.id}')">Edit</button><button class="btn btn-sm btn-red" onclick="delProduct('${p.id}')">×</button></div>
-    </div>`).join('');
-}
-function openCatalogImage(pid){const p=PRODS.list.find(x=>x.id===pid);if(!p)return;showImagePicker(pid,((p.brand||'')+' '+(p.model||'')).trim()||'product',-1,-1);}
-async function delProduct(pid){
-  if(!confirm('Delete this product from the catalog? Existing quotes are not affected.'))return;
-  const r=await api('DELETE','/api/products/'+pid);
-  if(r.error)alert(r.error);
-  loadProducts();
-}
-function showProdModal(pid){
-  const p=pid?PRODS.list.find(x=>x.id===pid):null;
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="prodOverlay" onclick="if(event.target===this)document.getElementById('prodOverlay').remove()">
-    <div class="modal">
-      <div class="modal-title">${p?'Edit product':'Add product'}</div>
-      <div id="prodErr" class="auth-err" style="display:none"></div>
-      <div class="fld"><label>Brand</label><input id="pfBrand" value="${esc(p?.brand||'')}" placeholder="Infiled"></div>
-      <div class="fld"><label>Model</label><input id="pfModel" value="${esc(p?.model||'')}" placeholder="IL-FISS-ORMV 3.9Pro"></div>
-      <div class="fld"><label>Description</label><input id="pfDesc" value="${esc(p?.description||'')}" placeholder="SMD1818 black frame LED…"></div>
-      <div class="fld"><label>Default cost</label><input id="pfCost" type="number" step="0.01" value="${p?(+p.default_cost||0):''}" placeholder="0.00"></div>
-      <div class="fld"><label>Default margin %</label><input id="pfMargin" type="number" step="0.1" value="${p?((+p.default_margin||0)*100).toFixed(1):'20'}"></div>
-      <div class="modal-actions">
-        <button class="btn" onclick="document.getElementById('prodOverlay').remove()">Cancel</button>
-        <button class="btn btn-navy" onclick="saveProdModal('${pid||''}')">Save</button>
-      </div>
-    </div></div>`);
-}
-async function saveProdModal(pid){
-  const body={brand:document.getElementById('pfBrand').value,model:document.getElementById('pfModel').value,description:document.getElementById('pfDesc').value,default_cost:+document.getElementById('pfCost').value||0,default_margin:(+document.getElementById('pfMargin').value||0)/100};
-  const r=pid?await api('PUT','/api/products/'+pid,body):await api('POST','/api/products',body);
-  if(r.error){const e=document.getElementById('prodErr');e.textContent=r.error;e.style.display='block';return;}
-  document.getElementById('prodOverlay').remove();loadProducts();
-}
-function downloadProdTemplate(){
-  const wb=XLSX.utils.book_new();
-  const ws=XLSX.utils.aoa_to_sheet([['BRAND','MODEL','DESCRIPTION','COST','MARGIN %'],['Infiled','IL-FISS-ORMV 3.9Pro','SMD1818 black frame LED, 1000x1000mm cabinet',6299.25,20]]);
-  ws['!cols']=[{wch:16},{wch:26},{wch:50},{wch:12},{wch:10}];
-  XLSX.utils.book_append_sheet(wb,ws,'Products');
-  XLSX.writeFile(wb,'sysconic-products-template.xlsx');
-}
-function importProducts(event){
-  const file=event.target.files[0];if(!file)return;event.target.value='';
-  const reader=new FileReader();
-  reader.onload=async function(e){
-    try{
-      const wb=XLSX.read(e.target.result,{type:'binary'});
-      const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''});
-      let hi=-1;
-      for(let i=0;i<Math.min(rows.length,10);i++){const r=rows[i].map(x=>String(x).toUpperCase());if(r.some(x=>x.includes('MODEL'))){hi=i;break;}}
-      if(hi===-1){alert('Could not find a MODEL column header in that file.');return;}
-      const H=rows[hi].map(x=>String(x).toUpperCase().trim());
-      const col={brand:H.findIndex(h=>h.includes('BRAND')),model:H.findIndex(h=>h.includes('MODEL')),desc:H.findIndex(h=>h.includes('DESC')),cost:H.findIndex(h=>h.includes('COST')||h.includes('MSRP')),margin:H.findIndex(h=>h.includes('MARGIN'))};
-      const products=[];
-      for(let i=hi+1;i<rows.length;i++){
-        const row=rows[i];if(!row||row.every(x=>x===''||x===null))continue;
-        const g=x=>x>=0?String(row[x]??'').trim():'';
-        let m=parseFloat(g(col.margin))||0;if(m>1)m=m/100;
-        products.push({brand:g(col.brand),model:g(col.model),description:g(col.desc),default_cost:parseFloat(g(col.cost))||0,default_margin:m||0.2});
-      }
-      if(!products.length){alert('No product rows found below the header.');return;}
-      if(products.length>500){alert('Maximum 500 rows per import — please split the file.');return;}
-      if(!confirm(`Import ${products.length} products into the catalog?`))return;
-      const r=await api('POST','/api/products/bulk',{products});
-      if(r.error){alert(r.error);return;}
-      alert(`Imported ${r.imported} products${r.skipped?`, skipped ${r.skipped} rows without brand/model`:''}.`);
-      loadProducts();
-    }catch(err){alert('Could not read that Excel file.');}
-  };
-  reader.readAsBinaryString(file);
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────
