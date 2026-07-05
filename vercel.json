@@ -1,16 +1,18 @@
 {
   "version": 2,
   "builds": [
-    { "src": "api/auth.py",    "use": "@vercel/python" },
-    { "src": "api/quotes.py",  "use": "@vercel/python" },
-    { "src": "api/ai.py",      "use": "@vercel/python" },
-    { "src": "index.html",     "use": "@vercel/static" }
+    { "src": "api/auth.py",   "use": "@vercel/python" },
+    { "src": "api/quotes.py", "use": "@vercel/python" },
+    { "src": "api/ai.py",     "use": "@vercel/python" },
+    { "src": "api/zoho.py",   "use": "@vercel/python" },
+    { "src": "index.html",    "use": "@vercel/static" }
   ],
   "routes": [
     { "src": "/api/auth/(.*)",   "dest": "api/auth.py" },
     { "src": "/api/quotes/(.*)", "dest": "api/quotes.py" },
     { "src": "/api/quotes",      "dest": "api/quotes.py" },
     { "src": "/api/ai/(.*)",     "dest": "api/ai.py" },
+    { "src": "/api/zoho/(.*)",   "dest": "api/zoho.py" },
     { "src": "/(.*)",            "dest": "index.html" }
   ]
 }

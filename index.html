@@ -230,6 +230,13 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .team-avatar{width:42px;height:42px;border-radius:50%;background:var(--navy-light);color:var(--navy);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;flex-shrink:0}
 
 /* ── Modal ── */
+.cust-drop{position:absolute;top:100%;left:0;right:0;background:var(--white);border:1.5px solid var(--gray-200);border-radius:8px;box-shadow:0 8px 24px rgba(15,37,68,.14);z-index:60;max-height:280px;overflow-y:auto;margin-top:4px}
+.cust-opt{padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--gray-100)}
+.cust-opt:last-child{border-bottom:0}
+.cust-opt:hover{background:#f0f5ff}
+.cust-name{font-size:14px;font-weight:600;color:var(--navy-dark, #0f2544)}
+.cust-sub{font-size:12px;color:var(--gray-500)}
+.cust-src{padding:6px 12px;font-size:11px;color:var(--gray-500);background:var(--gray-100, #f0f2f5);border-radius:0 0 8px 8px}
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px}
 .modal{background:var(--white);border-radius:14px;padding:32px;width:100%;max-width:440px;box-shadow:var(--shadow-lg)}
 .modal-title{font-size:19px;font-weight:700;margin-bottom:6px}
@@ -454,6 +461,35 @@ function showReviewModal(body){
 function setReviewBody(html){const el=document.getElementById('revBody');if(el)el.innerHTML=html;}
 function closeReviewModal(){const el=document.getElementById('revOverlay');if(el)el.remove();}
 
+// ── Zoho Books customer autocomplete ─────────────────────────────────────────
+let ZC={t:null,last:''};
+function zohoSearch(v){
+  clearTimeout(ZC.t);
+  const q=(v||'').trim();
+  if(q.length<2){hideCustDrop();return;}
+  ZC.t=setTimeout(async()=>{
+    ZC.last=q;
+    let r;
+    try{r=await api('GET','/api/zoho/customers?search='+encodeURIComponent(q));}
+    catch(e){hideCustDrop();return;}
+    if(ZC.last!==q)return; // stale response
+    const el=document.getElementById('custDrop');if(!el)return;
+    if(r.error||!(r.customers||[]).length){hideCustDrop();return;}
+    el.innerHTML=r.customers.map(ct=>`<div class="cust-opt" onmousedown="pickCustomer('${esc(ct.name).replace(/'/g,'&#39;')}')">
+      <div class="cust-name">${esc(ct.name)}</div>
+      ${(ct.company&&ct.company!==ct.name)||ct.email?`<div class="cust-sub">${esc(ct.company&&ct.company!==ct.name?ct.company:'')}${ct.company&&ct.company!==ct.name&&ct.email?' · ':''}${esc(ct.email)}</div>`:''}
+    </div>`).join('')+'<div class="cust-src">From Zoho Books</div>';
+    el.style.display='block';
+  },320);
+}
+function pickCustomer(name){
+  const tmp=document.createElement('textarea');tmp.innerHTML=name;name=tmp.value;
+  A.activeQuote.customer=name;
+  const inp=document.getElementById('custInput');if(inp)inp.value=name;
+  hideCustDrop();schedSave();
+}
+function hideCustDrop(){const el=document.getElementById('custDrop');if(el)el.style.display='none';}
+
 // ── Shortcuts ─────────────────────────────────────────────────────────────────
 const opts=()=>A.activeQuote?.quote_data||[];
 const opt=()=>opts()[A.activeOpt];
@@ -659,7 +695,7 @@ function editorHTML(){
     <div class="card-title">Quote details</div>
     <div class="field-grid g4" style="margin-bottom:14px">
       <div class="fld2"><label>Quote title</label><input value="${esc(q.title)}" oninput="A.activeQuote.title=this.value;schedSave()"></div>
-      <div class="fld2"><label>Customer</label><input value="${esc(q.customer)}" oninput="A.activeQuote.customer=this.value;schedSave()"></div>
+      <div class="fld2" style="position:relative"><label>Customer</label><input id="custInput" value="${esc(q.customer)}" autocomplete="off" oninput="A.activeQuote.customer=this.value;schedSave();zohoSearch(this.value)" onblur="setTimeout(hideCustDrop,180)" placeholder="Type to search Zoho Books…"><div id="custDrop" class="cust-drop" style="display:none"></div></div>
       <div class="fld2"><label>Option label</label><input value="${esc(o.label)}" oninput="opts()[A.activeOpt].label=this.value;draw()"></div>
       <div class="fld2"><label>Quote ref</label><input value="${esc(o.ref||'')}" oninput="opts()[A.activeOpt].ref=this.value;schedSave()"></div>
     </div>
