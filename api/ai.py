@@ -58,8 +58,9 @@ def review_quote():
         'contents': [{'role': 'user', 'parts': [{'text': 'Review this quote:\n' + json.dumps(quote, ensure_ascii=False)}]}],
         'generationConfig': {
             'temperature': 0.2,
-            'maxOutputTokens': 1500,
+            'maxOutputTokens': 4000,
             'responseMimeType': 'application/json',
+            'thinkingConfig': {'thinkingBudget': 0},
         },
     }).encode('utf-8')
 
