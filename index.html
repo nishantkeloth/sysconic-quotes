@@ -413,6 +413,47 @@ function setStatus(s){A.saveStatus=s;const el=document.getElementById('saveStatu
 async function deleteQuote(id,e){e.stopPropagation();if(!confirm('Delete this quote?'))return;await api('DELETE','/api/quotes/'+id);A.quotes=A.quotes.filter(q=>q.id!==id);draw();}
 async function duplicateQuote(id,e){e.stopPropagation();const r=await api('POST','/api/quotes/'+id+'/duplicate');if(r.quote){A.quotes.unshift(r.quote);draw();}}
 
+// ── AI Review ──────────────────────────────────────────────────────────────────
+async function reviewQuote(){
+  if(!A.activeQuote)return;
+  const o=opt();if(!o)return;
+  const T=calcOpt(o);
+  showReviewModal('<div style="text-align:center;padding:30px 0"><div style="font-size:30px">⏳</div><div style="margin-top:10px;color:var(--gray-500)">Reviewing quote… this takes a few seconds</div></div>');
+  const payload={
+    title:A.activeQuote.title,customer:o.customer||A.activeQuote.customer,
+    option:o.label,currency:A.cur,vat_enabled:!!o.vatEnabled,vat_rate:o.vatRate||5,
+    totals:{sell:Math.round(T.ts),cost:Math.round(T.tc),gp:Math.round(T.tg),margin:+(T.margin*100).toFixed(1),grand:Math.round(T.grand)},
+    terms:terms(),
+    sections:(o.sections||[]).map(s=>({name:s.name,items:(s.items||[]).map(it=>({brand:it.brand,model:it.model,desc:it.desc,qty:it.qty,cost:it.cost,margin_pct:+((it.margin||0)*100).toFixed(1)}))}))
+  };
+  let r;
+  try{r=await api('POST','/api/ai/review',{quote:payload});}
+  catch(e){setReviewBody('<div class="auth-err">Could not reach the review service. Please try again.</div>');return;}
+  if(r.error){setReviewBody('<div class="auth-err">'+esc(r.error)+'</div>');return;}
+  const icon={ok:'✅',warning:'⚠️',info:'ℹ️'};
+  setReviewBody(
+    (r.summary?'<div style="font-size:14px;color:var(--gray-700);margin-bottom:14px">'+esc(r.summary)+'</div>':'')+
+    ((r.findings||[]).map(f=>'<div style="display:flex;gap:10px;padding:10px 0;border-top:1px solid var(--gray-200)">'+
+      '<div style="font-size:16px;flex-shrink:0">'+(icon[f.status]||'ℹ️')+'</div>'+
+      '<div><div style="font-weight:600;font-size:14px">'+esc(f.title)+'</div>'+
+      '<div style="font-size:13px;color:var(--gray-500)">'+esc(f.detail)+'</div></div>'+
+    '</div>').join('')||'<div style="color:var(--gray-500)">No findings returned.</div>')+
+    '<div style="font-size:11px;color:var(--gray-500);margin-top:14px">AI suggestions are advisory — nothing in your quote has been changed.</div>'
+  );
+}
+function showReviewModal(body){
+  closeReviewModal();
+  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="revOverlay" onclick="if(event.target===this)closeReviewModal()">'+
+    '<div class="modal" style="max-width:560px;max-height:80vh;overflow-y:auto">'+
+    '<div class="modal-title">🔍 Quote review</div>'+
+    '<div class="modal-sub">AI completeness check for '+esc(opt()?.label||'')+'</div>'+
+    '<div id="revBody">'+body+'</div>'+
+    '<div class="modal-actions"><button class="btn" onclick="closeReviewModal()">Close</button></div>'+
+    '</div></div>');
+}
+function setReviewBody(html){const el=document.getElementById('revBody');if(el)el.innerHTML=html;}
+function closeReviewModal(){const el=document.getElementById('revOverlay');if(el)el.remove();}
+
 // ── Shortcuts ─────────────────────────────────────────────────────────────────
 const opts=()=>A.activeQuote?.quote_data||[];
 const opt=()=>opts()[A.activeOpt];
@@ -518,6 +559,7 @@ function buildTopbarRight(){
     </div>
     <button class="btn" onclick="downloadTemplate()" title="Download Excel template">📄 Template</button>
     <label class="btn" style="cursor:pointer" title="Import from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importExcel(event)"></label>
+    <button class="btn" onclick="reviewQuote()">🔍 Review</button>
     <button class="btn" onclick="A.page='dashboard';draw()">← Back</button>
     <button class="btn btn-navy" onclick="saveQuote()">💾 Save</button>`;
   if(A.page==='print')return`
