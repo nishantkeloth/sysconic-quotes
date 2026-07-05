@@ -385,7 +385,7 @@ async function checkAuth(){
 async function loadQuotes(){const r=await api('GET','/api/quotes');A.quotes=r.quotes||[];}
 async function newQuote(){
   const title=prompt('Quote name:','New Quote');if(!title)return;
-  const customer=prompt('Customer name:','')||'';
+  const customer='';
   const r=await api('POST','/api/quotes',{title,customer,quote_data:[mkOption('Option 1')],terms_data:[...DEFAULT_TERMS],vendor_data:[],currency:'AED',exchange_rate:1});
   if(r.quote){A.quotes.unshift(r.quote);openQuote(r.quote);}
 }
@@ -398,6 +398,7 @@ async function openQuote(q){
   if(!A.activeQuote.terms_data||!A.activeQuote.terms_data.length)A.activeQuote.terms_data=[...DEFAULT_TERMS];
   if(!A.activeQuote.vendor_data)A.activeQuote.vendor_data=[];
   A.cur=A.activeQuote.currency||'AED';A.rate=A.activeQuote.exchange_rate||1;A.activeOpt=0;A.page='editor';draw();
+  if(!A.activeQuote.customer)setTimeout(()=>{const el=document.getElementById('custInput');if(el)el.focus();},120);
 }
 let _st=null;
 async function saveQuote(){
