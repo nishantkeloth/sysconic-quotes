@@ -230,6 +230,8 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .team-avatar{width:42px;height:42px;border-radius:50%;background:var(--navy-light);color:var(--navy);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;flex-shrink:0}
 
 /* ── Modal ── */
+.cust-search-btn{position:absolute;right:6px;bottom:6px;border:0;background:transparent;cursor:pointer;font-size:15px;padding:4px 6px;border-radius:6px;line-height:1}
+.cust-search-btn:hover{background:var(--gray-100,#f0f2f5)}
 .cust-drop{position:absolute;top:100%;left:0;right:0;background:var(--white);border:1.5px solid var(--gray-200);border-radius:8px;box-shadow:0 8px 24px rgba(15,37,68,.14);z-index:60;max-height:280px;overflow-y:auto;margin-top:4px}
 .cust-opt{padding:9px 12px;cursor:pointer;border-bottom:1px solid var(--gray-100)}
 .cust-opt:last-child{border-bottom:0}
@@ -398,7 +400,7 @@ async function openQuote(q){
   if(!A.activeQuote.terms_data||!A.activeQuote.terms_data.length)A.activeQuote.terms_data=[...DEFAULT_TERMS];
   if(!A.activeQuote.vendor_data)A.activeQuote.vendor_data=[];
   A.cur=A.activeQuote.currency||'AED';A.rate=A.activeQuote.exchange_rate||1;A.activeOpt=0;A.page='editor';draw();
-  if(!A.activeQuote.customer)setTimeout(()=>{const el=document.getElementById('custInput');if(el)el.focus();},120);
+  if(!A.activeQuote.customer)setTimeout(openCustModal,150);
 }
 let _st=null;
 async function saveQuote(){
@@ -490,6 +492,50 @@ function pickCustomer(name){
   hideCustDrop();schedSave();
 }
 function hideCustDrop(){const el=document.getElementById('custDrop');if(el)el.style.display='none';}
+function openCustModal(){
+  closeCustModal();
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="custOverlay" onclick="if(event.target===this)closeCustModal()">
+    <div class="modal" style="max-width:520px">
+      <div class="modal-title">🔍 Select customer</div>
+      <div class="modal-sub">Search your Zoho Books customers</div>
+      <div class="fld"><input id="zcSearch" placeholder="Start typing a customer name…" autocomplete="off" oninput="zcModalSearch(this.value)"></div>
+      <div id="zcResults" style="max-height:300px;overflow-y:auto;border:1px solid var(--gray-100);border-radius:8px"><div style="padding:16px;font-size:13px;color:var(--gray-500)">Type at least 2 letters to search…</div></div>
+      <div class="modal-actions" style="justify-content:space-between">
+        <div style="font-size:12px;color:var(--gray-500)">Not in Zoho? Close and type the name manually.</div>
+        <button class="btn" onclick="closeCustModal()">Close</button>
+      </div>
+    </div></div>`);
+  setTimeout(()=>{const el=document.getElementById('zcSearch');if(el)el.focus();},60);
+}
+function closeCustModal(){const el=document.getElementById('custOverlay');if(el)el.remove();}
+let ZM={t:null,last:''};
+function zcModalSearch(v){
+  clearTimeout(ZM.t);
+  const q=(v||'').trim();
+  const box=document.getElementById('zcResults');
+  if(q.length<2){if(box)box.innerHTML='<div style="padding:16px;font-size:13px;color:var(--gray-500)">Type at least 2 letters to search…</div>';return;}
+  if(box)box.innerHTML='<div style="padding:16px;font-size:13px;color:var(--gray-500)">Searching…</div>';
+  ZM.t=setTimeout(async()=>{
+    ZM.last=q;
+    let r;
+    try{r=await api('GET','/api/zoho/customers?search='+encodeURIComponent(q));}
+    catch(e){if(box)box.innerHTML='<div class="auth-err" style="margin:10px">Could not reach Zoho. Close and type manually.</div>';return;}
+    if(ZM.last!==q)return;
+    const el=document.getElementById('zcResults');if(!el)return;
+    if(r.error){el.innerHTML=`<div class="auth-err" style="margin:10px">${esc(r.error)}</div>`;return;}
+    if(!(r.customers||[]).length){el.innerHTML='<div style="padding:16px;font-size:13px;color:var(--gray-500)">No matches in Zoho Books. Close and type the name manually.</div>';return;}
+    el.innerHTML=r.customers.map(ct=>`<div class="cust-opt" onclick="zcPick('${esc(ct.name).replace(/'/g,'&#39;')}')">
+      <div class="cust-name">${esc(ct.name)}</div>
+      ${(ct.company&&ct.company!==ct.name)||ct.email?`<div class="cust-sub">${esc(ct.company&&ct.company!==ct.name?ct.company:'')}${ct.company&&ct.company!==ct.name&&ct.email?' · ':''}${esc(ct.email)}</div>`:''}
+    </div>`).join('')+'<div class="cust-src">From Zoho Books</div>';
+  },320);
+}
+function zcPick(name){
+  const tmp=document.createElement('textarea');tmp.innerHTML=name;name=tmp.value;
+  A.activeQuote.customer=name;
+  const inp=document.getElementById('custInput');if(inp)inp.value=name;
+  closeCustModal();schedSave();
+}
 
 // ── Shortcuts ─────────────────────────────────────────────────────────────────
 const opts=()=>A.activeQuote?.quote_data||[];
@@ -696,7 +742,7 @@ function editorHTML(){
     <div class="card-title">Quote details</div>
     <div class="field-grid g4" style="margin-bottom:14px">
       <div class="fld2"><label>Quote title</label><input value="${esc(q.title)}" oninput="A.activeQuote.title=this.value;schedSave()"></div>
-      <div class="fld2" style="position:relative"><label>Customer</label><input id="custInput" value="${esc(q.customer)}" autocomplete="off" oninput="A.activeQuote.customer=this.value;schedSave();zohoSearch(this.value)" onblur="setTimeout(hideCustDrop,180)" placeholder="Type to search Zoho Books…"><div id="custDrop" class="cust-drop" style="display:none"></div></div>
+      <div class="fld2" style="position:relative"><label>Customer</label><input id="custInput" value="${esc(q.customer)}" autocomplete="off" style="padding-right:36px" oninput="A.activeQuote.customer=this.value;schedSave();zohoSearch(this.value)" onblur="setTimeout(hideCustDrop,180)" placeholder="Type or search Zoho Books…"><button class="cust-search-btn" title="Search customers in Zoho Books" onclick="openCustModal()">🔍</button><div id="custDrop" class="cust-drop" style="display:none"></div></div>
       <div class="fld2"><label>Option label</label><input value="${esc(o.label)}" oninput="opts()[A.activeOpt].label=this.value;draw()"></div>
       <div class="fld2"><label>Quote ref</label><input value="${esc(o.ref||'')}" oninput="opts()[A.activeOpt].ref=this.value;schedSave()"></div>
     </div>
