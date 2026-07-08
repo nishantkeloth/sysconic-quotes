@@ -5,6 +5,7 @@
     { "src": "api/quotes.py", "use": "@vercel/python" },
     { "src": "api/ai.py",     "use": "@vercel/python" },
     { "src": "api/zoho.py",   "use": "@vercel/python" },
+    { "src": "api/pdf.py", "use": "@vercel/python" },
     { "src": "index.html",    "use": "@vercel/static" }
   ],
   "routes": [
@@ -13,6 +14,7 @@
     { "src": "/api/quotes",      "dest": "api/quotes.py" },
     { "src": "/api/ai/(.*)",     "dest": "api/ai.py" },
     { "src": "/api/zoho/(.*)",   "dest": "api/zoho.py" },
+    { "src": "/api/pdf/(.*)", "dest": "api/pdf.py" },
     { "src": "/(.*)",            "dest": "index.html" }
   ]
 }

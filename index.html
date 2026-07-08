@@ -646,6 +646,7 @@ function buildTopbarRight(){
     <button class="btn" onclick="A.page='dashboard';draw()">← Back</button>
     <button class="btn btn-navy" onclick="saveQuote()">💾 Save</button>`;
   if(A.page==='print')return`
+    <button class="btn btn-navy" onclick="downloadPDF()" title="Download this quotation as a PDF file">⬇ PDF</button>
     <select id="pSel" onchange="draw()" style="padding:6px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius)">
       ${(()=>{const w=printWhich();return (A.activeQuote?.quote_data||[]).map((o,i)=>`<option value="${i}" ${w===String(i)?'selected':''}>${esc(o.label)}</option>`).join('')+`<option value="all" ${w==='all'?'selected':''}>All options</option>`;})()}
     </select>
@@ -927,6 +928,24 @@ function vendorHTML(){
 }
 
 // ── Print ─────────────────────────────────────────────────────────────────────
+async function downloadPDF(){
+  const q=A.activeQuote;if(!q)return;
+  const btns=document.querySelectorAll('button');let b=null;btns.forEach(x=>{if(x.textContent.includes('PDF'))b=x;});
+  if(b){b.disabled=true;b.textContent='⏳ Generating…';}
+  try{
+    const r=await fetch('/api/pdf/quote/'+q.id+'?which='+encodeURIComponent(printWhich()),{headers:{Authorization:'Bearer '+A.token}});
+    if(!r.ok){const e=await r.json().catch(()=>({}));alert(e.error||'PDF generation failed');return;}
+    const blob=await r.blob();
+    const cd=r.headers.get('Content-Disposition')||'';
+    const m=cd.match(/filename="?([^";]+)"?/);
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download=m?m[1]:('Quotation-'+(q.title||'quote').replace(/[^\w\-]+/g,'-')+'.pdf');
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+  }catch(e){alert('Could not reach the PDF service.');}
+  finally{if(b){b.disabled=false;b.textContent='⬇ PDF';}}
+}
 function printWhich(){const s=document.getElementById('pSel');if(s)return s.value;return (A.activeQuote?.quote_data||[]).length>1?'all':'0';}
 function printHTML(){
   const q=A.activeQuote; if(!q)return'';
