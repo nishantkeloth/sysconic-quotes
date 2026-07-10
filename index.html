@@ -625,7 +625,7 @@ function draw(){
   if(A.screen==='login'||A.screen==='register'){document.getElementById('app').innerHTML=authHTML();return;}
   document.getElementById('app').innerHTML=appHTML();
   setTimeout(initTA,30);
-  if(A.page==='team'){setTimeout(loadTeam,50);setTimeout(loadIntegrations,50);}
+  if(A.page==='team'){setTimeout(loadTeam,50);setTimeout(loadIntegrations,50);setTimeout(loadSyncConfig,50);}
   if(A.page==='products')setTimeout(loadProducts,50);
   if(A.page==='customers')setTimeout(loadCustomersPage,50);
   if(A.page==='vendorMaster')setTimeout(loadVendorsMaster,50);
@@ -731,12 +731,12 @@ function buildTopbarRight(){
     <label class="btn" style="cursor:pointer" title="Import products from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importProducts(event)"></label>
     <button class="btn btn-navy" onclick="showProdModal()">+ Add product</button>`;
   if(A.page==='customers')return`
-    <button class="btn" onclick="syncZohoCustomers()" id="zohoSyncBtn" title="Pull your Zoho Books contacts into this list">🔄 Sync from Zoho</button>
+    ${A.user?.role==='admin'?`<button class="btn" onclick="syncIntegrationCustomers()" id="syncCustBtn" title="Pull contacts from your configured integration (Team & Settings)">🔄 Sync</button>`:''}
     <button class="btn" onclick="downloadCustTemplate()">⬇ Template</button>
     <label class="btn" style="cursor:pointer" title="Import customers from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importCustomers(event)"></label>
     <button class="btn btn-navy" onclick="showCustModal()">+ Add customer</button>`;
   if(A.page==='vendorMaster')return`
-    <button class="btn" onclick="syncZohoVendors()" id="zohoVendSyncBtn" title="Pull your Zoho Books vendor contacts into this list">🔄 Sync from Zoho</button>
+    ${A.user?.role==='admin'?`<button class="btn" onclick="syncIntegrationVendors()" id="syncVendBtn" title="Pull contacts from your configured integration (Team & Settings)">🔄 Sync</button>`:''}
     <button class="btn" onclick="downloadVendTemplate()">⬇ Template</button>
     <label class="btn" style="cursor:pointer" title="Import vendors from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importVendorsMaster(event)"></label>
     <button class="btn btn-navy" onclick="showVendModal()">+ Add vendor</button>`;
@@ -1431,24 +1431,24 @@ async function loadCustomersPage(){
   if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
   CUSTS.list=r.customers||[];CUSTS.total=r.total||0;
   const cnt=document.getElementById('custCount');if(cnt)cnt.textContent=`${CUSTS.total} customer${CUSTS.total!==1?'s':''}${CUSTS.total>100?' — showing first 100, use search':''}`;
-  if(!CUSTS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No customers yet.<br><br>Add one manually, import from Excel, or click "Sync from Zoho" above if you use Zoho Books.</div>`;return;}
+  if(!CUSTS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No customers yet.<br><br>Add one manually, import from Excel, or ask an admin to connect an integration in Team & Settings and click Sync above.</div>`;return;}
   el.innerHTML=`<div class="prod-hd" style="grid-template-columns:1fr 140px 170px 130px 70px 110px"><div>Name</div><div>Company</div><div>Email</div><div>Phone</div><div>Source</div><div></div></div>`+
     CUSTS.list.map(c=>`<div class="prod-row" style="grid-template-columns:1fr 140px 170px 130px 70px 110px">
       <div>${esc(c.name)}</div>
       <div style="color:var(--gray-500);font-size:13px">${esc(c.company_name||'')}</div>
       <div style="color:var(--gray-500);font-size:13px">${esc(c.email||'')}</div>
       <div style="color:var(--gray-500);font-size:13px">${esc(c.phone||'')}</div>
-      <div style="font-size:12px;color:${c.source==='zoho'?'var(--green)':'var(--gray-500)'}">${c.source==='zoho'?'Zoho':'Manual'}</div>
+      <div style="font-size:12px;color:${c.source&&c.source!=='manual'?'var(--green)':'var(--gray-500)'}">${c.source&&c.source!=='manual'?esc(c.source.charAt(0).toUpperCase()+c.source.slice(1)):'Manual'}</div>
       <div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn btn-sm" onclick="showCustModal('${c.id}')">Edit</button><button class="btn btn-sm btn-red" onclick="delCustomer('${c.id}')">×</button></div>
     </div>`).join('');
 }
-async function syncZohoCustomers(){
-  const btn=document.getElementById('zohoSyncBtn');
+async function syncIntegrationCustomers(){
+  const btn=document.getElementById('syncCustBtn');
   if(btn){btn.disabled=true;btn.textContent='⏳ Syncing…';}
-  const r=await api('POST','/api/integrations/sync-customers',{provider:'zoho'});
-  if(btn){btn.disabled=false;btn.textContent='🔄 Sync from Zoho';}
+  const r=await api('POST','/api/integrations/sync-customers',{});
+  if(btn){btn.disabled=false;btn.textContent='🔄 Sync';}
   if(r.error){alert(r.error);return;}
-  alert(`Synced ${r.synced||0} customer${r.synced===1?'':'s'} from Zoho.`);
+  alert(`Synced ${r.synced||0} customer${r.synced===1?'':'s'}.`);
   loadCustomersPage();
 }
 async function delCustomer(cid){
@@ -1535,24 +1535,24 @@ async function loadVendorsMaster(){
   if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
   VENDS.list=r.vendors||[];VENDS.total=r.total||0;
   const cnt=document.getElementById('vendCount');if(cnt)cnt.textContent=`${VENDS.total} vendor${VENDS.total!==1?'s':''}${VENDS.total>100?' — showing first 100, use search':''}`;
-  if(!VENDS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No vendors yet. Add one manually, import from Excel, or click "Sync from Zoho" above if you use Zoho Books.</div>`;return;}
+  if(!VENDS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No vendors yet. Add one manually, import from Excel, or ask an admin to connect an integration in Team & Settings and click Sync above.</div>`;return;}
   el.innerHTML=`<div class="prod-hd" style="grid-template-columns:1fr 120px 160px 120px 70px 110px"><div>Name</div><div>Category</div><div>Contact / Email</div><div>Phone</div><div>Source</div><div></div></div>`+
     VENDS.list.map(v=>`<div class="prod-row" style="grid-template-columns:1fr 120px 160px 120px 70px 110px">
       <div>${esc(v.name)}</div>
       <div style="color:var(--gray-500);font-size:13px">${esc(v.category||'')}</div>
       <div style="color:var(--gray-500);font-size:13px">${esc(v.contact_person||v.email||'')}</div>
       <div style="color:var(--gray-500);font-size:13px">${esc(v.phone||'')}</div>
-      <div style="font-size:12px;color:${v.source==='zoho'?'var(--green)':'var(--gray-500)'}">${v.source==='zoho'?'Zoho':'Manual'}</div>
+      <div style="font-size:12px;color:${v.source&&v.source!=='manual'?'var(--green)':'var(--gray-500)'}">${v.source&&v.source!=='manual'?esc(v.source.charAt(0).toUpperCase()+v.source.slice(1)):'Manual'}</div>
       <div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn btn-sm" onclick="showVendModal('${v.id}')">Edit</button><button class="btn btn-sm btn-red" onclick="delVendorMaster('${v.id}')">×</button></div>
     </div>`).join('');
 }
-async function syncZohoVendors(){
-  const btn=document.getElementById('zohoVendSyncBtn');
+async function syncIntegrationVendors(){
+  const btn=document.getElementById('syncVendBtn');
   if(btn){btn.disabled=true;btn.textContent='⏳ Syncing…';}
-  const r=await api('POST','/api/integrations/sync-vendors',{provider:'zoho'});
-  if(btn){btn.disabled=false;btn.textContent='🔄 Sync from Zoho';}
+  const r=await api('POST','/api/integrations/sync-vendors',{});
+  if(btn){btn.disabled=false;btn.textContent='🔄 Sync';}
   if(r.error){alert(r.error);return;}
-  alert(`Synced ${r.synced||0} vendor${r.synced===1?'':'s'} from Zoho.`);
+  alert(`Synced ${r.synced||0} vendor${r.synced===1?'':'s'}.`);
   loadVendorsMaster();
 }
 async function delVendorMaster(vid){
@@ -1624,11 +1624,16 @@ function importVendorsMaster(event){
 
 // ── Team ──────────────────────────────────────────────────────────────────────
 function teamHTML(){return`<div class="card" style="max-width:700px" id="teamCard"><div class="card-title">Team members</div><div id="teamList"><div style="color:var(--gray-500)">Loading...</div></div></div>
-<div class="card" style="max-width:700px;margin-top:20px">
+${A.user?.role==='admin'?`<div class="card" style="max-width:700px;margin-top:20px">
   <div class="card-title">Integrations</div>
-  <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px">Connect your own accounting/CRM system to sync customers and vendors into your Customer & Vendor Master. Each company's credentials are kept separate — nothing here is shared with other companies on this platform.</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px">Connect your own accounting/CRM system to sync customers and vendors into your Customer & Vendor Master. Each company's credentials are kept separate — nothing here is shared with other companies on this platform. Admin only.</div>
   <div id="integrationsList"><div style="color:var(--gray-500)">Loading…</div></div>
-</div>`;}
+  <div style="border-top:1px solid var(--gray-100);margin-top:16px;padding-top:16px">
+    <div style="font-weight:600;font-size:14px;margin-bottom:6px">Sync configuration</div>
+    <div style="font-size:13px;color:var(--gray-500);margin-bottom:12px">Choose which connected integration feeds each data type. Connect an integration above before it appears here.</div>
+    <div id="syncConfigBox"><div style="color:var(--gray-500)">Loading…</div></div>
+  </div>
+</div>`:''}`;}
 async function loadTeam(){
   const el=document.getElementById('teamList'); if(!el)return;
   const r=await api('GET','/api/auth/team');
@@ -1692,11 +1697,38 @@ async function saveIntegration(provider){
   if(r.error){const e=document.getElementById('integErr');e.textContent=r.error;e.style.display='block';return;}
   document.getElementById('integOverlay').remove();
   loadIntegrations();
+  loadSyncConfig();
 }
 async function disconnectIntegration(provider){
   if(!confirm('Disconnect this integration? Synced records already in your Customer/Vendor Master will stay, but new syncs will stop working until you reconnect.'))return;
   await api('DELETE','/api/integrations/'+provider);
   loadIntegrations();
+  loadSyncConfig();
+}
+
+// ── Sync configuration: admin picks which connected integration feeds each
+// data type (explicit dropdown, not auto-detected) ────────────────────────────
+async function loadSyncConfig(){
+  const el=document.getElementById('syncConfigBox');if(!el)return;
+  const r=await api('GET','/api/integrations/sync-config');
+  if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  const opts=r.connected_providers||[];
+  if(!opts.length){el.innerHTML='<div style="color:var(--gray-500);font-size:13px">Connect an integration above to enable sync.</div>';return;}
+  const optHtml=(selected)=>'<option value="">— None —</option>'+opts.map(o=>`<option value="${esc(o.provider)}" ${selected===o.provider?'selected':''}>${esc(o.label)}</option>`).join('');
+  el.innerHTML=`
+    <div class="fld"><label>Customer sync source</label><select id="syncCfgCust" style="padding:8px 10px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit;width:100%;max-width:260px">${optHtml(r.customer_sync_provider)}</select></div>
+    <div class="fld"><label>Vendor sync source</label><select id="syncCfgVend" style="padding:8px 10px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit;width:100%;max-width:260px">${optHtml(r.vendor_sync_provider)}</select></div>
+    <button class="btn btn-navy btn-sm" onclick="saveSyncConfig()">Save</button>
+  `;
+}
+async function saveSyncConfig(){
+  const body={
+    customer_sync_provider: document.getElementById('syncCfgCust').value,
+    vendor_sync_provider:   document.getElementById('syncCfgVend').value,
+  };
+  const r=await api('POST','/api/integrations/sync-config',body);
+  if(r.error){alert(r.error);return;}
+  alert('Sync configuration saved.');
 }
 
 function showInviteModal(){

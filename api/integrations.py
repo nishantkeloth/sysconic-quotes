@@ -41,11 +41,20 @@ def mask(value):
     if len(value) <= 4: return '••••'
     return '•' * (len(value) - 4) + value[-4:]
 
+def is_admin(claims):
+    return (claims or {}).get('role') == 'admin'
+
+ADMIN_ONLY = {'error': 'Admin only — ask a company admin to manage integrations.'}
+
 # ── List this company's configured integrations ────────────────────────────────
+# Admin-only: connecting a system, choosing what feeds Customer/Vendor sync, and
+# triggering sync are company configuration, not per-user actions — matches how
+# Salesforce/HubSpot/Zendesk scope "Settings → Integrations" to admins/owners.
 @app.route('/api/integrations', methods=['GET'])
 def list_integrations():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
 
     rows = sb.table('company_integrations').select('*').eq('company_id', claims['company_id']).execute()
     by_provider = {r['provider']: r for r in (rows.data or [])}
@@ -69,6 +78,7 @@ def list_integrations():
 def connect_integration():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
 
     d = request.json or {}
     provider = (d.get('provider') or '').strip().lower()
@@ -108,6 +118,7 @@ def connect_integration():
 def disconnect_integration(provider):
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
     sb.table('company_integrations').delete().eq('company_id', claims['company_id']).eq('provider', provider).execute()
     return jsonify({'ok': True})
 
@@ -120,13 +131,67 @@ def _get_creds(claims, provider):
 def _mark_synced(claims, provider):
     sb.table('company_integrations').update({'last_synced_at': 'now()'}).eq('company_id', claims['company_id']).eq('provider', provider).execute()
 
+def _connected_providers(claims):
+    """Providers this company has actually connected (status='connected')."""
+    rows = sb.table('company_integrations').select('provider,status').eq('company_id', claims['company_id']).eq('status', 'connected').execute()
+    return [r['provider'] for r in (rows.data or []) if r['provider'] in ADAPTERS]
+
+def _company_provider(claims, kind):
+    """kind is 'customer_sync_provider' or 'vendor_sync_provider' — the admin's
+    explicit choice of which connected integration feeds that data type."""
+    row = sb.table('companies').select(kind).eq('id', claims['company_id']).execute()
+    if not row.data:
+        return None
+    return (row.data[0].get(kind) or '').strip().lower() or None
+
+# ── Sync configuration: which connected provider feeds each data type ───────────
+# This is the explicit admin choice (a dropdown in Team & Settings), not an
+# auto-detected "whichever is connected" guess — set once here, then the Sync
+# buttons on Customers/Vendors just use it.
+@app.route('/api/integrations/sync-config', methods=['GET'])
+def get_sync_config():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+
+    connected = _connected_providers(claims)
+    row = sb.table('companies').select('customer_sync_provider,vendor_sync_provider').eq('id', claims['company_id']).execute()
+    cfg = row.data[0] if row.data else {}
+    return jsonify({
+        'connected_providers': [{'provider': p, 'label': PROVIDER_LABELS.get(p, p.title())} for p in connected],
+        'customer_sync_provider': cfg.get('customer_sync_provider') or '',
+        'vendor_sync_provider':   cfg.get('vendor_sync_provider') or '',
+    })
+
+@app.route('/api/integrations/sync-config', methods=['POST'])
+def set_sync_config():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+
+    d = request.json or {}
+    connected = set(_connected_providers(claims))
+    update = {}
+    for kind in ('customer_sync_provider', 'vendor_sync_provider'):
+        if kind not in d: continue
+        val = (d.get(kind) or '').strip().lower()
+        if val and val not in connected:
+            return jsonify({'error': f'"{PROVIDER_LABELS.get(val, val)}" is not connected yet — connect it first.'}), 400
+        update[kind] = val or None
+    if update:
+        sb.table('companies').update(update).eq('id', claims['company_id']).execute()
+    return jsonify({'ok': True})
+
 # ── Generic sync: customers ─────────────────────────────────────────────────────
 @app.route('/api/integrations/sync-customers', methods=['POST'])
 def sync_customers():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
 
-    provider = ((request.json or {}).get('provider') or 'zoho').strip().lower()
+    provider = _company_provider(claims, 'customer_sync_provider')
+    if not provider:
+        return jsonify({'error': 'No customer sync provider configured. Set one in Team & Settings → Integrations.'}), 400
     adapter = ADAPTERS.get(provider)
     if not adapter:
         return jsonify({'error': f'Unknown provider "{provider}"'}), 400
@@ -166,8 +231,11 @@ def sync_customers():
 def sync_vendors():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
 
-    provider = ((request.json or {}).get('provider') or 'zoho').strip().lower()
+    provider = _company_provider(claims, 'vendor_sync_provider')
+    if not provider:
+        return jsonify({'error': 'No vendor sync provider configured. Set one in Team & Settings → Integrations.'}), 400
     adapter = ADAPTERS.get(provider)
     if not adapter:
         return jsonify({'error': f'Unknown provider "{provider}"'}), 400
@@ -206,9 +274,15 @@ def sync_vendors():
 def search_customers():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    provider = (request.args.get('provider') or 'zoho').strip().lower()
+    # Not admin-gated — any team member can look up customers while building a
+    # quote. It just uses whichever provider the admin configured for customer
+    # sync (Team & Settings → Integrations); if none is configured yet, this
+    # quietly returns no matches rather than erroring on every keystroke.
+    provider = (request.args.get('provider') or '').strip().lower() or _company_provider(claims, 'customer_sync_provider')
+    if not provider:
+        return jsonify({'customers': []})
     adapter = ADAPTERS.get(provider)
-    if not adapter: return jsonify({'error': f'Unknown provider "{provider}"'}), 400
+    if not adapter: return jsonify({'customers': []})
 
     search = (request.args.get('search') or '').strip().lower()
     if len(search) < 2:
