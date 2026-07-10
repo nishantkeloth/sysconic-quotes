@@ -28,5 +28,8 @@
     { "src": "/api/integrations/(.*)", "dest": "api/integrations.py" },
     { "src": "/api/integrations",      "dest": "api/integrations.py" },
     { "src": "/(.*)",            "dest": "index.html" }
+  ],
+  "crons": [
+    { "path": "/api/integrations/run-auto-sync", "schedule": "0 3 * * *" }
   ]
 }

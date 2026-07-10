@@ -625,7 +625,8 @@ function draw(){
   if(A.screen==='login'||A.screen==='register'){document.getElementById('app').innerHTML=authHTML();return;}
   document.getElementById('app').innerHTML=appHTML();
   setTimeout(initTA,30);
-  if(A.page==='team'){setTimeout(loadTeam,50);setTimeout(loadIntegrations,50);setTimeout(loadSyncConfig,50);}
+  if(A.page==='team'){setTimeout(loadTeam,50);}
+  if(A.page==='integrations'){setTimeout(loadIntegrations,50);setTimeout(loadSyncConfig,50);}
   if(A.page==='products')setTimeout(loadProducts,50);
   if(A.page==='customers')setTimeout(loadCustomersPage,50);
   if(A.page==='vendorMaster')setTimeout(loadVendorsMaster,50);
@@ -662,7 +663,7 @@ function authHTML(){
 // ── App shell ─────────────────────────────────────────────────────────────────
 function appHTML(){
   const init=(A.user?.name||'U').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
-  const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master'};
+  const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master',integrations:'Integrations'};
   const inEditor=['editor','terms','summary','vendor','print'].includes(A.page);
 
   const sidebar=`<div class="sidebar">
@@ -679,6 +680,7 @@ function appHTML(){
       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="A.page='editor';draw()"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}
       <div class="sb-sec">Settings</div>
       <div class="sb-item ${A.page==='team'?'active':''}" onclick="A.page='team';draw()"><span class="sb-icon">👥</span>Team</div>
+      ${A.user?.role==='admin'?`<div class="sb-item ${A.page==='integrations'?'active':''}" onclick="A.page='integrations';draw()"><span class="sb-icon">🔌</span>Integrations</div>`:''}
     </nav>
     <div class="sb-foot">
       <div class="sb-user">
@@ -704,6 +706,7 @@ function appHTML(){
   else if(A.page==='customers')pageContent=customersHTML();
   else if(A.page==='vendorMaster')pageContent=vendorsMasterHTML();
   else if(A.page==='team')pageContent=teamHTML();
+  else if(A.page==='integrations')pageContent=integrationsHTML();
 
   return`<div class="shell">${sidebar}<div class="main">
     <div class="topbar"><div class="topbar-title">${PAGE_TITLES[A.page]||''}</div><div class="topbar-right">${topbarRight}</div></div>
@@ -731,12 +734,12 @@ function buildTopbarRight(){
     <label class="btn" style="cursor:pointer" title="Import products from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importProducts(event)"></label>
     <button class="btn btn-navy" onclick="showProdModal()">+ Add product</button>`;
   if(A.page==='customers')return`
-    ${A.user?.role==='admin'?`<button class="btn" onclick="syncIntegrationCustomers()" id="syncCustBtn" title="Pull contacts from your configured integration (Team & Settings)">🔄 Sync</button>`:''}
+    ${A.user?.role==='admin'?`<button class="btn" onclick="syncIntegrationCustomers()" id="syncCustBtn" title="Pull contacts from your configured integration (Settings → Integrations)">🔄 Sync</button>`:''}
     <button class="btn" onclick="downloadCustTemplate()">⬇ Template</button>
     <label class="btn" style="cursor:pointer" title="Import customers from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importCustomers(event)"></label>
     <button class="btn btn-navy" onclick="showCustModal()">+ Add customer</button>`;
   if(A.page==='vendorMaster')return`
-    ${A.user?.role==='admin'?`<button class="btn" onclick="syncIntegrationVendors()" id="syncVendBtn" title="Pull contacts from your configured integration (Team & Settings)">🔄 Sync</button>`:''}
+    ${A.user?.role==='admin'?`<button class="btn" onclick="syncIntegrationVendors()" id="syncVendBtn" title="Pull contacts from your configured integration (Settings → Integrations)">🔄 Sync</button>`:''}
     <button class="btn" onclick="downloadVendTemplate()">⬇ Template</button>
     <label class="btn" style="cursor:pointer" title="Import vendors from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importVendorsMaster(event)"></label>
     <button class="btn btn-navy" onclick="showVendModal()">+ Add vendor</button>`;
@@ -1431,7 +1434,7 @@ async function loadCustomersPage(){
   if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
   CUSTS.list=r.customers||[];CUSTS.total=r.total||0;
   const cnt=document.getElementById('custCount');if(cnt)cnt.textContent=`${CUSTS.total} customer${CUSTS.total!==1?'s':''}${CUSTS.total>100?' — showing first 100, use search':''}`;
-  if(!CUSTS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No customers yet.<br><br>Add one manually, import from Excel, or ask an admin to connect an integration in Team & Settings and click Sync above.</div>`;return;}
+  if(!CUSTS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No customers yet.<br><br>Add one manually, import from Excel, or ask an admin to connect an integration in Settings → Integrations and click Sync above.</div>`;return;}
   el.innerHTML=`<div class="prod-hd" style="grid-template-columns:1fr 140px 170px 130px 70px 110px"><div>Name</div><div>Company</div><div>Email</div><div>Phone</div><div>Source</div><div></div></div>`+
     CUSTS.list.map(c=>`<div class="prod-row" style="grid-template-columns:1fr 140px 170px 130px 70px 110px">
       <div>${esc(c.name)}</div>
@@ -1535,7 +1538,7 @@ async function loadVendorsMaster(){
   if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
   VENDS.list=r.vendors||[];VENDS.total=r.total||0;
   const cnt=document.getElementById('vendCount');if(cnt)cnt.textContent=`${VENDS.total} vendor${VENDS.total!==1?'s':''}${VENDS.total>100?' — showing first 100, use search':''}`;
-  if(!VENDS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No vendors yet. Add one manually, import from Excel, or ask an admin to connect an integration in Team & Settings and click Sync above.</div>`;return;}
+  if(!VENDS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No vendors yet. Add one manually, import from Excel, or ask an admin to connect an integration in Settings → Integrations and click Sync above.</div>`;return;}
   el.innerHTML=`<div class="prod-hd" style="grid-template-columns:1fr 120px 160px 120px 70px 110px"><div>Name</div><div>Category</div><div>Contact / Email</div><div>Phone</div><div>Source</div><div></div></div>`+
     VENDS.list.map(v=>`<div class="prod-row" style="grid-template-columns:1fr 120px 160px 120px 70px 110px">
       <div>${esc(v.name)}</div>
@@ -1623,17 +1626,18 @@ function importVendorsMaster(event){
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────
-function teamHTML(){return`<div class="card" style="max-width:700px" id="teamCard"><div class="card-title">Team members</div><div id="teamList"><div style="color:var(--gray-500)">Loading...</div></div></div>
-${A.user?.role==='admin'?`<div class="card" style="max-width:700px;margin-top:20px">
+function teamHTML(){return`<div class="card" style="max-width:700px" id="teamCard"><div class="card-title">Team members</div><div id="teamList"><div style="color:var(--gray-500)">Loading...</div></div></div>`;}
+
+function integrationsHTML(){return`<div class="card" style="max-width:700px">
   <div class="card-title">Integrations</div>
   <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px">Connect your own accounting/CRM system to sync customers and vendors into your Customer & Vendor Master. Each company's credentials are kept separate — nothing here is shared with other companies on this platform. Admin only.</div>
   <div id="integrationsList"><div style="color:var(--gray-500)">Loading…</div></div>
   <div style="border-top:1px solid var(--gray-100);margin-top:16px;padding-top:16px">
     <div style="font-weight:600;font-size:14px;margin-bottom:6px">Sync configuration</div>
-    <div style="font-size:13px;color:var(--gray-500);margin-bottom:12px">Choose which connected integration feeds each data type. Connect an integration above before it appears here.</div>
+    <div style="font-size:13px;color:var(--gray-500);margin-bottom:12px">Choose which connected integration feeds each data type, and whether it should also sync automatically once a day. Connect an integration above before it appears here.</div>
     <div id="syncConfigBox"><div style="color:var(--gray-500)">Loading…</div></div>
   </div>
-</div>`:''}`;}
+</div>`;}
 async function loadTeam(){
   const el=document.getElementById('teamList'); if(!el)return;
   const r=await api('GET','/api/auth/team');
@@ -1718,6 +1722,7 @@ async function loadSyncConfig(){
   el.innerHTML=`
     <div class="fld"><label>Customer sync source</label><select id="syncCfgCust" style="padding:8px 10px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit;width:100%;max-width:260px">${optHtml(r.customer_sync_provider)}</select></div>
     <div class="fld"><label>Vendor sync source</label><select id="syncCfgVend" style="padding:8px 10px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit;width:100%;max-width:260px">${optHtml(r.vendor_sync_provider)}</select></div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;margin:12px 0;cursor:pointer"><input type="checkbox" id="syncCfgAuto" ${r.auto_sync_enabled?'checked':''}> Enable automatic daily sync (uses the sources selected above, runs once a day)</label>
     <button class="btn btn-navy btn-sm" onclick="saveSyncConfig()">Save</button>
   `;
 }
@@ -1725,6 +1730,7 @@ async function saveSyncConfig(){
   const body={
     customer_sync_provider: document.getElementById('syncCfgCust').value,
     vendor_sync_provider:   document.getElementById('syncCfgVend').value,
+    auto_sync_enabled:      document.getElementById('syncCfgAuto').checked,
   };
   const r=await api('POST','/api/integrations/sync-config',body);
   if(r.error){alert(r.error);return;}

@@ -200,45 +200,88 @@ def disconnect_integration(provider):
     sb.table('company_integrations').delete().eq('company_id', claims['company_id']).eq('provider', provider).execute()
     return jsonify({'ok': True})
 
-def _get_creds(claims, provider):
-    row = sb.table('company_integrations').select('credentials,status').eq('company_id', claims['company_id']).eq('provider', provider).execute()
+def _get_creds_for(company_id, provider):
+    row = sb.table('company_integrations').select('credentials,status').eq('company_id', company_id).eq('provider', provider).execute()
     if not row.data:
         return None
     return row.data[0].get('credentials') or {}
 
-def _mark_synced(claims, provider):
-    sb.table('company_integrations').update({'last_synced_at': 'now()'}).eq('company_id', claims['company_id']).eq('provider', provider).execute()
+def _mark_synced_for(company_id, provider):
+    sb.table('company_integrations').update({'last_synced_at': 'now()'}).eq('company_id', company_id).eq('provider', provider).execute()
 
-def _connected_providers(claims):
+def _connected_providers(company_id):
     """Providers this company has actually connected (status='connected')."""
-    rows = sb.table('company_integrations').select('provider,status').eq('company_id', claims['company_id']).eq('status', 'connected').execute()
+    rows = sb.table('company_integrations').select('provider,status').eq('company_id', company_id).eq('status', 'connected').execute()
     return [r['provider'] for r in (rows.data or []) if r['provider'] in ADAPTERS]
 
-def _company_provider(claims, kind):
+def _company_provider(company_id, kind):
     """kind is 'customer_sync_provider' or 'vendor_sync_provider' — the admin's
     explicit choice of which connected integration feeds that data type."""
-    row = sb.table('companies').select(kind).eq('id', claims['company_id']).execute()
+    row = sb.table('companies').select(kind).eq('id', company_id).execute()
     if not row.data:
         return None
     return (row.data[0].get(kind) or '').strip().lower() or None
 
-# ── Sync configuration: which connected provider feeds each data type ───────────
-# This is the explicit admin choice (a dropdown in Team & Settings), not an
-# auto-detected "whichever is connected" guess — set once here, then the Sync
-# buttons on Customers/Vendors just use it.
+def _sync_contacts(company_id, provider, kind):
+    """Shared by the admin-triggered Sync buttons and the auto-sync cron route.
+    kind is 'customers' or 'vendors'. Returns (count_synced, error_or_None)."""
+    adapter = ADAPTERS.get(provider)
+    if not adapter:
+        return 0, f'Unknown provider "{provider}"'
+    creds = _get_creds_for(company_id, provider)
+    if not creds or not adapter.is_configured(creds):
+        return 0, f'No {PROVIDER_LABELS.get(provider, provider)} integration is connected yet.'
+
+    try:
+        contacts = adapter.fetch_customers(creds) if kind == 'customers' else adapter.fetch_vendors(creds)
+    except Exception as e:
+        return 0, f'{PROVIDER_LABELS.get(provider, provider)} sync failed: {str(e)[:250]}'
+
+    rows = []
+    for ct in contacts:
+        if not ct.get('id'): continue
+        row = {
+            'company_id':          company_id,
+            'name':                (ct.get('name') or '')[:500] or 'Unnamed contact',
+            'email':               (ct.get('email') or '')[:500],
+            'phone':               (ct.get('phone') or '')[:500],
+            'source':              provider,
+            'external_contact_id': ct['id'],
+        }
+        if kind == 'customers':
+            row['company_name'] = (ct.get('company') or '')[:500]
+        rows.append(row)
+
+    if rows:
+        table = 'customers' if kind == 'customers' else 'vendors'
+        try:
+            sb.table(table).upsert(rows, on_conflict='company_id,external_contact_id').execute()
+        except Exception as e:
+            return 0, f'Could not save synced {kind}: {str(e)[:300]}'
+
+    _mark_synced_for(company_id, provider)
+    return len(rows), None
+
+# ── Sync configuration: which connected provider feeds each data type, plus the
+# auto-sync toggle ───────────────────────────────────────────────────────────────
+# This is the explicit admin choice (dropdowns + a checkbox in Settings →
+# Integrations), not an auto-detected "whichever is connected" guess — set once
+# here, then the Sync buttons on Customers/Vendors and the auto-sync cron route
+# both just use it.
 @app.route('/api/integrations/sync-config', methods=['GET'])
 def get_sync_config():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
     if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
 
-    connected = _connected_providers(claims)
-    row = sb.table('companies').select('customer_sync_provider,vendor_sync_provider').eq('id', claims['company_id']).execute()
+    connected = _connected_providers(claims['company_id'])
+    row = sb.table('companies').select('customer_sync_provider,vendor_sync_provider,auto_sync_enabled').eq('id', claims['company_id']).execute()
     cfg = row.data[0] if row.data else {}
     return jsonify({
         'connected_providers': [{'provider': p, 'label': PROVIDER_LABELS.get(p, p.title())} for p in connected],
         'customer_sync_provider': cfg.get('customer_sync_provider') or '',
         'vendor_sync_provider':   cfg.get('vendor_sync_provider') or '',
+        'auto_sync_enabled':      bool(cfg.get('auto_sync_enabled')),
     })
 
 @app.route('/api/integrations/sync-config', methods=['POST'])
@@ -248,7 +291,7 @@ def set_sync_config():
     if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
 
     d = request.json or {}
-    connected = set(_connected_providers(claims))
+    connected = set(_connected_providers(claims['company_id']))
     update = {}
     for kind in ('customer_sync_provider', 'vendor_sync_provider'):
         if kind not in d: continue
@@ -256,6 +299,8 @@ def set_sync_config():
         if val and val not in connected:
             return jsonify({'error': f'"{PROVIDER_LABELS.get(val, val)}" is not connected yet — connect it first.'}), 400
         update[kind] = val or None
+    if 'auto_sync_enabled' in d:
+        update['auto_sync_enabled'] = bool(d.get('auto_sync_enabled'))
     if update:
         sb.table('companies').update(update).eq('id', claims['company_id']).execute()
     return jsonify({'ok': True})
@@ -267,42 +312,13 @@ def sync_customers():
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
     if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
 
-    provider = _company_provider(claims, 'customer_sync_provider')
+    provider = _company_provider(claims['company_id'], 'customer_sync_provider')
     if not provider:
-        return jsonify({'error': 'No customer sync provider configured. Set one in Team & Settings → Integrations.'}), 400
-    adapter = ADAPTERS.get(provider)
-    if not adapter:
-        return jsonify({'error': f'Unknown provider "{provider}"'}), 400
+        return jsonify({'error': 'No customer sync provider configured. Set one in Settings → Integrations.'}), 400
 
-    creds = _get_creds(claims, provider)
-    if not creds or not adapter.is_configured(creds):
-        return jsonify({'error': f'No {PROVIDER_LABELS.get(provider, provider)} integration is connected yet. Connect one in Team & Settings.'}), 400
-
-    try:
-        contacts = adapter.fetch_customers(creds)
-    except Exception as e:
-        return jsonify({'error': f'{PROVIDER_LABELS.get(provider, provider)} sync failed: {str(e)[:250]}'}), 502
-
-    rows = []
-    for ct in contacts:
-        if not ct.get('id'): continue
-        rows.append({
-            'company_id':          claims['company_id'],
-            'name':                (ct.get('name') or '')[:500] or 'Unnamed contact',
-            'company_name':        (ct.get('company') or '')[:500],
-            'email':               (ct.get('email') or '')[:500],
-            'phone':               (ct.get('phone') or '')[:500],
-            'source':              provider,
-            'external_contact_id': ct['id'],
-        })
-    if rows:
-        try:
-            sb.table('customers').upsert(rows, on_conflict='company_id,external_contact_id').execute()
-        except Exception as e:
-            return jsonify({'error': f'Could not save synced customers: {str(e)[:300]}'}), 502
-
-    _mark_synced(claims, provider)
-    return jsonify({'synced': len(rows)})
+    count, err = _sync_contacts(claims['company_id'], provider, 'customers')
+    if err: return jsonify({'error': err}), 502
+    return jsonify({'synced': count})
 
 # ── Generic sync: vendors ───────────────────────────────────────────────────────
 @app.route('/api/integrations/sync-vendors', methods=['POST'])
@@ -311,41 +327,43 @@ def sync_vendors():
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
     if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
 
-    provider = _company_provider(claims, 'vendor_sync_provider')
+    provider = _company_provider(claims['company_id'], 'vendor_sync_provider')
     if not provider:
-        return jsonify({'error': 'No vendor sync provider configured. Set one in Team & Settings → Integrations.'}), 400
-    adapter = ADAPTERS.get(provider)
-    if not adapter:
-        return jsonify({'error': f'Unknown provider "{provider}"'}), 400
+        return jsonify({'error': 'No vendor sync provider configured. Set one in Settings → Integrations.'}), 400
 
-    creds = _get_creds(claims, provider)
-    if not creds or not adapter.is_configured(creds):
-        return jsonify({'error': f'No {PROVIDER_LABELS.get(provider, provider)} integration is connected yet. Connect one in Team & Settings.'}), 400
+    count, err = _sync_contacts(claims['company_id'], provider, 'vendors')
+    if err: return jsonify({'error': err}), 502
+    return jsonify({'synced': count})
 
-    try:
-        contacts = adapter.fetch_vendors(creds)
-    except Exception as e:
-        return jsonify({'error': f'{PROVIDER_LABELS.get(provider, provider)} sync failed: {str(e)[:250]}'}), 502
+# ── Auto-sync: run once daily via Vercel's own Cron Jobs (see the "crons" entry
+# in vercel.json) ────────────────────────────────────────────────────────────────
+# Not JWT-gated (there's no logged-in user when a cron pings this). Vercel
+# automatically sends `Authorization: Bearer <CRON_SECRET>` on every cron
+# invocation when a CRON_SECRET env var is set on the project — that's checked
+# here. A `secret` query param / X-Cron-Secret header is also accepted as a
+# fallback for manual testing (e.g. curling this directly). Only processes
+# companies that have explicitly turned on "Enable automatic sync" in
+# Settings → Integrations.
+CRON_SECRET = os.environ.get('CRON_SECRET')
 
-    rows = []
-    for ct in contacts:
-        if not ct.get('id'): continue
-        rows.append({
-            'company_id':          claims['company_id'],
-            'name':                (ct.get('name') or '')[:500] or 'Unnamed contact',
-            'email':               (ct.get('email') or '')[:500],
-            'phone':               (ct.get('phone') or '')[:500],
-            'source':              provider,
-            'external_contact_id': ct['id'],
-        })
-    if rows:
-        try:
-            sb.table('vendors').upsert(rows, on_conflict='company_id,external_contact_id').execute()
-        except Exception as e:
-            return jsonify({'error': f'Could not save synced vendors: {str(e)[:300]}'}), 502
+@app.route('/api/integrations/run-auto-sync', methods=['GET', 'POST'])
+def run_auto_sync():
+    auth = request.headers.get('Authorization', '')
+    provided = auth[7:] if auth.startswith('Bearer ') else ''
+    provided = provided or request.args.get('secret') or request.headers.get('X-Cron-Secret') or ''
+    if not CRON_SECRET or provided != CRON_SECRET:
+        return jsonify({'error': 'Unauthorized'}), 401
 
-    _mark_synced(claims, provider)
-    return jsonify({'synced': len(rows)})
+    companies = sb.table('companies').select('id,customer_sync_provider,vendor_sync_provider').eq('auto_sync_enabled', True).execute()
+    results = []
+    for co in (companies.data or []):
+        cid = co['id']
+        for kind, field in (('customers', 'customer_sync_provider'), ('vendors', 'vendor_sync_provider')):
+            provider = (co.get(field) or '').strip().lower()
+            if not provider: continue
+            count, err = _sync_contacts(cid, provider, kind)
+            results.append({'company_id': cid, 'type': kind, 'provider': provider, 'synced': count, 'error': err})
+    return jsonify({'companies_processed': len(companies.data or []), 'results': results})
 
 # ── Live customer search (used by the quote editor's Zoho-style search icon) ──
 @app.route('/api/integrations/search-customers', methods=['GET'])
@@ -356,7 +374,7 @@ def search_customers():
     # quote. It just uses whichever provider the admin configured for customer
     # sync (Team & Settings → Integrations); if none is configured yet, this
     # quietly returns no matches rather than erroring on every keystroke.
-    provider = (request.args.get('provider') or '').strip().lower() or _company_provider(claims, 'customer_sync_provider')
+    provider = (request.args.get('provider') or '').strip().lower() or _company_provider(claims['company_id'], 'customer_sync_provider')
     if not provider:
         return jsonify({'customers': []})
     adapter = ADAPTERS.get(provider)
@@ -366,7 +384,7 @@ def search_customers():
     if len(search) < 2:
         return jsonify({'customers': []})
 
-    creds = _get_creds(claims, provider)
+    creds = _get_creds_for(claims['company_id'], provider)
     if not creds or not adapter.is_configured(creds):
         return jsonify({'customers': []})
 
