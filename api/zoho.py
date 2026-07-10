@@ -2,9 +2,14 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os, jwt, json, time
 import urllib.request, urllib.error, urllib.parse
+from supabase import create_client
 
 app = Flask(__name__)
 CORS(app)
+
+SUPABASE_URL       = os.environ.get('SUPABASE_URL')
+SUPABASE_KEY       = os.environ.get('SUPABASE_SERVICE_KEY')
+sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 JWT_SECRET         = os.environ.get('JWT_SECRET')
 ZOHO_CLIENT_ID     = os.environ.get('ZOHO_CLIENT_ID')
@@ -135,6 +140,48 @@ def customers():
             matches.append((r, ct['name'].lower(), ct))
     matches.sort(key=lambda t: (t[0], t[1]))
     return jsonify({'customers': [m[2] for m in matches[:10]]})
+
+# ── Sync Zoho contacts into the native customers table ────────────────────────
+@app.route('/api/zoho/sync-customers', methods=['POST'])
+def sync_customers():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not zoho_ready():
+        return jsonify({'error': 'Zoho is not configured for this account (missing ZOHO_* environment variables). Add customers manually instead.'}), 500
+
+    try:
+        custs = all_customers()
+    except urllib.error.HTTPError as e:
+        return jsonify({'error': f'Zoho API error ({e.code})'}), 502
+    except Exception as e:
+        return jsonify({'error': f'Zoho is unreachable right now: {str(e)[:200]}'}), 502
+
+    if not custs:
+        return jsonify({'synced': 0})
+
+    rows = []
+    for ct in custs:
+        if not ct.get('id'):
+            continue
+        rows.append({
+            'company_id':      claims['company_id'],
+            'name':            (ct.get('name') or '')[:500] or 'Unnamed contact',
+            'company_name':    (ct.get('company') or '')[:500],
+            'email':           (ct.get('email') or '')[:500],
+            'phone':           (ct.get('phone') or '')[:500],
+            'source':          'zoho',
+            'zoho_contact_id': ct['id'],
+        })
+
+    if not rows:
+        return jsonify({'synced': 0})
+
+    try:
+        sb.table('customers').upsert(rows, on_conflict='company_id,zoho_contact_id').execute()
+    except Exception as e:
+        return jsonify({'error': f'Could not save synced customers: {str(e)[:300]}'}), 502
+
+    return jsonify({'synced': len(rows)})
 
 if __name__ == '__main__':
     app.run(debug=True)

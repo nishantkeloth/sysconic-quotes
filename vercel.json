@@ -8,6 +8,8 @@
     { "src": "api/pdf.py", "use": "@vercel/python" },
     { "src": "api/products.py", "use": "@vercel/python" },
     { "src": "api/bom.py", "use": "@vercel/python" },
+    { "src": "api/customers.py", "use": "@vercel/python" },
+    { "src": "api/vendors.py", "use": "@vercel/python" },
     { "src": "index.html",    "use": "@vercel/static" }
   ],
   "routes": [
@@ -20,6 +22,10 @@
     { "src": "/api/products/(.*)", "dest": "api/products.py" },
     { "src": "/api/products",      "dest": "api/products.py" },
     { "src": "/api/bom/(.*)", "dest": "api/bom.py" },
+    { "src": "/api/customers/(.*)", "dest": "api/customers.py" },
+    { "src": "/api/customers",      "dest": "api/customers.py" },
+    { "src": "/api/vendors/(.*)", "dest": "api/vendors.py" },
+    { "src": "/api/vendors",      "dest": "api/vendors.py" },
     { "src": "/(.*)",            "dest": "index.html" }
   ]
 }

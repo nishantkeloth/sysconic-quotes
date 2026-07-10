@@ -541,15 +541,15 @@ function zohoSearch(v){
   ZC.t=setTimeout(async()=>{
     ZC.last=q;
     let r;
-    try{r=await api('GET','/api/zoho/customers?search='+encodeURIComponent(q));}
+    try{r=await api('GET','/api/customers?search='+encodeURIComponent(q));}
     catch(e){hideCustDrop();return;}
     if(ZC.last!==q)return; // stale response
     const el=document.getElementById('custDrop');if(!el)return;
     if(r.error||!(r.customers||[]).length){hideCustDrop();return;}
     el.innerHTML=r.customers.map(ct=>`<div class="cust-opt" onmousedown="pickCustomer('${esc(ct.name).replace(/'/g,'&#39;')}')">
       <div class="cust-name">${esc(ct.name)}</div>
-      ${(ct.company&&ct.company!==ct.name)||ct.email?`<div class="cust-sub">${esc(ct.company&&ct.company!==ct.name?ct.company:'')}${ct.company&&ct.company!==ct.name&&ct.email?' · ':''}${esc(ct.email)}</div>`:''}
-    </div>`).join('')+'<div class="cust-src">From Zoho Books</div>';
+      ${(ct.company_name&&ct.company_name!==ct.name)||ct.email?`<div class="cust-sub">${esc(ct.company_name&&ct.company_name!==ct.name?ct.company_name:'')}${ct.company_name&&ct.company_name!==ct.name&&ct.email?' · ':''}${esc(ct.email)}</div>`:''}
+    </div>`).join('')+'<div class="cust-src">Your customer master</div>';
     el.style.display='block';
   },320);
 }
@@ -565,11 +565,11 @@ function openCustModal(){
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="custOverlay" onclick="if(event.target===this)closeCustModal()">
     <div class="modal" style="max-width:520px">
       <div class="modal-title">🔍 Select customer</div>
-      <div class="modal-sub">Search your Zoho Books customers</div>
+      <div class="modal-sub">Search your Customer Master</div>
       <div class="fld"><input id="zcSearch" placeholder="Start typing a customer name…" autocomplete="off" oninput="zcModalSearch(this.value)"></div>
       <div id="zcResults" style="max-height:300px;overflow-y:auto;border:1px solid var(--gray-100);border-radius:8px"><div style="padding:16px;font-size:13px;color:var(--gray-500)">Type at least 2 letters to search…</div></div>
       <div class="modal-actions" style="justify-content:space-between">
-        <div style="font-size:12px;color:var(--gray-500)">Not in Zoho? Close and type the name manually.</div>
+        <div style="font-size:12px;color:var(--gray-500)">Not listed? Close and type the name manually, or add them on the Customers page.</div>
         <button class="btn" onclick="closeCustModal()">Close</button>
       </div>
     </div></div>`);
@@ -586,16 +586,16 @@ function zcModalSearch(v){
   ZM.t=setTimeout(async()=>{
     ZM.last=q;
     let r;
-    try{r=await api('GET','/api/zoho/customers?search='+encodeURIComponent(q));}
-    catch(e){if(box)box.innerHTML='<div class="auth-err" style="margin:10px">Could not reach Zoho. Close and type manually.</div>';return;}
+    try{r=await api('GET','/api/customers?search='+encodeURIComponent(q));}
+    catch(e){if(box)box.innerHTML='<div class="auth-err" style="margin:10px">Could not reach the customer list. Close and type manually.</div>';return;}
     if(ZM.last!==q)return;
     const el=document.getElementById('zcResults');if(!el)return;
     if(r.error){el.innerHTML=`<div class="auth-err" style="margin:10px">${esc(r.error)}</div>`;return;}
-    if(!(r.customers||[]).length){el.innerHTML='<div style="padding:16px;font-size:13px;color:var(--gray-500)">No matches in Zoho Books. Close and type the name manually.</div>';return;}
+    if(!(r.customers||[]).length){el.innerHTML='<div style="padding:16px;font-size:13px;color:var(--gray-500)">No matches. Close and type the name manually, or add them on the Customers page.</div>';return;}
     el.innerHTML=r.customers.map(ct=>`<div class="cust-opt" onclick="zcPick('${esc(ct.name).replace(/'/g,'&#39;')}')">
       <div class="cust-name">${esc(ct.name)}</div>
-      ${(ct.company&&ct.company!==ct.name)||ct.email?`<div class="cust-sub">${esc(ct.company&&ct.company!==ct.name?ct.company:'')}${ct.company&&ct.company!==ct.name&&ct.email?' · ':''}${esc(ct.email)}</div>`:''}
-    </div>`).join('')+'<div class="cust-src">From Zoho Books</div>';
+      ${(ct.company_name&&ct.company_name!==ct.name)||ct.email?`<div class="cust-sub">${esc(ct.company_name&&ct.company_name!==ct.name?ct.company_name:'')}${ct.company_name&&ct.company_name!==ct.name&&ct.email?' · ':''}${esc(ct.email)}</div>`:''}
+    </div>`).join('')+'<div class="cust-src">Your customer master</div>';
   },320);
 }
 function zcPick(name){
@@ -627,6 +627,8 @@ function draw(){
   setTimeout(initTA,30);
   if(A.page==='team')setTimeout(loadTeam,50);
   if(A.page==='products')setTimeout(loadProducts,50);
+  if(A.page==='customers')setTimeout(loadCustomersPage,50);
+  if(A.page==='vendorMaster')setTimeout(loadVendorsMaster,50);
 }
 function initTA(){document.querySelectorAll('textarea.iinput').forEach(el=>{el.style.height='auto';el.style.height=el.scrollHeight+'px';el.addEventListener('input',()=>{el.style.height='auto';el.style.height=el.scrollHeight+'px';});});}
 
@@ -660,7 +662,7 @@ function authHTML(){
 // ── App shell ─────────────────────────────────────────────────────────────────
 function appHTML(){
   const init=(A.user?.name||'U').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
-  const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',team:'Team & Settings',products:'Product Catalog'};
+  const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master'};
   const inEditor=['editor','terms','summary','vendor','print'].includes(A.page);
 
   const sidebar=`<div class="sidebar">
@@ -672,6 +674,8 @@ function appHTML(){
       <div class="sb-sec">Workspace</div>
       <div class="sb-item ${A.page==='dashboard'?'active':''}" onclick="A.page='dashboard';draw()"><span class="sb-icon">🏠</span>Dashboard</div>
       <div class="sb-item ${A.page==='products'?'active':''}" onclick="A.page='products';draw()"><span class="sb-icon">📦</span>Products</div>
+      <div class="sb-item ${A.page==='customers'?'active':''}" onclick="A.page='customers';draw()"><span class="sb-icon">👤</span>Customers</div>
+      <div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="A.page='vendorMaster';draw()"><span class="sb-icon">🏭</span>Vendors</div>
       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="A.page='editor';draw()"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}
       <div class="sb-sec">Settings</div>
       <div class="sb-item ${A.page==='team'?'active':''}" onclick="A.page='team';draw()"><span class="sb-icon">👥</span>Team</div>
@@ -697,6 +701,8 @@ function appHTML(){
   else if(A.page==='vendor')pageContent=vendorHTML();
   else if(A.page==='print')pageContent=printHTML();
   else if(A.page==='products')pageContent=productsHTML();
+  else if(A.page==='customers')pageContent=customersHTML();
+  else if(A.page==='vendorMaster')pageContent=vendorsMasterHTML();
   else if(A.page==='team')pageContent=teamHTML();
 
   return`<div class="shell">${sidebar}<div class="main">
@@ -724,6 +730,15 @@ function buildTopbarRight(){
     <button class="btn" onclick="downloadProdTemplate()">⬇ Template</button>
     <label class="btn" style="cursor:pointer" title="Import products from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importProducts(event)"></label>
     <button class="btn btn-navy" onclick="showProdModal()">+ Add product</button>`;
+  if(A.page==='customers')return`
+    <button class="btn" onclick="syncZohoCustomers()" id="zohoSyncBtn" title="Pull your Zoho Books contacts into this list">🔄 Sync from Zoho</button>
+    <button class="btn" onclick="downloadCustTemplate()">⬇ Template</button>
+    <label class="btn" style="cursor:pointer" title="Import customers from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importCustomers(event)"></label>
+    <button class="btn btn-navy" onclick="showCustModal()">+ Add customer</button>`;
+  if(A.page==='vendorMaster')return`
+    <button class="btn" onclick="downloadVendTemplate()">⬇ Template</button>
+    <label class="btn" style="cursor:pointer" title="Import vendors from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importVendorsMaster(event)"></label>
+    <button class="btn btn-navy" onclick="showVendModal()">+ Add vendor</button>`;
   if(A.page==='print')return`
     <button class="btn btn-navy" onclick="downloadPDF()" title="Download this quotation as a PDF file">⬇ PDF</button>
     <select id="pSel" onchange="draw()" style="padding:6px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius)">
@@ -1396,6 +1411,204 @@ function applyBom(){
   });
   if(!added){alert('No items selected.');return;}
   schedSave();closeBomModal();draw();
+}
+
+// ── Customer Master ────────────────────────────────────────────────────────────
+let CUSTS={list:[],total:0,search:'',t:null};
+
+function customersHTML(){return`<div class="card">
+  <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center">
+    <input id="custSearch2" placeholder="Search name, company, email or phone…" value="${esc(CUSTS.search)}" oninput="custSearchInput2(this.value)" style="flex:1;max-width:380px;padding:10px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit">
+    <div id="custCount" style="font-size:13px;color:var(--gray-500)"></div>
+  </div>
+  <div id="custMasterList"><div style="color:var(--gray-500)">Loading…</div></div>
+</div>`;}
+function custSearchInput2(v){CUSTS.search=v;clearTimeout(CUSTS.t);CUSTS.t=setTimeout(loadCustomersPage,350);}
+async function loadCustomersPage(){
+  const r=await api('GET','/api/customers?limit=100&search='+encodeURIComponent(CUSTS.search||''));
+  const el=document.getElementById('custMasterList');if(!el)return;
+  if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  CUSTS.list=r.customers||[];CUSTS.total=r.total||0;
+  const cnt=document.getElementById('custCount');if(cnt)cnt.textContent=`${CUSTS.total} customer${CUSTS.total!==1?'s':''}${CUSTS.total>100?' — showing first 100, use search':''}`;
+  if(!CUSTS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No customers yet.<br><br>Add one manually, import from Excel, or click "Sync from Zoho" above if you use Zoho Books.</div>`;return;}
+  el.innerHTML=`<div class="prod-hd" style="grid-template-columns:1fr 140px 170px 130px 70px 110px"><div>Name</div><div>Company</div><div>Email</div><div>Phone</div><div>Source</div><div></div></div>`+
+    CUSTS.list.map(c=>`<div class="prod-row" style="grid-template-columns:1fr 140px 170px 130px 70px 110px">
+      <div>${esc(c.name)}</div>
+      <div style="color:var(--gray-500);font-size:13px">${esc(c.company_name||'')}</div>
+      <div style="color:var(--gray-500);font-size:13px">${esc(c.email||'')}</div>
+      <div style="color:var(--gray-500);font-size:13px">${esc(c.phone||'')}</div>
+      <div style="font-size:12px;color:${c.source==='zoho'?'var(--green)':'var(--gray-500)'}">${c.source==='zoho'?'Zoho':'Manual'}</div>
+      <div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn btn-sm" onclick="showCustModal('${c.id}')">Edit</button><button class="btn btn-sm btn-red" onclick="delCustomer('${c.id}')">×</button></div>
+    </div>`).join('');
+}
+async function syncZohoCustomers(){
+  const btn=document.getElementById('zohoSyncBtn');
+  if(btn){btn.disabled=true;btn.textContent='⏳ Syncing…';}
+  const r=await api('POST','/api/zoho/sync-customers');
+  if(btn){btn.disabled=false;btn.textContent='🔄 Sync from Zoho';}
+  if(r.error){alert(r.error);return;}
+  alert(`Synced ${r.synced||0} customer${r.synced===1?'':'s'} from Zoho.`);
+  loadCustomersPage();
+}
+async function delCustomer(cid){
+  if(!confirm('Delete this customer? Existing quotes are not affected.'))return;
+  const r=await api('DELETE','/api/customers/'+cid);
+  if(r.error)alert(r.error);
+  loadCustomersPage();
+}
+function showCustModal(cid){
+  const c=cid?CUSTS.list.find(x=>x.id===cid):null;
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="custModalOverlay" onclick="if(event.target===this)document.getElementById('custModalOverlay').remove()">
+    <div class="modal">
+      <div class="modal-title">${c?'Edit customer':'Add customer'}</div>
+      <div id="custModalErr" class="auth-err" style="display:none"></div>
+      <div class="fld"><label>Name</label><input id="cfName" value="${esc(c?.name||'')}" placeholder="John Smith"></div>
+      <div class="fld"><label>Company</label><input id="cfCompany" value="${esc(c?.company_name||'')}" placeholder="ADNOC Offshore"></div>
+      <div class="fld"><label>Email</label><input id="cfEmail" value="${esc(c?.email||'')}" placeholder="john@company.com"></div>
+      <div class="fld"><label>Phone</label><input id="cfPhone" value="${esc(c?.phone||'')}" placeholder="+971 5xxxxxxx"></div>
+      <div class="fld"><label>Address</label><input id="cfAddress" value="${esc(c?.address||'')}"></div>
+      <div class="fld"><label>TRN</label><input id="cfTrn" value="${esc(c?.trn||'')}"></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="document.getElementById('custModalOverlay').remove()">Cancel</button>
+        <button class="btn btn-navy" onclick="saveCustModal('${cid||''}')">Save</button>
+      </div>
+    </div></div>`);
+}
+async function saveCustModal(cid){
+  const body={name:document.getElementById('cfName').value,company_name:document.getElementById('cfCompany').value,email:document.getElementById('cfEmail').value,phone:document.getElementById('cfPhone').value,address:document.getElementById('cfAddress').value,trn:document.getElementById('cfTrn').value};
+  const r=cid?await api('PUT','/api/customers/'+cid,body):await api('POST','/api/customers',body);
+  if(r.error){const e=document.getElementById('custModalErr');e.textContent=r.error;e.style.display='block';return;}
+  document.getElementById('custModalOverlay').remove();loadCustomersPage();
+}
+function downloadCustTemplate(){
+  const wb=XLSX.utils.book_new();
+  const ws=XLSX.utils.aoa_to_sheet([['NAME','COMPANY','EMAIL','PHONE','ADDRESS','TRN'],['John Smith','ADNOC Offshore','john@company.com','+971 50 000 0000','Abu Dhabi, UAE','1000123456']]);
+  ws['!cols']=[{wch:18},{wch:22},{wch:24},{wch:16},{wch:26},{wch:14}];
+  XLSX.utils.book_append_sheet(wb,ws,'Customers');
+  XLSX.writeFile(wb,'sysconic-customers-template.xlsx');
+}
+function importCustomers(event){
+  const file=event.target.files[0];if(!file)return;event.target.value='';
+  const reader=new FileReader();
+  reader.onload=async function(e){
+    try{
+      const wb=XLSX.read(e.target.result,{type:'binary'});
+      const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''});
+      let hi=-1;
+      for(let i=0;i<Math.min(rows.length,10);i++){const r=rows[i].map(x=>String(x).toUpperCase());if(r.some(x=>x.includes('NAME'))){hi=i;break;}}
+      if(hi===-1){alert('Could not find a NAME column header in that file.');return;}
+      const H=rows[hi].map(x=>String(x).toUpperCase().trim());
+      const col={name:H.findIndex(h=>h.includes('NAME')&&!h.includes('COMPANY')),company:H.findIndex(h=>h.includes('COMPANY')),email:H.findIndex(h=>h.includes('EMAIL')),phone:H.findIndex(h=>h.includes('PHONE')),address:H.findIndex(h=>h.includes('ADDRESS')),trn:H.findIndex(h=>h.includes('TRN'))};
+      const customers=[];
+      for(let i=hi+1;i<rows.length;i++){
+        const row=rows[i];if(!row||row.every(x=>x===''||x===null))continue;
+        const g=x=>x>=0?String(row[x]??'').trim():'';
+        customers.push({name:g(col.name),company_name:g(col.company),email:g(col.email),phone:g(col.phone),address:g(col.address),trn:g(col.trn)});
+      }
+      if(!customers.length){alert('No customer rows found below the header.');return;}
+      if(customers.length>1000){alert('Maximum 1000 rows per import — please split the file.');return;}
+      if(!confirm(`Import ${customers.length} customers?`))return;
+      const r=await api('POST','/api/customers/bulk',{customers});
+      if(r.error){alert(r.error);return;}
+      alert(`Imported ${r.imported} customers${r.skipped?`, skipped ${r.skipped} rows without a name`:''}.`);
+      loadCustomersPage();
+    }catch(err){alert('Could not read that Excel file.');}
+  };
+  reader.readAsBinaryString(file);
+}
+
+// ── Vendor Master (standalone reference list) ─────────────────────────────────
+let VENDS={list:[],total:0,search:'',t:null};
+
+function vendorsMasterHTML(){return`<div class="card">
+  <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center">
+    <input id="vendSearch2" placeholder="Search name, category or contact…" value="${esc(VENDS.search)}" oninput="vendSearchInput2(this.value)" style="flex:1;max-width:380px;padding:10px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit">
+    <div id="vendCount" style="font-size:13px;color:var(--gray-500)"></div>
+  </div>
+  <div id="vendMasterList"><div style="color:var(--gray-500)">Loading…</div></div>
+</div>`;}
+function vendSearchInput2(v){VENDS.search=v;clearTimeout(VENDS.t);VENDS.t=setTimeout(loadVendorsMaster,350);}
+async function loadVendorsMaster(){
+  const r=await api('GET','/api/vendors?limit=100&search='+encodeURIComponent(VENDS.search||''));
+  const el=document.getElementById('vendMasterList');if(!el)return;
+  if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  VENDS.list=r.vendors||[];VENDS.total=r.total||0;
+  const cnt=document.getElementById('vendCount');if(cnt)cnt.textContent=`${VENDS.total} vendor${VENDS.total!==1?'s':''}${VENDS.total>100?' — showing first 100, use search':''}`;
+  if(!VENDS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No vendors yet. Add one manually or import from Excel.</div>`;return;}
+  el.innerHTML=`<div class="prod-hd" style="grid-template-columns:1fr 130px 170px 130px 110px"><div>Name</div><div>Category</div><div>Contact / Email</div><div>Phone</div><div></div></div>`+
+    VENDS.list.map(v=>`<div class="prod-row" style="grid-template-columns:1fr 130px 170px 130px 110px">
+      <div>${esc(v.name)}</div>
+      <div style="color:var(--gray-500);font-size:13px">${esc(v.category||'')}</div>
+      <div style="color:var(--gray-500);font-size:13px">${esc(v.contact_person||v.email||'')}</div>
+      <div style="color:var(--gray-500);font-size:13px">${esc(v.phone||'')}</div>
+      <div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn btn-sm" onclick="showVendModal('${v.id}')">Edit</button><button class="btn btn-sm btn-red" onclick="delVendorMaster('${v.id}')">×</button></div>
+    </div>`).join('');
+}
+async function delVendorMaster(vid){
+  if(!confirm('Delete this vendor?'))return;
+  const r=await api('DELETE','/api/vendors/'+vid);
+  if(r.error)alert(r.error);
+  loadVendorsMaster();
+}
+function showVendModal(vid){
+  const v=vid?VENDS.list.find(x=>x.id===vid):null;
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="vendModalOverlay" onclick="if(event.target===this)document.getElementById('vendModalOverlay').remove()">
+    <div class="modal">
+      <div class="modal-title">${v?'Edit vendor':'Add vendor'}</div>
+      <div id="vendModalErr" class="auth-err" style="display:none"></div>
+      <div class="fld"><label>Name</label><input id="vfName" value="${esc(v?.name||'')}" placeholder="Infiled Electronics"></div>
+      <div class="fld"><label>Category</label><input id="vfCategory" value="${esc(v?.category||'')}" placeholder="LED Displays"></div>
+      <div class="fld"><label>Contact person</label><input id="vfContact" value="${esc(v?.contact_person||'')}"></div>
+      <div class="fld"><label>Email</label><input id="vfEmail" value="${esc(v?.email||'')}"></div>
+      <div class="fld"><label>Phone</label><input id="vfPhone" value="${esc(v?.phone||'')}"></div>
+      <div class="fld"><label>Address</label><input id="vfAddress" value="${esc(v?.address||'')}"></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="document.getElementById('vendModalOverlay').remove()">Cancel</button>
+        <button class="btn btn-navy" onclick="saveVendModal('${vid||''}')">Save</button>
+      </div>
+    </div></div>`);
+}
+async function saveVendModal(vid){
+  const body={name:document.getElementById('vfName').value,category:document.getElementById('vfCategory').value,contact_person:document.getElementById('vfContact').value,email:document.getElementById('vfEmail').value,phone:document.getElementById('vfPhone').value,address:document.getElementById('vfAddress').value};
+  const r=vid?await api('PUT','/api/vendors/'+vid,body):await api('POST','/api/vendors',body);
+  if(r.error){const e=document.getElementById('vendModalErr');e.textContent=r.error;e.style.display='block';return;}
+  document.getElementById('vendModalOverlay').remove();loadVendorsMaster();
+}
+function downloadVendTemplate(){
+  const wb=XLSX.utils.book_new();
+  const ws=XLSX.utils.aoa_to_sheet([['NAME','CATEGORY','CONTACT PERSON','EMAIL','PHONE','ADDRESS'],['Infiled Electronics','LED Displays','Sales Team','sales@infiled.com','+86 000 0000','Shenzhen, China']]);
+  ws['!cols']=[{wch:20},{wch:16},{wch:18},{wch:22},{wch:16},{wch:24}];
+  XLSX.utils.book_append_sheet(wb,ws,'Vendors');
+  XLSX.writeFile(wb,'sysconic-vendors-template.xlsx');
+}
+function importVendorsMaster(event){
+  const file=event.target.files[0];if(!file)return;event.target.value='';
+  const reader=new FileReader();
+  reader.onload=async function(e){
+    try{
+      const wb=XLSX.read(e.target.result,{type:'binary'});
+      const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''});
+      let hi=-1;
+      for(let i=0;i<Math.min(rows.length,10);i++){const r=rows[i].map(x=>String(x).toUpperCase());if(r.some(x=>x.includes('NAME'))){hi=i;break;}}
+      if(hi===-1){alert('Could not find a NAME column header in that file.');return;}
+      const H=rows[hi].map(x=>String(x).toUpperCase().trim());
+      const col={name:H.findIndex(h=>h.includes('NAME')),category:H.findIndex(h=>h.includes('CATEGORY')),contact:H.findIndex(h=>h.includes('CONTACT')),email:H.findIndex(h=>h.includes('EMAIL')),phone:H.findIndex(h=>h.includes('PHONE')),address:H.findIndex(h=>h.includes('ADDRESS'))};
+      const vendors=[];
+      for(let i=hi+1;i<rows.length;i++){
+        const row=rows[i];if(!row||row.every(x=>x===''||x===null))continue;
+        const g=x=>x>=0?String(row[x]??'').trim():'';
+        vendors.push({name:g(col.name),category:g(col.category),contact_person:g(col.contact),email:g(col.email),phone:g(col.phone),address:g(col.address)});
+      }
+      if(!vendors.length){alert('No vendor rows found below the header.');return;}
+      if(vendors.length>1000){alert('Maximum 1000 rows per import — please split the file.');return;}
+      if(!confirm(`Import ${vendors.length} vendors?`))return;
+      const r=await api('POST','/api/vendors/bulk',{vendors});
+      if(r.error){alert(r.error);return;}
+      alert(`Imported ${r.imported} vendors${r.skipped?`, skipped ${r.skipped} rows without a name`:''}.`);
+      loadVendorsMaster();
+    }catch(err){alert('Could not read that Excel file.');}
+  };
+  reader.readAsBinaryString(file);
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────
