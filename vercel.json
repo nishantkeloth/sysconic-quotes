@@ -6,6 +6,8 @@
     { "src": "api/ai.py",     "use": "@vercel/python" },
     { "src": "api/zoho.py",   "use": "@vercel/python" },
     { "src": "api/pdf.py", "use": "@vercel/python" },
+    { "src": "api/products.py", "use": "@vercel/python" },
+    { "src": "api/bom.py", "use": "@vercel/python" },
     { "src": "index.html",    "use": "@vercel/static" }
   ],
   "routes": [
@@ -15,6 +17,9 @@
     { "src": "/api/ai/(.*)",     "dest": "api/ai.py" },
     { "src": "/api/zoho/(.*)",   "dest": "api/zoho.py" },
     { "src": "/api/pdf/(.*)", "dest": "api/pdf.py" },
+    { "src": "/api/products/(.*)", "dest": "api/products.py" },
+    { "src": "/api/products",      "dest": "api/products.py" },
+    { "src": "/api/bom/(.*)", "dest": "api/bom.py" },
     { "src": "/(.*)",            "dest": "index.html" }
   ]
 }
