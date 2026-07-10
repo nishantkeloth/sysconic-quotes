@@ -58,8 +58,12 @@ class ZohoAdapter:
         params['organization_id'] = creds['org_id']
         url = f"{ZOHO_API}{path}?{urllib.parse.urlencode(params)}"
         req = urllib.request.Request(url, headers={'Authorization': 'Zoho-oauthtoken ' + self._access_token(creds)})
-        with urllib.request.urlopen(req, timeout=25) as resp:
-            return json.loads(resp.read().decode('utf-8'))
+        try:
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode('utf-8', 'ignore')[:300]
+            raise RuntimeError(f'Zoho API error {e.code}: {detail}')
 
     def _fetch_contacts(self, creds, contact_type):
         out, page = [], 1
