@@ -160,8 +160,8 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 
 /* ── Column headers ── */
 .col-hd{display:grid;padding:9px 14px;background:var(--navy);border-radius:8px 8px 0 0;font-size:12px;font-weight:700;color:rgba(255,255,255,.85);text-transform:uppercase;letter-spacing:.05em}
-.col-hd.int{grid-template-columns:28px 90px 140px 1fr 90px 65px 75px 60px 95px 115px 28px}
-.col-hd.int.img{grid-template-columns:28px 44px 90px 140px 1fr 90px 65px 75px 60px 95px 115px 28px}
+.col-hd.int{grid-template-columns:28px 90px 140px 1fr 75px 90px 55px 65px 75px 50px 90px 70px 110px 28px}
+.col-hd.int.img{grid-template-columns:28px 44px 90px 140px 1fr 75px 90px 55px 65px 75px 50px 90px 70px 110px 28px}
 .col-hd.cli{grid-template-columns:28px 90px 140px 1fr 60px 95px 115px 28px}
 .col-hd.cli.img{grid-template-columns:28px 44px 90px 140px 1fr 60px 95px 115px 28px}
 .col-hd div{padding:0 5px}
@@ -171,8 +171,8 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .item-row{display:grid;padding:9px 14px;align-items:start;border-bottom:1px solid var(--gray-100);transition:background .12s}
 .item-row:last-child{border-bottom:none}
 .item-row:hover{background:#f5f8ff}
-.item-row.int{grid-template-columns:28px 90px 140px 1fr 90px 65px 75px 60px 95px 115px 28px}
-.item-row.int.img{grid-template-columns:28px 44px 90px 140px 1fr 90px 65px 75px 60px 95px 115px 28px}
+.item-row.int{grid-template-columns:28px 90px 140px 1fr 75px 90px 55px 65px 75px 50px 90px 70px 110px 28px}
+.item-row.int.img{grid-template-columns:28px 44px 90px 140px 1fr 75px 90px 55px 65px 75px 50px 90px 70px 110px 28px}
 .item-row.cli{grid-template-columns:28px 90px 140px 1fr 60px 95px 115px 28px}
 .item-row.cli.img{grid-template-columns:28px 44px 90px 140px 1fr 60px 95px 115px 28px}
 .item-row>*{padding:0 5px}
@@ -332,8 +332,8 @@ const fmtC=n=>A.cur+' '+fmt(n);
 const sym=()=>A.cur;
 
 // ── Data factories ───────────────────────────────────────────────────────────
-function mkItem(brand='',model='',desc='',qty=1,cost=0,disc=0,margin=0.2){
-  return{id:uid(),brand,model,desc,qty,cost,disc,margin};
+function mkItem(brand='',model='',desc='',qty=1,cost=0,disc=0,margin=0.2,discAdd=0,costUsd=0){
+  return{id:uid(),brand,model,desc,qty,cost,disc,margin,discAdd,costUsd};
 }
 function mkOption(label='Option 1'){
   return{id:uid(),label,customer:'',ref:'QT-2026-001',
@@ -346,9 +346,26 @@ function mkOption(label='Option 1'){
 
 // ── Calculations ─────────────────────────────────────────────────────────────
 function calcItem(it){
-  const cad=it.cost*(1-(it.disc||0)/100);
-  const up=it.margin>=1?cad:Math.round(cad/(1-(it.margin||0.2)));
+  const cad=it.cost*(1-(it.disc||0)/100)*(1-(it.discAdd||0)/100);
+  const up=Math.round(cad*(1+(it.margin||0.2)));
   return{cad,up,tp:up*(it.qty||1),tgp:(up-cad)*(it.qty||1),tc:cad*(it.qty||1)};
+}
+function liveCalc(el){
+  const si=+el.dataset.si,ii=+el.dataset.ii,field=el.dataset.field;
+  const it=sec(si)?.items?.[ii];if(!it)return;
+  let v=parseFloat(el.value);if(isNaN(v))v=0;
+  if(field==='cost')it.cost=v;
+  else if(field==='costusd'){it.costUsd=v;it.cost=+(v*(A.rate||1)).toFixed(2);}
+  else if(field==='disc')it.disc=v;
+  else if(field==='discadd')it.discAdd=v;
+  else if(field==='margin')it.margin=v/100;
+  else if(field==='qty')it.qty=v||1;
+  else if(field==='unitprice'){
+    const cad=it.cost*(1-(it.disc||0)/100)*(1-(it.discAdd||0)/100);
+    it.margin=cad>0?Math.max(0,(v/cad)-1):(it.margin||0.2);
+  }
+  schedSave();
+  draw();
 }
 function calcOpt(opt){
   if(!opt)return{ts:0,tc:0,tg:0,vat:0,grand:0,margin:0,vatEnabled:true,vatRate:5};
@@ -791,7 +808,7 @@ function editorHTML(){
   (o.sections||[]).forEach((s,si)=>{
     let rn=1;
     const IC=IMG?['']:[];
-    const hds=isInt?['#',...IC,'Brand','Model','Description','Cost','Disc%','Margin %','Qty','Unit Price','Total','']:['#',...IC,'Brand','Model','Description','Qty','Unit Price','Total',''];
+    const hds=isInt?['#',...IC,'Brand','Model','Description','Cost(USD)','Cost','Disc%','Add.Disc%','Markup %','Qty','Unit Price','VAT','Total','']:['#',...IC,'Brand','Model','Description','Qty','Unit Price','Total',''];
     let rows='';
     s.items.forEach((it,ii)=>{
       const c=calcItem(it);
@@ -802,11 +819,14 @@ function editorHTML(){
           <textarea class="iinput" oninput="sec(${si}).items[${ii}].brand=this.value;schedSave()" onblur="captureProduct(${si},${ii})" placeholder="Brand">${esc(it.brand)}</textarea>
           <textarea class="iinput" oninput="sec(${si}).items[${ii}].model=this.value;schedSave()" onblur="captureProduct(${si},${ii})" placeholder="Model">${esc(it.model)}</textarea>
           <textarea class="iinput" oninput="sec(${si}).items[${ii}].desc=this.value;schedSave()" placeholder="Description">${esc(it.desc)}</textarea>
+          <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="costusd" value="${it.costUsd||0}" onchange="liveCalc(this)" title="Cost in USD — auto-converts to Cost using Rate to AED" placeholder="0">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="cost" value="${it.cost}" onchange="liveCalc(this)" placeholder="0">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="disc" value="${it.disc||0}" onchange="liveCalc(this)" placeholder="0">
+          <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="discadd" value="${it.discAdd||0}" onchange="liveCalc(this)" title="Additional discount, applied on top of Disc%" placeholder="0">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="margin" value="${((it.margin||0.2)*100).toFixed(2)}" step="0.01" onchange="liveCalc(this)" placeholder="20.00">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="qty" value="${it.qty||1}" onchange="liveCalc(this)" placeholder="1">
-          <input class="iinput editable-calc" type="number" data-si="${si}" data-ii="${ii}" data-field="unitprice" value="${c.up}" onchange="liveCalc(this)" title="Edit to auto-adjust margin" placeholder="0">
+          <input class="iinput editable-calc" type="number" data-si="${si}" data-ii="${ii}" data-field="unitprice" value="${c.up}" onchange="liveCalc(this)" title="Edit to auto-adjust markup" placeholder="0">
+          <div class="icalc" style="color:var(--gray-500)" title="Read-only — set VAT % at the option level">${o.vatEnabled?fmtC(c.tp*(o.vatRate||5)/100):'—'}</div>
           <div class="icalc total" id="total-${si}-${ii}">${fmtC(c.tp)}</div>
           <button class="idel" onclick="delItem(${si},${ii})">×</button>
         </div>`;

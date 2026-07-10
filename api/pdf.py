@@ -55,9 +55,9 @@ def _num(v, d=0):
     except: return 0.0
 
 def calc_item(it):
-    cad = _num(it.get('cost')) * (1 - _num(it.get('disc'))/100.0)
+    cad = _num(it.get('cost')) * (1 - _num(it.get('disc'))/100.0) * (1 - _num(it.get('discAdd'))/100.0)
     m = _num(it.get('margin'))
-    up = round(cad / (1 - m)) if m < 1 else 0
+    up = round(cad * (1 + m))
     qty = _num(it.get('qty'))
     return up, up * qty
 
