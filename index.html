@@ -625,7 +625,7 @@ function draw(){
   if(A.screen==='login'||A.screen==='register'){document.getElementById('app').innerHTML=authHTML();return;}
   document.getElementById('app').innerHTML=appHTML();
   setTimeout(initTA,30);
-  if(A.page==='team')setTimeout(loadTeam,50);
+  if(A.page==='team'){setTimeout(loadTeam,50);setTimeout(loadIntegrations,50);}
   if(A.page==='products')setTimeout(loadProducts,50);
   if(A.page==='customers')setTimeout(loadCustomersPage,50);
   if(A.page==='vendorMaster')setTimeout(loadVendorsMaster,50);
@@ -736,6 +736,7 @@ function buildTopbarRight(){
     <label class="btn" style="cursor:pointer" title="Import customers from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importCustomers(event)"></label>
     <button class="btn btn-navy" onclick="showCustModal()">+ Add customer</button>`;
   if(A.page==='vendorMaster')return`
+    <button class="btn" onclick="syncZohoVendors()" id="zohoVendSyncBtn" title="Pull your Zoho Books vendor contacts into this list">🔄 Sync from Zoho</button>
     <button class="btn" onclick="downloadVendTemplate()">⬇ Template</button>
     <label class="btn" style="cursor:pointer" title="Import vendors from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importVendorsMaster(event)"></label>
     <button class="btn btn-navy" onclick="showVendModal()">+ Add vendor</button>`;
@@ -1444,7 +1445,7 @@ async function loadCustomersPage(){
 async function syncZohoCustomers(){
   const btn=document.getElementById('zohoSyncBtn');
   if(btn){btn.disabled=true;btn.textContent='⏳ Syncing…';}
-  const r=await api('POST','/api/zoho/sync-customers');
+  const r=await api('POST','/api/integrations/sync-customers',{provider:'zoho'});
   if(btn){btn.disabled=false;btn.textContent='🔄 Sync from Zoho';}
   if(r.error){alert(r.error);return;}
   alert(`Synced ${r.synced||0} customer${r.synced===1?'':'s'} from Zoho.`);
@@ -1534,15 +1535,25 @@ async function loadVendorsMaster(){
   if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
   VENDS.list=r.vendors||[];VENDS.total=r.total||0;
   const cnt=document.getElementById('vendCount');if(cnt)cnt.textContent=`${VENDS.total} vendor${VENDS.total!==1?'s':''}${VENDS.total>100?' — showing first 100, use search':''}`;
-  if(!VENDS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No vendors yet. Add one manually or import from Excel.</div>`;return;}
-  el.innerHTML=`<div class="prod-hd" style="grid-template-columns:1fr 130px 170px 130px 110px"><div>Name</div><div>Category</div><div>Contact / Email</div><div>Phone</div><div></div></div>`+
-    VENDS.list.map(v=>`<div class="prod-row" style="grid-template-columns:1fr 130px 170px 130px 110px">
+  if(!VENDS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No vendors yet. Add one manually, import from Excel, or click "Sync from Zoho" above if you use Zoho Books.</div>`;return;}
+  el.innerHTML=`<div class="prod-hd" style="grid-template-columns:1fr 120px 160px 120px 70px 110px"><div>Name</div><div>Category</div><div>Contact / Email</div><div>Phone</div><div>Source</div><div></div></div>`+
+    VENDS.list.map(v=>`<div class="prod-row" style="grid-template-columns:1fr 120px 160px 120px 70px 110px">
       <div>${esc(v.name)}</div>
       <div style="color:var(--gray-500);font-size:13px">${esc(v.category||'')}</div>
       <div style="color:var(--gray-500);font-size:13px">${esc(v.contact_person||v.email||'')}</div>
       <div style="color:var(--gray-500);font-size:13px">${esc(v.phone||'')}</div>
+      <div style="font-size:12px;color:${v.source==='zoho'?'var(--green)':'var(--gray-500)'}">${v.source==='zoho'?'Zoho':'Manual'}</div>
       <div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn btn-sm" onclick="showVendModal('${v.id}')">Edit</button><button class="btn btn-sm btn-red" onclick="delVendorMaster('${v.id}')">×</button></div>
     </div>`).join('');
+}
+async function syncZohoVendors(){
+  const btn=document.getElementById('zohoVendSyncBtn');
+  if(btn){btn.disabled=true;btn.textContent='⏳ Syncing…';}
+  const r=await api('POST','/api/integrations/sync-vendors',{provider:'zoho'});
+  if(btn){btn.disabled=false;btn.textContent='🔄 Sync from Zoho';}
+  if(r.error){alert(r.error);return;}
+  alert(`Synced ${r.synced||0} vendor${r.synced===1?'':'s'} from Zoho.`);
+  loadVendorsMaster();
 }
 async function delVendorMaster(vid){
   if(!confirm('Delete this vendor?'))return;
@@ -1612,7 +1623,12 @@ function importVendorsMaster(event){
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────
-function teamHTML(){return`<div class="card" style="max-width:700px" id="teamCard"><div class="card-title">Team members</div><div id="teamList"><div style="color:var(--gray-500)">Loading...</div></div></div>`;}
+function teamHTML(){return`<div class="card" style="max-width:700px" id="teamCard"><div class="card-title">Team members</div><div id="teamList"><div style="color:var(--gray-500)">Loading...</div></div></div>
+<div class="card" style="max-width:700px;margin-top:20px">
+  <div class="card-title">Integrations</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px">Connect your own accounting/CRM system to sync customers and vendors into your Customer & Vendor Master. Each company's credentials are kept separate — nothing here is shared with other companies on this platform.</div>
+  <div id="integrationsList"><div style="color:var(--gray-500)">Loading…</div></div>
+</div>`;}
 async function loadTeam(){
   const el=document.getElementById('teamList'); if(!el)return;
   const r=await api('GET','/api/auth/team');
@@ -1626,6 +1642,63 @@ async function loadTeam(){
     html+=pending.map(p=>`<div class="team-member"><div class="team-avatar" style="background:var(--amber-light);color:var(--amber)">✉</div><div style="flex:1"><div style="font-size:15px;font-weight:600">${esc(p.email)}</div><div style="font-size:13px;color:var(--gray-500)">Pending · ${p.role}</div></div></div>`).join('');}
   el.innerHTML=html||'<div style="color:var(--gray-500)">No team members yet</div>';
 }
+
+// ── Integrations (per-company; Zoho today, more providers can be added later) ─
+let INTEGS={list:[]};
+const FIELD_LABELS={client_id:'Client ID',client_secret:'Client Secret',refresh_token:'Refresh Token',org_id:'Organization ID'};
+async function loadIntegrations(){
+  const el=document.getElementById('integrationsList');if(!el)return;
+  const r=await api('GET','/api/integrations');
+  if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  INTEGS.list=r.integrations||[];
+  if(!INTEGS.list.length){el.innerHTML='<div style="color:var(--gray-500)">No integrations available.</div>';return;}
+  el.innerHTML=INTEGS.list.map(i=>{
+    const statusColor={connected:'var(--green)',error:'var(--red)',disconnected:'var(--gray-500)'}[i.status]||'var(--gray-500)';
+    const statusLabel={connected:'Connected',error:'Connection error',disconnected:'Not connected'}[i.status]||i.status;
+    return`<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--gray-100)">
+      <div>
+        <div style="font-weight:600;font-size:14px">${esc(i.label)}</div>
+        <div style="font-size:12px;color:${statusColor}">${statusLabel}${i.last_synced_at?` · last synced ${new Date(i.last_synced_at).toLocaleString()}`:''}</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm" onclick="showIntegrationModal('${i.provider}')">${i.status==='connected'?'Edit credentials':'Connect'}</button>
+        ${i.status==='connected'?`<button class="btn btn-sm btn-red" onclick="disconnectIntegration('${i.provider}')">Disconnect</button>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+function showIntegrationModal(provider){
+  const i=INTEGS.list.find(x=>x.provider===provider);if(!i)return;
+  const fields=(i.required_fields||[]).map(f=>`
+    <div class="fld"><label>${esc(FIELD_LABELS[f]||f)}</label><input id="intf-${f}" type="password" placeholder="${i.fields&&i.fields[f]?i.fields[f]+' (leave blank to keep)':''}"></div>
+  `).join('');
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="integOverlay" onclick="if(event.target===this)document.getElementById('integOverlay').remove()">
+    <div class="modal">
+      <div class="modal-title">Connect ${esc(i.label)}</div>
+      <div class="modal-sub">These credentials are stored for your company only and never shared with other companies on this platform.</div>
+      <div id="integErr" class="auth-err" style="display:none"></div>
+      ${fields}
+      <div class="modal-actions">
+        <button class="btn" onclick="document.getElementById('integOverlay').remove()">Cancel</button>
+        <button class="btn btn-navy" onclick="saveIntegration('${provider}')">Save & Test</button>
+      </div>
+    </div></div>`);
+}
+async function saveIntegration(provider){
+  const i=INTEGS.list.find(x=>x.provider===provider);if(!i)return;
+  const credentials={};
+  (i.required_fields||[]).forEach(f=>{const el=document.getElementById(`intf-${f}`);if(el&&el.value)credentials[f]=el.value;});
+  const r=await api('POST','/api/integrations/connect',{provider,credentials});
+  if(r.error){const e=document.getElementById('integErr');e.textContent=r.error;e.style.display='block';return;}
+  document.getElementById('integOverlay').remove();
+  loadIntegrations();
+}
+async function disconnectIntegration(provider){
+  if(!confirm('Disconnect this integration? Synced records already in your Customer/Vendor Master will stay, but new syncs will stop working until you reconnect.'))return;
+  await api('DELETE','/api/integrations/'+provider);
+  loadIntegrations();
+}
+
 function showInviteModal(){
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="invOverlay">
     <div class="modal">

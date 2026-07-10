@@ -4,12 +4,12 @@
     { "src": "api/auth.py",   "use": "@vercel/python" },
     { "src": "api/quotes.py", "use": "@vercel/python" },
     { "src": "api/ai.py",     "use": "@vercel/python" },
-    { "src": "api/zoho.py",   "use": "@vercel/python" },
     { "src": "api/pdf.py", "use": "@vercel/python" },
     { "src": "api/products.py", "use": "@vercel/python" },
     { "src": "api/bom.py", "use": "@vercel/python" },
     { "src": "api/customers.py", "use": "@vercel/python" },
     { "src": "api/vendors.py", "use": "@vercel/python" },
+    { "src": "api/integrations.py", "use": "@vercel/python" },
     { "src": "index.html",    "use": "@vercel/static" }
   ],
   "routes": [
@@ -17,7 +17,6 @@
     { "src": "/api/quotes/(.*)", "dest": "api/quotes.py" },
     { "src": "/api/quotes",      "dest": "api/quotes.py" },
     { "src": "/api/ai/(.*)",     "dest": "api/ai.py" },
-    { "src": "/api/zoho/(.*)",   "dest": "api/zoho.py" },
     { "src": "/api/pdf/(.*)", "dest": "api/pdf.py" },
     { "src": "/api/products/(.*)", "dest": "api/products.py" },
     { "src": "/api/products",      "dest": "api/products.py" },
@@ -26,6 +25,8 @@
     { "src": "/api/customers",      "dest": "api/customers.py" },
     { "src": "/api/vendors/(.*)", "dest": "api/vendors.py" },
     { "src": "/api/vendors",      "dest": "api/vendors.py" },
+    { "src": "/api/integrations/(.*)", "dest": "api/integrations.py" },
+    { "src": "/api/integrations",      "dest": "api/integrations.py" },
     { "src": "/(.*)",            "dest": "index.html" }
   ]
 }
