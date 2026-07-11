@@ -1214,10 +1214,10 @@ function printHTML(){
     <span><strong>Before printing:</strong> In Chrome print dialog → <strong>More settings</strong> → uncheck <strong>"Headers and footers"</strong> to remove the URL and date from the printout.</span>
   </div>`;
   os.forEach((o,oi)=>{
-    const T=calcOpt(o); let rn=1; let rows='';
+    const T=calcOpt(o); let rn=1; let sectionBlocks=[];
     (o.sections||[]).forEach(s=>{
-      rows+=`<tr><td colspan="8" style="background:#16294f;color:#fff;padding:8px 12px;font-size:12px;font-weight:700;border-left:4px solid #f4b400">${esc(s.name)}</td></tr>`;
-      s.items.forEach(it=>{const c=calcItem(it);const vatAmt=o.vatEnabled?c.tp*((o.vatRate||5)/100):null;rows+=`<tr style="background:${rn%2===0?'#f8fafc':'#fff'};page-break-inside:avoid">
+      let srows='';
+      s.items.forEach(it=>{const c=calcItem(it);const vatAmt=o.vatEnabled?c.tp*((o.vatRate||5)/100):null;srows+=`<tr style="background:${rn%2===0?'#f8fafc':'#fff'};page-break-inside:avoid">
         <td style="padding:8px 10px;font-size:12px;color:#999;text-align:center;border:0.5px solid #e2e6ec">${rn++}</td>
         <td style="padding:8px 10px;font-size:12px;border:0.5px solid #e2e6ec">${esc(it.brand)}</td>
         <td style="padding:8px 10px;font-size:12px;border:0.5px solid #e2e6ec">${esc(it.model)}</td>
@@ -1227,6 +1227,20 @@ function printHTML(){
         <td style="padding:8px 10px;font-size:12px;text-align:right;border:0.5px solid #e2e6ec;color:#7c8798">${vatAmt!==null?fmt(vatAmt):'—'}</td>
         <td style="padding:8px 10px;font-size:13px;font-weight:700;text-align:right;border:0.5px solid #e2e6ec;color:#16294f">${fmt(c.tp)}</td>
       </tr>`;});
+      sectionBlocks.push(`<div style="font-size:15px;font-weight:800;color:#16294f;margin:18px 0 8px;page-break-after:avoid">${esc(s.name)}</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:4px;border-top:2px solid #f4b400">
+        <thead><tr style="background:#16294f;color:#fff">
+          <th style="padding:9px 10px;text-align:center;width:32px">#</th>
+          <th style="padding:9px 10px;text-align:left;width:75px">Brand</th>
+          <th style="padding:9px 10px;text-align:left;width:115px">Model</th>
+          <th style="padding:9px 10px;text-align:left">Description</th>
+          <th style="padding:9px 10px;text-align:right;width:85px">Unit Price (${sym()})</th>
+          <th style="padding:9px 10px;text-align:center;width:48px">Qty</th>
+          <th style="padding:9px 10px;text-align:right;width:75px">VAT (${sym()})</th>
+          <th style="padding:9px 10px;text-align:right;width:95px">Total (${sym()})</th>
+        </tr></thead>
+        <tbody>${srows}</tbody>
+      </table>`);
     });
     html+=`<div class="print-doc" ${oi>0?(multi?'style="margin-top:28px"':'style="margin-top:40px;page-break-before:always"'):''}>
       ${(!multi||oi===0)?`<table style="width:100%;border-collapse:collapse;margin-bottom:10px"><tr>
@@ -1254,19 +1268,7 @@ function printHTML(){
           <strong>DATE:</strong> ${o.date} &nbsp; <strong>REF NO:</strong> ${esc(o.ref)} &nbsp; <strong>SCOPE:</strong> ${esc((o.sections||[])[0]?.name||'—')} &nbsp; <strong>PROJECT:</strong> ${esc(q.customer||'')}
         </td></tr>
       </table>
-      `:''}${multi?`<div style="background:#16294f;color:#fff;padding:9px 14px;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;page-break-inside:avoid;page-break-after:avoid;border-left:4px solid #f4b400">${esc(o.label)}</div>`:''}<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px;border-top:2px solid #f4b400">
-        <thead><tr style="background:#16294f;color:#fff">
-          <th style="padding:9px 10px;text-align:center;width:32px">#</th>
-          <th style="padding:9px 10px;text-align:left;width:75px">Brand</th>
-          <th style="padding:9px 10px;text-align:left;width:115px">Model</th>
-          <th style="padding:9px 10px;text-align:left">Description</th>
-          <th style="padding:9px 10px;text-align:right;width:85px">Unit Price (${sym()})</th>
-          <th style="padding:9px 10px;text-align:center;width:48px">Qty</th>
-          <th style="padding:9px 10px;text-align:right;width:75px">VAT (${sym()})</th>
-          <th style="padding:9px 10px;text-align:right;width:95px">Total (${sym()})</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
+      `:''}${multi?`<div style="background:#16294f;color:#fff;padding:9px 14px;font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;page-break-inside:avoid;page-break-after:avoid;border-left:4px solid #f4b400">${esc(o.label)}</div>`:''}${sectionBlocks.join('')}
       <table style="width:100%;border-collapse:collapse;margin-bottom:22px;page-break-inside:avoid">
         <tr><td style="width:55%">&nbsp;</td><td style="width:45%">
           <table style="width:100%;border-collapse:collapse;border:1px solid #16294f">
