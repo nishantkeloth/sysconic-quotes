@@ -342,7 +342,8 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
   @page{margin:12mm 10mm 15mm 10mm;size:A4}
   .sidebar,.topbar,.cstrip,.sec-hd>div:last-child,.opt-pills,.grand-strip,.btn,.idel,.term-del,.print-controls,.sb-overlay{display:none!important}
   .shell{display:block;height:auto}.main{overflow:visible;height:auto}.content{padding:0;overflow:visible;height:auto}
-  .print-doc{box-shadow:none;border:none;padding:16px;max-width:100%;border-radius:0;page-break-after:always}
+  .print-doc{box-shadow:none;border:none;padding:16px;max-width:100%;border-radius:0}
+  .print-doc:not(:last-child){page-break-after:always}
   body{background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   table{page-break-inside:auto}
   tr{page-break-inside:avoid;page-break-after:auto}
@@ -1335,13 +1336,6 @@ function printHTML(){
           <td style="padding:6px 10px;font-size:11px;color:#888;text-align:center;width:28px;border-right:0.5px solid #e2e6ec;font-weight:700">${i+1}</td>
           <td style="padding:6px 12px;font-size:12px;color:#333">${esc(t)}</td>
         </tr>`).join('')}
-      </table>
-      <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
-        <tr>
-          <td style="width:47%;border:1px solid #e2e6ec;padding:14px 16px;vertical-align:top"><div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;margin-bottom:30px">For ${esc(printCoName())}</div><div style="border-top:1px solid #aaa;padding-top:6px;font-size:11px;color:#888">Authorised Signatory &amp; Stamp</div></td>
-          <td style="width:6%">&nbsp;</td>
-          <td style="width:47%;border:1px solid #e2e6ec;padding:14px 16px;vertical-align:top"><div style="font-size:11px;font-weight:700;color:#555;text-transform:uppercase;margin-bottom:30px">Customer Acceptance</div><div style="border-top:1px solid #aaa;padding-top:6px;font-size:11px;color:#888">Authorised Signatory, Name &amp; Date</div></td>
-        </tr>
       </table>
       ${printBankRows().length?`<div style="background:#f2f6fc;border:1px solid #d9e2f3;border-radius:6px;padding:12px 16px;margin-bottom:16px;font-size:12px">
         <div style="font-size:11px;font-weight:700;color:#16294f;margin-bottom:8px;text-transform:uppercase">Bank Details (Wire Transfer)</div>
