@@ -1310,7 +1310,7 @@ function printHTML(){
     (o.sections||[]).forEach(s=>{
       let srows='';
       const cellB='border-right:1px solid #e9ecf2';
-      s.items.forEach((it,idx)=>{const c=calcItem(it);const vatAmt=o.vatEnabled?c.tp*((o.vatRate||5)/100):null;srows+=`<tr style="background:${idx%2===0?'#fff':'#f7f9fc'};page-break-inside:avoid">
+      s.items.forEach((it,idx)=>{const c=calcItem(it);const vatAmt=o.vatEnabled?c.tp*((o.vatRate||5)/100):null;srows+=`<tr style="background:${idx%2===0?'#fff':TH.bg};page-break-inside:avoid">
         <td style="padding:10px 8px;font-size:11px;color:#a8b0bd;text-align:center;${cellB};border-bottom:1px solid #eef1f5">${rn++}</td>
         <td style="padding:10px 10px;font-size:12px;color:#333;${cellB};border-bottom:1px solid #eef1f5">${esc(it.brand)}</td>
         <td style="padding:10px 10px;font-size:12px;color:#333;${cellB};border-bottom:1px solid #eef1f5">${esc(it.model)}</td>
@@ -1318,19 +1318,20 @@ function printHTML(){
         <td style="padding:10px 10px;font-size:13px;font-weight:700;text-align:right;color:${TH.dark};${cellB};border-bottom:1px solid #eef1f5">${fmt(c.up)}</td>
         <td style="padding:10px 8px;font-size:12px;text-align:center;color:#555;${cellB};border-bottom:1px solid #eef1f5">${it.qty||1}</td>
         <td style="padding:10px 10px;font-size:12px;text-align:right;color:#a8b0bd;${cellB};border-bottom:1px solid #eef1f5">${vatAmt!==null?fmt(vatAmt):'—'}</td>
-        <td style="padding:10px 10px;font-size:13px;font-weight:700;text-align:right;color:${TH.dark};background:${TH.bg};border-bottom:1px solid #eef1f5">${fmt(c.tp)}</td>
+        <td style="padding:10px 10px;font-size:13px;font-weight:700;text-align:right;color:${TH.dark};border-bottom:1px solid #eef1f5">${fmt(c.tp)}</td>
       </tr>`;});
-      sectionBlocks.push(`<div style="display:inline-block;background:${TH.bg};color:${TH.text};font-size:11px;font-weight:700;padding:5px 16px;border-radius:20px;margin:20px 0 10px;text-transform:uppercase;letter-spacing:.04em;page-break-after:avoid">${esc(s.name)}</div>
+      const cellBhd='border-right:1px solid rgba(255,255,255,.18)';
+      sectionBlocks.push(`<div style="display:inline-block;background:${TH.dark};color:#fff;font-size:12px;font-weight:800;padding:7px 16px;border-radius:6px;margin:20px 0 12px;text-transform:uppercase;letter-spacing:.04em;page-break-after:avoid">${esc(s.name)}</div>
       <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:6px;border:1px solid #e2e6ec">
-        <thead><tr style="color:${TH.text};font-size:10px;text-transform:uppercase;letter-spacing:.05em;background:${TH.bg};border-bottom:2px solid ${TH.dark}">
-          <th style="padding:8px;text-align:center;width:28px;font-weight:700;${cellB}">#</th>
-          <th style="padding:8px 10px;text-align:left;width:75px;font-weight:700;${cellB}">Brand</th>
-          <th style="padding:8px 10px;text-align:left;width:115px;font-weight:700;${cellB}">Model</th>
-          <th style="padding:8px 10px;text-align:left;font-weight:700;${cellB}">Description</th>
-          <th style="padding:8px 10px;text-align:right;width:85px;font-weight:700;${cellB}">Unit (${sym()})</th>
-          <th style="padding:8px;text-align:center;width:45px;font-weight:700;${cellB}">Qty</th>
-          <th style="padding:8px 10px;text-align:right;width:75px;font-weight:700;${cellB}">VAT</th>
-          <th style="padding:8px 10px;text-align:right;width:95px;font-weight:700">Total</th>
+        <thead><tr style="background:${TH.dark}">
+          <th style="padding:10px 8px;text-align:center;width:28px;font-weight:700;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">#</th>
+          <th style="padding:10px;text-align:left;width:75px;font-weight:700;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Brand</th>
+          <th style="padding:10px;text-align:left;width:115px;font-weight:700;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Model</th>
+          <th style="padding:10px;text-align:left;font-weight:700;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Description</th>
+          <th style="padding:10px;text-align:right;width:85px;font-weight:700;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Unit (${sym()})</th>
+          <th style="padding:10px 8px;text-align:center;width:45px;font-weight:700;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Qty</th>
+          <th style="padding:10px;text-align:right;width:75px;font-weight:700;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">VAT</th>
+          <th style="padding:10px;text-align:right;width:95px;font-weight:700;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.03em">Total</th>
         </tr></thead>
         <tbody>${srows}</tbody>
       </table>`);
@@ -1356,23 +1357,21 @@ function printHTML(){
         <div><div style="font-size:10px;font-weight:700;color:#8a93a3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Prepared by</div><div style="font-size:13px;color:#333;line-height:1.6"><strong>${esc(o.by)}</strong>${o.title?` &middot; ${esc(o.title)}`:''}</div></div>
       </div>
       `:''}${multi?`<div style="display:inline-block;background:${TH.dark};color:#fff;padding:6px 16px;border-radius:20px;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;page-break-inside:avoid;page-break-after:avoid;margin-bottom:10px">${esc(o.label)}</div>`:''}${sectionBlocks.join('')}
-      <div style="display:flex;justify-content:flex-end;margin:18px 0 24px;page-break-inside:avoid">
-        <div style="display:grid;grid-template-columns:${T.vatEnabled?'1fr 1fr 1fr':'1fr 1fr'};gap:10px;width:${T.vatEnabled?'420px':'300px'}">
-          <div style="background:#f7f9fc;border-radius:12px;padding:12px 16px">
-            <div style="font-size:10px;font-weight:700;color:#8a93a3;text-transform:uppercase;letter-spacing:.05em">Subtotal</div>
-            <div style="font-size:15px;font-weight:800;color:${TH.dark};margin-top:4px">${sym()} ${fmt(T.ts)}</div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;margin:18px 0 24px;page-break-inside:avoid">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:24px;background:#f7f9fc;border-radius:8px;padding:10px 18px;min-width:230px">
+            <div style="font-size:11px;font-weight:700;color:#8a93a3;text-transform:uppercase;letter-spacing:.05em">Subtotal</div>
+            <div style="font-size:15px;font-weight:800;color:${TH.dark}">${sym()} ${fmt(T.ts)}</div>
           </div>
-          ${T.vatEnabled?`<div style="background:#f7f9fc;border-radius:12px;padding:12px 16px">
-            <div style="font-size:10px;font-weight:700;color:#8a93a3;text-transform:uppercase;letter-spacing:.05em">VAT ${T.vatRate}%</div>
-            <div style="font-size:15px;font-weight:800;color:${TH.dark};margin-top:4px">${sym()} ${fmt(T.vat)}</div>
+          ${T.vatEnabled?`<div style="display:flex;justify-content:space-between;align-items:center;gap:24px;background:#f7f9fc;border-radius:8px;padding:10px 18px;min-width:230px">
+            <div style="font-size:11px;font-weight:700;color:#8a93a3;text-transform:uppercase;letter-spacing:.05em">VAT ${T.vatRate}%</div>
+            <div style="font-size:15px;font-weight:800;color:${TH.dark}">${sym()} ${fmt(T.vat)}</div>
           </div>`:''}
-          <div style="background:${TH.dark};border-radius:12px;padding:12px 16px">
-            <div style="font-size:10px;font-weight:700;color:rgba(255,255,255,.6);text-transform:uppercase;letter-spacing:.05em">Grand total</div>
-            <div style="font-size:16px;font-weight:800;color:#fff;margin-top:4px">${sym()} ${fmt(T.grand)}</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:24px;background:${TH.dark};border-radius:8px;padding:14px 18px;min-width:230px;margin-top:4px">
+            <div style="font-size:12px;font-weight:700;color:rgba(255,255,255,.6);text-transform:uppercase;letter-spacing:.05em">Grand total</div>
+            <div style="font-size:19px;font-weight:800;color:#fff">${sym()} ${fmt(T.grand)}</div>
           </div>
-        </div>
       </div>
-      ${(!multi||oi===os.length-1)?`<div style="display:inline-block;background:${TH.bg};color:${TH.text};font-size:11px;font-weight:700;padding:5px 16px;border-radius:20px;margin-bottom:10px;text-transform:uppercase;letter-spacing:.04em">Terms &amp; conditions</div>
+      ${(!multi||oi===os.length-1)?`<div style="display:inline-block;background:${TH.dark};color:#fff;font-size:12px;font-weight:800;padding:7px 16px;border-radius:6px;margin-bottom:12px;text-transform:uppercase;letter-spacing:.04em">Terms &amp; conditions</div>
       <div style="margin-bottom:20px">
         ${TERMS.map((t,i)=>`<div style="display:flex;gap:10px;padding:7px 2px;border-bottom:0.5px solid #eef1f5;font-size:12px">
           <span style="color:#a8b0bd;font-weight:700;width:16px;flex-shrink:0">${i+1}</span>
