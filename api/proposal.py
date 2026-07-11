@@ -464,7 +464,7 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
         'small': ParagraphStyle('small', fontName='Helvetica', fontSize=8, textColor=GRAY, leading=11),
     }
 
-    E = [Spacer(1, 1), PageBreak(), NextPageTemplate('content')]
+    E = [NextPageTemplate('content'), Spacer(1, 1), PageBreak()]
 
     if kind in ('technical', 'combined'):
         E += [section_badge('OVERVIEW')] + heading('Executive Summary', S)
