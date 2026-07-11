@@ -721,8 +721,12 @@ async function submitForgotPassword(e){
   if(RST.busy)return;
   RST.busy=true;const btn=document.getElementById('fpBtn');if(btn){btn.disabled=true;btn.textContent='Sending…';}
   const email=document.getElementById('fpEmail').value;
-  await api('POST','/api/auth/forgot-password',{email});
-  RST.busy=false;RST.done=true;draw();
+  let r;
+  try{r=await api('POST','/api/auth/forgot-password',{email});}
+  catch(err){RST.busy=false;if(btn){btn.disabled=false;btn.textContent='Send reset link →';}alert('Could not reach the server. Please try again.');return;}
+  RST.busy=false;if(btn){btn.disabled=false;btn.textContent='Send reset link →';}
+  if(r.error){alert('❌ '+r.error);return;}
+  RST.done=true;draw();
 }
 function forgotPasswordHTML(){
   if(RST.done)return`<div class="auth-shell"><div class="auth-card">
