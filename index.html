@@ -293,9 +293,51 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .ptotal-val.grand{font-size:21px}
 .pfooter{margin-top:28px;padding-top:14px;border-top:1px solid var(--gray-200);font-size:11px;color:var(--gray-400);text-align:center}
 
+/* ── Responsive: hamburger + off-canvas sidebar for tablet/phone ── */
+.sb-toggle{display:none;background:none;border:none;font-size:22px;color:var(--navy);cursor:pointer;padding:4px 8px;line-height:1;flex-shrink:0}
+.sb-overlay{display:none}
+@media (max-width:900px){
+  .shell{position:relative}
+  .sidebar{position:fixed;top:0;left:0;bottom:0;z-index:300;transform:translateX(-100%);transition:transform .25s ease;box-shadow:var(--shadow-lg)}
+  .sidebar.open{transform:translateX(0)}
+  .sb-toggle{display:inline-flex;align-items:center}
+  .sb-overlay.open{display:block;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:250}
+  .topbar{padding:0 12px;gap:8px}
+  .topbar-title{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:38vw}
+  .topbar-right{overflow-x:auto;flex-wrap:nowrap;max-width:58vw;scrollbar-width:thin;padding-bottom:2px}
+  .content{padding:14px}
+  .cstrip{padding:8px 12px;gap:8px}
+  /* Dense quote-editor pricing grid: kept intact (not restacked) since its cells
+     are live-bound inputs the pricing engine reads by id — safer to let it
+     scroll horizontally than risk breaking live calculations by restructuring
+     cell markup. Still fully usable, just swipe/scroll sideways on a narrow screen. */
+  .items-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .item-row.int,.item-row.int.img,.item-row.cli,.item-row.cli.img{min-width:900px}
+  .sec-hd{flex-wrap:wrap;gap:6px}
+}
+@media (max-width:600px){
+  .content{padding:10px}
+  .card{padding:14px}
+  .auth-card{padding:24px}
+  .auth-shell{padding:12px}
+}
+@media (max-width:640px){
+  .modal{width:100%;max-width:100%;max-height:88vh;overflow-y:auto;border-radius:12px}
+  .modal-overlay{padding:0;align-items:flex-end}
+}
+
+/* ── Generic list grids (Products/Customers/Vendors/Platform companies)
+   restack into labeled cards below tablet width ── */
+@media (max-width:760px){
+  .prod-hd{display:none}
+  .prod-row{grid-template-columns:1fr!important;gap:0;padding:12px 14px;border:1px solid var(--gray-200);border-radius:10px;margin-bottom:10px;background:var(--white)}
+  .prod-row>div{padding:4px 0!important;overflow:visible!important;white-space:normal!important}
+  .prod-row>div[data-label]::before{content:attr(data-label);display:block;font-size:10px;font-weight:700;text-transform:uppercase;color:var(--gray-500);letter-spacing:.05em;margin-top:4px}
+}
+
 @media print{
   @page{margin:12mm 10mm 15mm 10mm;size:A4}
-  .sidebar,.topbar,.cstrip,.sec-hd>div:last-child,.opt-pills,.grand-strip,.btn,.idel,.term-del,.print-controls{display:none!important}
+  .sidebar,.topbar,.cstrip,.sec-hd>div:last-child,.opt-pills,.grand-strip,.btn,.idel,.term-del,.print-controls,.sb-overlay{display:none!important}
   .shell{display:block;height:auto}.main{overflow:visible;height:auto}.content{padding:0;overflow:visible;height:auto}
   .print-doc{box-shadow:none;border:none;padding:16px;max-width:100%;border-radius:0;page-break-after:always}
   body{background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -328,7 +370,9 @@ const DEFAULT_TERMS=[
 let _n=1; const uid=()=>'i'+ _n++;
 const A={screen:'login',token:localStorage.getItem('sq_token')||null,user:null,company:null,
   page:'dashboard',quotes:[],activeQuote:null,view:'internal',cur:'AED',rate:1,
-  activeOpt:0,saveStatus:'',searchQ:'',filterStatus:'all'};
+  activeOpt:0,saveStatus:'',searchQ:'',filterStatus:'all',sbOpen:false};
+function toggleSidebar(){A.sbOpen=!A.sbOpen;draw();}
+function closeSidebar(){if(A.sbOpen){A.sbOpen=false;draw();}}
 let INV={token:null,loading:true,error:'',email:'',role:'',company_name:'',busy:false};
 let RST={token:null,busy:false,done:false,error:''};
 
@@ -786,23 +830,24 @@ function appHTML(){
   const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master',integrations:'Integrations',platform:'All Companies',companyProfile:'Company Profile'};
   const inEditor=['editor','terms','summary','vendor','print'].includes(A.page);
 
-  const sidebar=`<div class="sidebar">
+  const nav=(page,cb)=>`A.page='${page}';${cb||''}closeSidebar();draw()`;
+  const sidebar=`<div class="sidebar${A.sbOpen?' open':''}">
     <div class="sb-brand">
       <img src="${LOGO_SRC}" class="sb-logo" alt="Sysconic">
       <div><div class="sb-co">${esc(A.company?.name||'')}</div></div>
     </div>
     <nav class="sb-nav">
       <div class="sb-sec">Workspace</div>
-      <div class="sb-item ${A.page==='dashboard'?'active':''}" onclick="A.page='dashboard';draw()"><span class="sb-icon">🏠</span>Dashboard</div>
-      <div class="sb-item ${A.page==='products'?'active':''}" onclick="A.page='products';draw()"><span class="sb-icon">📦</span>Products</div>
-      <div class="sb-item ${A.page==='customers'?'active':''}" onclick="A.page='customers';draw()"><span class="sb-icon">👤</span>Customers</div>
-      <div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="A.page='vendorMaster';draw()"><span class="sb-icon">🏭</span>Vendors</div>
-      ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="A.page='editor';draw()"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}
+      <div class="sb-item ${A.page==='dashboard'?'active':''}" onclick="${nav('dashboard')}"><span class="sb-icon">🏠</span>Dashboard</div>
+      <div class="sb-item ${A.page==='products'?'active':''}" onclick="${nav('products')}"><span class="sb-icon">📦</span>Products</div>
+      <div class="sb-item ${A.page==='customers'?'active':''}" onclick="${nav('customers')}"><span class="sb-icon">👤</span>Customers</div>
+      <div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="${nav('vendorMaster')}"><span class="sb-icon">🏭</span>Vendors</div>
+      ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}
       ${A.user?.role==='admin'?`<div class="sb-sec">Settings</div>
-      <div class="sb-item ${A.page==='team'?'active':''}" onclick="A.page='team';draw()"><span class="sb-icon">👥</span>Team</div>
-      <div class="sb-item ${A.page==='integrations'?'active':''}" onclick="A.page='integrations';draw()"><span class="sb-icon">🔌</span>Integrations</div>
-      <div class="sb-item ${A.page==='companyProfile'?'active':''}" onclick="A.page='companyProfile';draw()"><span class="sb-icon">🏢</span>Company Profile</div>`:''}
-      ${A.user?.is_platform_admin?`<div class="sb-sec">Platform</div><div class="sb-item ${A.page==='platform'?'active':''}" onclick="A.page='platform';draw()"><span class="sb-icon">🌐</span>All Companies</div>`:''}
+      <div class="sb-item ${A.page==='team'?'active':''}" onclick="${nav('team')}"><span class="sb-icon">👥</span>Team</div>
+      <div class="sb-item ${A.page==='integrations'?'active':''}" onclick="${nav('integrations')}"><span class="sb-icon">🔌</span>Integrations</div>
+      <div class="sb-item ${A.page==='companyProfile'?'active':''}" onclick="${nav('companyProfile')}"><span class="sb-icon">🏢</span>Company Profile</div>`:''}
+      ${A.user?.is_platform_admin?`<div class="sb-sec">Platform</div><div class="sb-item ${A.page==='platform'?'active':''}" onclick="${nav('platform')}"><span class="sb-icon">🌐</span>All Companies</div>`:''}
     </nav>
     <div class="sb-foot">
       <div class="sb-user">
@@ -813,6 +858,7 @@ function appHTML(){
       <div id="saveStatus"></div>
     </div>
   </div>`;
+  const sbOverlay=`<div class="sb-overlay${A.sbOpen?' open':''}" onclick="closeSidebar()"></div>`;
 
   const topbarRight=buildTopbarRight();
   const cstrip=inEditor?buildCstrip():'';
@@ -832,8 +878,8 @@ function appHTML(){
   else if(A.page==='platform')pageContent=platformHTML();
   else if(A.page==='companyProfile')pageContent=companyProfileHTML();
 
-  return`<div class="shell">${sidebar}<div class="main">
-    <div class="topbar"><div class="topbar-title">${PAGE_TITLES[A.page]||''}</div><div class="topbar-right">${topbarRight}</div></div>
+  return`<div class="shell">${sidebar}${sbOverlay}<div class="main">
+    <div class="topbar"><div style="display:flex;align-items:center;gap:6px;min-width:0"><button class="sb-toggle" onclick="toggleSidebar()" aria-label="Menu">☰</button><div class="topbar-title">${PAGE_TITLES[A.page]||''}</div></div><div class="topbar-right">${topbarRight}</div></div>
     ${cstrip}
     <div class="content">${pageContent}</div>
   </div></div>`;
@@ -1425,10 +1471,10 @@ async function loadProducts(){
   el.innerHTML=`<div class="prod-hd"><div></div><div>Brand</div><div>Model</div><div>Description</div><div>Cost</div><div>Margin %</div><div></div></div>`+
     PRODS.list.map(p=>`<div class="prod-row">
       <div class="prod-thumb ${p.image_url?'':'empty'}" title="${p.image_url?'Change image':'Pick image'}" onclick="openCatalogImage('${p.id}')">${p.image_url?`<img src="${esc(p.image_url)}">`:'📷'}</div>
-      <div>${esc(p.brand)}</div><div>${esc(p.model)}</div>
-      <div style="color:var(--gray-500);font-size:13px">${esc((p.description||'').slice(0,90))}</div>
-      <div>${(+p.default_cost||0).toFixed(2)}</div>
-      <div>${((+p.default_margin||0)*100).toFixed(1)}</div>
+      <div data-label="Brand">${esc(p.brand)}</div><div data-label="Model">${esc(p.model)}</div>
+      <div data-label="Description" style="color:var(--gray-500);font-size:13px">${esc((p.description||'').slice(0,90))}</div>
+      <div data-label="Cost">${(+p.default_cost||0).toFixed(2)}</div>
+      <div data-label="Margin %">${((+p.default_margin||0)*100).toFixed(1)}</div>
       <div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn btn-sm" onclick="showProdModal('${p.id}')">Edit</button><button class="btn btn-sm btn-red" onclick="delProduct('${p.id}')">×</button></div>
     </div>`).join('');
 }
@@ -1753,11 +1799,11 @@ async function loadCustomersPage(){
   if(!CUSTS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No customers yet.<br><br>Add one manually, import from Excel, or ask an admin to connect an integration in Settings → Integrations and click Sync above.</div>`;return;}
   el.innerHTML=`<div class="prod-hd" style="grid-template-columns:1fr 140px 170px 130px 70px 110px"><div>Name</div><div>Company</div><div>Email</div><div>Phone</div><div>Source</div><div></div></div>`+
     CUSTS.list.map(c=>`<div class="prod-row" style="grid-template-columns:1fr 140px 170px 130px 70px 110px">
-      <div>${esc(c.name)}</div>
-      <div style="color:var(--gray-500);font-size:13px">${esc(c.company_name||'')}</div>
-      <div style="color:var(--gray-500);font-size:13px">${esc(c.email||'')}</div>
-      <div style="color:var(--gray-500);font-size:13px">${esc(c.phone||'')}</div>
-      <div style="font-size:12px;color:${c.source&&c.source!=='manual'?'var(--green)':'var(--gray-500)'}">${c.source&&c.source!=='manual'?esc(c.source.charAt(0).toUpperCase()+c.source.slice(1)):'Manual'}</div>
+      <div data-label="Name">${esc(c.name)}</div>
+      <div data-label="Company" style="color:var(--gray-500);font-size:13px">${esc(c.company_name||'')}</div>
+      <div data-label="Email" style="color:var(--gray-500);font-size:13px">${esc(c.email||'')}</div>
+      <div data-label="Phone" style="color:var(--gray-500);font-size:13px">${esc(c.phone||'')}</div>
+      <div data-label="Source" style="font-size:12px;color:${c.source&&c.source!=='manual'?'var(--green)':'var(--gray-500)'}">${c.source&&c.source!=='manual'?esc(c.source.charAt(0).toUpperCase()+c.source.slice(1)):'Manual'}</div>
       <div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn btn-sm" onclick="showCustModal('${c.id}')">Edit</button><button class="btn btn-sm btn-red" onclick="delCustomer('${c.id}')">×</button></div>
     </div>`).join('');
 }
@@ -1857,11 +1903,11 @@ async function loadVendorsMaster(){
   if(!VENDS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No vendors yet. Add one manually, import from Excel, or ask an admin to connect an integration in Settings → Integrations and click Sync above.</div>`;return;}
   el.innerHTML=`<div class="prod-hd" style="grid-template-columns:1fr 120px 160px 120px 70px 110px"><div>Name</div><div>Category</div><div>Contact / Email</div><div>Phone</div><div>Source</div><div></div></div>`+
     VENDS.list.map(v=>`<div class="prod-row" style="grid-template-columns:1fr 120px 160px 120px 70px 110px">
-      <div>${esc(v.name)}</div>
-      <div style="color:var(--gray-500);font-size:13px">${esc(v.category||'')}</div>
-      <div style="color:var(--gray-500);font-size:13px">${esc(v.contact_person||v.email||'')}</div>
-      <div style="color:var(--gray-500);font-size:13px">${esc(v.phone||'')}</div>
-      <div style="font-size:12px;color:${v.source&&v.source!=='manual'?'var(--green)':'var(--gray-500)'}">${v.source&&v.source!=='manual'?esc(v.source.charAt(0).toUpperCase()+v.source.slice(1)):'Manual'}</div>
+      <div data-label="Name">${esc(v.name)}</div>
+      <div data-label="Category" style="color:var(--gray-500);font-size:13px">${esc(v.category||'')}</div>
+      <div data-label="Contact / Email" style="color:var(--gray-500);font-size:13px">${esc(v.contact_person||v.email||'')}</div>
+      <div data-label="Phone" style="color:var(--gray-500);font-size:13px">${esc(v.phone||'')}</div>
+      <div data-label="Source" style="font-size:12px;color:${v.source&&v.source!=='manual'?'var(--green)':'var(--gray-500)'}">${v.source&&v.source!=='manual'?esc(v.source.charAt(0).toUpperCase()+v.source.slice(1)):'Manual'}</div>
       <div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn btn-sm" onclick="showVendModal('${v.id}')">Edit</button><button class="btn btn-sm btn-red" onclick="delVendorMaster('${v.id}')">×</button></div>
     </div>`).join('');
 }
@@ -2041,12 +2087,12 @@ async function loadPlatformCompanies(){
   if(!list.length){el.innerHTML='<div style="color:var(--gray-500)">No companies yet.</div>';return;}
   el.innerHTML=`<div class="prod-hd" style="grid-template-columns:1.3fr 80px 80px 80px 100px 110px 100px 140px"><div>Company</div><div>Plan</div><div>Users</div><div>Quotes</div><div>Status</div><div>Created</div><div></div><div></div></div>`+
     list.map(co=>`<div class="prod-row" style="grid-template-columns:1.3fr 80px 80px 80px 100px 110px 100px 140px">
-      <div>${esc(co.name)}<div style="font-size:12px;color:var(--gray-500)">${esc(co.slug||'')}</div></div>
-      <div style="font-size:13px;color:var(--gray-500)">${esc(co.plan||'free')}</div>
-      <div style="font-size:13px;color:var(--gray-500)">${co.user_count}</div>
-      <div style="font-size:13px;color:var(--gray-500)">${co.quote_count}</div>
-      <div style="font-size:12px;color:${co.status==='suspended'?'var(--red)':'var(--green)'}">${co.status==='suspended'?'Suspended':'Active'}</div>
-      <div style="font-size:12px;color:var(--gray-500)">${co.created_at?new Date(co.created_at).toLocaleDateString():''}</div>
+      <div data-label="Company">${esc(co.name)}<div style="font-size:12px;color:var(--gray-500)">${esc(co.slug||'')}</div></div>
+      <div data-label="Plan" style="font-size:13px;color:var(--gray-500)">${esc(co.plan||'free')}</div>
+      <div data-label="Users" style="font-size:13px;color:var(--gray-500)">${co.user_count}</div>
+      <div data-label="Quotes" style="font-size:13px;color:var(--gray-500)">${co.quote_count}</div>
+      <div data-label="Status" style="font-size:12px;color:${co.status==='suspended'?'var(--red)':'var(--green)'}">${co.status==='suspended'?'Suspended':'Active'}</div>
+      <div data-label="Created" style="font-size:12px;color:var(--gray-500)">${co.created_at?new Date(co.created_at).toLocaleDateString():''}</div>
       <div><button class="btn btn-sm" onclick="showInviteToCompanyModal('${co.id}','${esc(co.name).replace(/'/g,"&#39;")}')">Invite</button></div>
       <div>${co.status==='suspended'
         ?`<button class="btn btn-sm" onclick="reactivateCompany('${co.id}')">Reactivate</button>`
