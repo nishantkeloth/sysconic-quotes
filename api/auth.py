@@ -19,11 +19,12 @@ APP_URL = os.environ.get('APP_URL', 'https://sysconic-quotes.vercel.app')
 def get_sb():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def make_token(user_id, company_id, role):
+def make_token(user_id, company_id, role, is_platform_admin=False):
     return jwt.encode({
         'user_id': str(user_id),
         'company_id': str(company_id),
         'role': role,
+        'is_platform_admin': bool(is_platform_admin),
         'exp': datetime.utcnow() + timedelta(days=30)
     }, JWT_SECRET, algorithm='HS256')
 
@@ -146,10 +147,13 @@ def register():
             'role': 'admin', 'password_hash': pw_hash
         }).execute().data[0]
 
-        token = make_token(user['id'], co['id'], 'admin')
+        # Self-service signups are never platform admins — that flag can only be
+        # set directly by an existing platform admin (or, for the very first one,
+        # directly in the database).
+        token = make_token(user['id'], co['id'], 'admin', is_platform_admin=False)
         return jsonify({
             'token': token,
-            'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'role': 'admin'},
+            'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'role': 'admin', 'is_platform_admin': False},
             'company': {'id': co['id'], 'name': co['name'], 'slug': co['slug']}
         })
     except Exception as e:
@@ -178,11 +182,14 @@ def login():
             return jsonify({'error': 'Invalid email or password'}), 401
 
         co = sb.table('companies').select('*').eq('id', user['company_id']).execute().data[0]
-        token = make_token(user['id'], co['id'], user['role'])
+        if co.get('status') == 'suspended':
+            return jsonify({'error': "This company's account has been suspended. Contact your administrator."}), 403
+
+        token = make_token(user['id'], co['id'], user['role'], user.get('is_platform_admin', False))
 
         return jsonify({
             'token': token,
-            'user': {'id': user['id'], 'name': user.get('name', ''), 'email': user['email'], 'role': user['role']},
+            'user': {'id': user['id'], 'name': user.get('name', ''), 'email': user['email'], 'role': user['role'], 'is_platform_admin': bool(user.get('is_platform_admin'))},
             'company': {'id': co['id'], 'name': co['name'], 'slug': co['slug']}
         })
     except Exception as e:
@@ -196,8 +203,10 @@ def me():
         sb = get_sb()
         claims = verify_token(request)
         if not claims: return jsonify({'error': 'Unauthorized'}), 401
-        user = sb.table('users').select('id,name,email,role,company_id').eq('id', claims['user_id']).execute().data[0]
+        user = sb.table('users').select('id,name,email,role,company_id,is_platform_admin').eq('id', claims['user_id']).execute().data[0]
         co   = sb.table('companies').select('*').eq('id', claims['company_id']).execute().data[0]
+        if co.get('status') == 'suspended':
+            return jsonify({'error': "This company's account has been suspended. Contact your administrator."}), 403
         return jsonify({'user': user, 'company': co})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -275,11 +284,11 @@ def accept_invite():
 
         sb.table('invites').update({'accepted': True}).eq('token', token).execute()
         co  = sb.table('companies').select('*').eq('id', invite['company_id']).execute().data[0]
-        tok = make_token(user['id'], co['id'], user['role'])
+        tok = make_token(user['id'], co['id'], user['role'], is_platform_admin=False)
 
         return jsonify({
             'token': tok,
-            'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'role': user['role']},
+            'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'role': user['role'], 'is_platform_admin': False},
             'company': {'id': co['id'], 'name': co['name']}
         })
     except Exception as e:
