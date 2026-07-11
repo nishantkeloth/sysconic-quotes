@@ -12,7 +12,7 @@ SUPABASE_KEY   = os.environ.get('SUPABASE_SERVICE_KEY')
 JWT_SECRET     = os.environ.get('JWT_SECRET')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
-GEMINI_MODEL = 'gemini-3-flash'
+GEMINI_MODEL = 'gemini-3.5-flash'
 GEMINI_URL   = f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent'
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
