@@ -32,10 +32,15 @@ from reportlab.lib.enums import TA_RIGHT, TA_CENTER
 from reportlab.platypus import (BaseDocTemplate, PageTemplate, Frame, Paragraph, Spacer,
                                 Table, TableStyle, Image, KeepTogether)
 
-NAVY   = HexColor('#16294f')
-NAVY2  = HexColor('#1a3c6e')
-ACCENT = HexColor('#2f7de0')
-TINT   = HexColor('#f2f6fc')
+NAVY   = HexColor('#16294f')   # matches the app's default "Navy Classic" print theme —
+NAVY2  = HexColor('#16294f')   # this PDF always renders in that theme regardless of which
+PILLBG = HexColor('#eaf1fc')   # color theme is selected on screen (reportlab can't easily
+PILLTX = HexColor('#1a4fa0')   # reuse the CSS theme system used by the on-screen/print view)
+GRAYPILLBG = HexColor('#f2f6fc')
+GRAYPILLTX = HexColor('#5a6475')
+AMBERBG = HexColor('#fef3c7')
+AMBERTX = HexColor('#92400e')
+TINT   = HexColor('#eaf1fc')
 ZEBRA  = HexColor('#f8fafc')
 GRAYB  = HexColor('#e2e6ec')
 BANKBG = HexColor('#eef3fb')
@@ -113,7 +118,7 @@ def _footer(canvas, doc):
     company = getattr(doc, 'company', {}) or {}
     canvas.saveState()
     w, h = A4
-    canvas.setStrokeColor(ACCENT); canvas.setLineWidth(1.1)
+    canvas.setStrokeColor(NAVY); canvas.setLineWidth(1.1)
     canvas.line(15*mm, 14*mm, w-15*mm, 14*mm)
     canvas.setFont('Helvetica', 6.8); canvas.setFillColor(GRAY)
     canvas.drawString(15*mm, 10*mm, company.get('footer') or '')
@@ -159,8 +164,8 @@ def build_quote_pdf(quote, logo_bytes, which='all', company=None):
     head.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0)]))
     E.append(head)
     E.append(Spacer(1, 3*mm))
-    rule = Table([['', '']], colWidths=[CW*0.75, CW*0.25], rowHeights=[1.4])
-    rule.setStyle(TableStyle([('BACKGROUND',(0,0),(0,0),NAVY),('BACKGROUND',(1,0),(1,0),ACCENT)]))
+    rule = Table([['']], colWidths=[CW], rowHeights=[2.2])
+    rule.setStyle(TableStyle([('BACKGROUND',(0,0),(0,0),NAVY)]))
     E.append(rule); E.append(Spacer(1, 4*mm))
 
     # ── Customer / prepared-by ──
@@ -175,17 +180,21 @@ def build_quote_pdf(quote, logo_bytes, which='all', company=None):
     cust.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0)]))
     E.append(cust); E.append(Spacer(1, 3*mm))
 
-    # ── Info bar (soft tint, modern look vs a heavy solid block) ──
-    info_pairs = [('DATE', first.get('date') or ''), ('REF NO', first.get('ref') or ''),
-                  ('SCOPE', quote.get('title') or ''), ('SYSTEM', 'IT/AV'), ('PROJECT', quote.get('title') or '')]
-    cells = []
-    for k, v in info_pairs:
-        cells.append(Paragraph(f'<font color="#5b78ab" size="6.5"><b>{k}</b></font><br/><font color="#16294f" size="8.5">{v}</font>', S['base']))
-    bar = Table([cells], colWidths=[CW*0.14, CW*0.18, CW*0.26, CW*0.14, CW*0.28])
-    bar.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),TINT),('BOX',(0,0),(-1,-1),0.6,GRAYB),
-                             ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-                             ('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6),
-                             ('LEFTPADDING',(0,0),(-1,-1),8)]))
+    # ── Meta pills: ref (navy tint) + date + scope (neutral) — matches the
+    # small rounded badge row above the customer block in the on-screen view.
+    def _pill(text, bg, tx):
+        p = Paragraph(text, ParagraphStyle('pill', fontName='Helvetica-Bold', fontSize=8, textColor=tx))
+        t = Table([[p]], colWidths=[None])
+        t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),bg),
+                                ('TOPPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),4),
+                                ('LEFTPADDING',(0,0),(-1,-1),9),('RIGHTPADDING',(0,0),(-1,-1),9)]))
+        return t
+    pills = [_pill(first.get('ref') or '', PILLBG, PILLTX), _pill(first.get('date') or '', GRAYPILLBG, GRAYPILLTX)]
+    scope_name = (first.get('sections') or [{}])[0].get('name') if first.get('sections') else ''
+    if scope_name: pills.append(_pill(scope_name, GRAYPILLBG, GRAYPILLTX))
+    bar = Table([pills], colWidths=[None]*len(pills), hAlign='LEFT')
+    bar.setStyle(TableStyle([('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(1,0),(-1,-1),6),
+                             ('VALIGN',(0,0),(-1,-1),'MIDDLE')]))
     E.append(bar); E.append(Spacer(1, 5*mm))
 
     # ── Options ──
@@ -199,12 +208,21 @@ def build_quote_pdf(quote, logo_bytes, which='all', company=None):
                                     ('BOTTOMPADDING',(0,0),(-1,-1),6),('LEFTPADDING',(0,0),(-1,-1),10)]))
             E.append(ob)
 
+        # Each section gets its own compact navy badge (standalone, above the
+        # table) followed by its own item table — mirrors the on-screen/print
+        # view, where sections are visually separate blocks rather than rows
+        # merged into one continuous table.
         widths = [CW*0.05, CW*0.11, CW*0.15, CW*0.37, CW*0.12, CW*0.07, CW*0.13]
         header = [Paragraph(x, S['th']) for x in ['#','Brand','Model','Description',f'Unit Price ({cur})','Qty',f'Total ({cur})']]
-        rows = [header]; rn = 1
+        rn = 1
         for s in (o.get('sections') or []):
             if s.get('name'):
-                rows.append([Paragraph(f"<b>{s['name']}</b>", ParagraphStyle('sec', parent=S['base'], textColor=NAVY, fontName='Helvetica-Bold'))] + ['']*6)
+                badge = Table([[Paragraph(s['name'], ParagraphStyle('secb', fontName='Helvetica-Bold', fontSize=8.5, textColor=white))]], colWidths=[None])
+                badge.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),NAVY),
+                                            ('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5),
+                                            ('LEFTPADDING',(0,0),(-1,-1),10),('RIGHTPADDING',(0,0),(-1,-1),10)]))
+                E.append(badge); E.append(Spacer(1, 2*mm))
+            rows = [header]
             for it in (s.get('items') or []):
                 up, tp = calc_item(it)
                 rows.append([Paragraph(str(rn), S['baseC']), Paragraph(str(it.get('brand') or ''), S['base']),
@@ -212,39 +230,49 @@ def build_quote_pdf(quote, logo_bytes, which='all', company=None):
                              Paragraph(fmt(up), S['baseR']), Paragraph(fmt(_num(it.get('qty'))), S['baseC']),
                              Paragraph(fmt(tp), S['baseR'])])
                 rn += 1
-        tbl = Table(rows, colWidths=widths, repeatRows=1)
-        style = [('BACKGROUND',(0,0),(-1,0),NAVY),('VALIGN',(0,0),(-1,-1),'TOP'),
-                 ('LINEBELOW',(0,1),(-1,-1),0.4,GRAYB),
-                 ('TOPPADDING',(0,0),(-1,-1),4.5),('BOTTOMPADDING',(0,0),(-1,-1),4.5),
-                 ('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5)]
-        item_i = 0
-        for ri, r in enumerate(rows):
-            if ri == 0: continue
-            if isinstance(r[0], Paragraph) and r[1] == '':
-                style += [('SPAN',(0,ri),(-1,ri)),('BACKGROUND',(0,ri),(-1,ri),TINT)]
-            else:
-                if item_i % 2 == 1:
+            tbl = Table(rows, colWidths=widths, repeatRows=1)
+            style = [('BACKGROUND',(0,0),(-1,0),NAVY),('VALIGN',(0,0),(-1,-1),'TOP'),
+                     ('LINEBELOW',(0,1),(-1,-1),0.4,GRAYB),
+                     ('TOPPADDING',(0,0),(-1,-1),4.5),('BOTTOMPADDING',(0,0),(-1,-1),4.5),
+                     ('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5)]
+            for ri in range(1, len(rows)):
+                if (ri - 1) % 2 == 1:
                     style += [('BACKGROUND',(0,ri),(-1,ri),ZEBRA)]
-                item_i += 1
-        tbl.setStyle(TableStyle(style))
-        E.append(tbl); E.append(Spacer(1, 3*mm))
+            tbl.setStyle(TableStyle(style))
+            E.append(tbl); E.append(Spacer(1, 4*mm))
 
-        trows = [[Paragraph('Subtotal', S['baseR']), Paragraph(f"{cur} {fmt(ts)}", S['baseR'])]]
-        trows.append([Paragraph(f"VAT {rate:g}%" if vat_on else "VAT", S['baseR']),
-                      Paragraph(f"{cur} {fmt(vat)}" if vat_on else "Not applied", S['baseR'])])
-        trows.append([Paragraph('<b>Grand Total</b>', ParagraphStyle('gt', parent=S['baseR'], textColor=white, fontSize=10.5)),
-                      Paragraph(f"<b>{cur} {fmt(grand)}</b>", ParagraphStyle('gt2', parent=S['baseR'], textColor=white, fontSize=10.5))])
-        tot = Table(trows, colWidths=[CW*0.72, CW*0.28])
-        tot.setStyle(TableStyle([('BOX',(0,0),(-1,1),0.6,GRAYB),('LINEBELOW',(0,0),(-1,1),0.4,GRAYB),
-                                 ('BACKGROUND',(0,2),(-1,2),NAVY),
-                                 ('TOPPADDING',(0,0),(-1,-1),6),('BOTTOMPADDING',(0,0),(-1,-1),6),
-                                 ('RIGHTPADDING',(0,0),(-1,-1),10)]))
-        E.append(KeepTogether(tot)); E.append(Spacer(1, 6*mm))
+        # Vertical, right-aligned stack of totals cards — Subtotal, then VAT,
+        # then a larger solid-navy Grand Total card below — matching the
+        # on-screen/print totals layout instead of one wide table.
+        TOTW = CW*0.42
+        def _trow(label, value, grand=False):
+            lbl_style = ParagraphStyle('tl', fontName='Helvetica-Bold', fontSize=7.5 if not grand else 8.5,
+                                        textColor=(white if grand else GRAY))
+            val_style = ParagraphStyle('tv', parent=S['baseR'], fontSize=11 if not grand else 13,
+                                        fontName='Helvetica-Bold', textColor=(white if grand else NAVY))
+            t = Table([[Paragraph(label, lbl_style), Paragraph(value, val_style)]], colWidths=[TOTW*0.5, TOTW*0.5])
+            t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1), NAVY if grand else HexColor('#f7f9fc')),
+                                   ('TOPPADDING',(0,0),(-1,-1), 8 if grand else 6),
+                                   ('BOTTOMPADDING',(0,0),(-1,-1), 8 if grand else 6),
+                                   ('LEFTPADDING',(0,0),(-1,-1),12),('RIGHTPADDING',(0,0),(-1,-1),12),
+                                   ('VALIGN',(0,0),(-1,-1),'MIDDLE')]))
+            return t
+        tot_rows = [[_trow('Subtotal', f"{cur} {fmt(ts)}")],
+                    [Spacer(1, 1.5*mm)],
+                    [_trow(f"VAT {rate:g}%" if vat_on else "VAT", f"{cur} {fmt(vat)}" if vat_on else "Not applied")],
+                    [Spacer(1, 1.5*mm)],
+                    [_trow('Grand total', f"{cur} {fmt(grand)}", grand=True)]]
+        tot_stack = Table(tot_rows, colWidths=[TOTW])
+        tot_stack.setStyle(TableStyle([('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
+                                       ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0)]))
+        tot_stack.hAlign = 'RIGHT'
+        E.append(KeepTogether(tot_stack)); E.append(Spacer(1, 6*mm))
 
-    # ── Terms ──
-    th = Table([[Paragraph('<b>Terms &amp; Conditions</b>', ParagraphStyle('tt', fontName='Helvetica-Bold', fontSize=8.5, textColor=white))]], colWidths=[CW])
-    th.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),NAVY),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5),('LEFTPADDING',(0,0),(-1,-1),10)]))
-    tflow = [th, Spacer(1, 2*mm)]
+    # ── Terms (compact badge sized to its text, not a full-width bar) ──
+    th = Table([[Paragraph('Terms &amp; Conditions', ParagraphStyle('tt', fontName='Helvetica-Bold', fontSize=8.5, textColor=white))]], colWidths=[None])
+    th.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),NAVY),('TOPPADDING',(0,0),(-1,-1),5),('BOTTOMPADDING',(0,0),(-1,-1),5),
+                            ('LEFTPADDING',(0,0),(-1,-1),10),('RIGHTPADDING',(0,0),(-1,-1),10)]))
+    tflow = [th, Spacer(1, 3*mm)]
     for i, t in enumerate(terms):
         tflow.append(Paragraph(f"{i+1}.  {t}", S['term']))
     E.append(KeepTogether(tflow) if len(terms) <= 10 else tflow[0])
@@ -252,17 +280,6 @@ def build_quote_pdf(quote, logo_bytes, which='all', company=None):
         E.append(Spacer(1, 2*mm))
         for i, t in enumerate(terms): E.append(Paragraph(f"{i+1}.  {t}", S['term']))
     E.append(Spacer(1, 8*mm))
-
-    # ── Signatures ──
-    for_name = f"For {company.get('name') or 'Us'}"
-    sig = Table([[[Paragraph(for_name, S['sig']), Paragraph('Authorised Signatory &amp; Stamp', S['sigsub']), Spacer(1, 14*mm)],
-                  '',
-                  [Paragraph('Customer Acceptance', S['sig']), Paragraph('Authorised Signatory, Name &amp; Date', S['sigsub']), Spacer(1, 14*mm)]]],
-                colWidths=[CW*0.42, CW*0.16, CW*0.42])
-    sig.setStyle(TableStyle([('BOX',(0,0),(0,0),0.6,GRAYB),('BOX',(2,0),(2,0),0.6,GRAYB),
-                             ('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8),
-                             ('LEFTPADDING',(0,0),(-1,-1),10)]))
-    E.append(KeepTogether(sig)); E.append(Spacer(1, 5*mm))
 
     # ── Bank details (only if this company has filled them in) ──
     b = company.get('bank') or []
