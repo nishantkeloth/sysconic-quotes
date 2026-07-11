@@ -116,6 +116,72 @@ def send_invite_email(to_email, invite_url, company_name, invited_by_name, role)
         print(f'Email error: {e}')
         return False
 
+def send_reset_email(to_email, reset_url, name):
+    """Send a password reset email via Microsoft Graph"""
+    try:
+        token = get_ms_token()
+        if not token:
+            print('Failed to get MS token')
+            return False
+
+        subject = "Reset your Sysconic Quote Manager password"
+        body = f"""
+        <html><body style="font-family:Segoe UI,Arial,sans-serif;color:#1a1a1a;max-width:600px;margin:0 auto;padding:20px">
+            <div style="background:#16294f;padding:24px;border-radius:8px 8px 0 0;text-align:center">
+                <div style="font-size:22px;font-weight:800;color:#fff;letter-spacing:.02em">SYSCONIC</div>
+                <div style="font-size:12px;color:rgba(255,255,255,.6);margin-top:4px">Quote Manager · SaaS Platform</div>
+            </div>
+            <div style="background:#fff;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;padding:32px">
+                <h2 style="color:#16294f;margin:0 0 16px">Reset your password</h2>
+                <p style="color:#555;line-height:1.6;margin-bottom:28px">
+                    Hi {name or ''}, we received a request to reset your password. Click below to choose a new one.
+                    This link expires in 1 hour.
+                </p>
+                <div style="text-align:center;margin-bottom:28px">
+                    <a href="{reset_url}" style="background:#16294f;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:700;display:inline-block">
+                        Reset Password →
+                    </a>
+                </div>
+                <div style="background:#f8f9fc;border-radius:6px;padding:14px;margin-bottom:20px">
+                    <p style="font-size:12px;color:#888;margin:0 0 6px">Or copy this link:</p>
+                    <p style="font-size:12px;color:#16294f;word-break:break-all;margin:0">{reset_url}</p>
+                </div>
+                <p style="font-size:12px;color:#aaa;margin:0">
+                    If you didn't request this, you can safely ignore this email — your password will not change.
+                </p>
+            </div>
+            <div style="text-align:center;padding:16px;font-size:11px;color:#aaa">
+                Sysconic Technologies LLC · Abu Dhabi, UAE · www.sysconic.com
+            </div>
+        </body></html>
+        """
+
+        payload = {
+            "message": {
+                "subject": subject,
+                "body": {"contentType": "HTML", "content": body},
+                "toRecipients": [{"emailAddress": {"address": to_email}}],
+                "from": {"emailAddress": {"address": SENDER_EMAIL}}
+            }
+        }
+
+        r = requests.post(
+            f'https://graph.microsoft.com/v1.0/users/{SENDER_EMAIL}/sendMail',
+            json=payload,
+            headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+        )
+        print(f'Reset email send status: {r.status_code}')
+        return r.status_code == 202
+    except Exception as e:
+        print(f'Reset email error: {e}')
+        return False
+
+def create_reset_token(sb, user_id):
+    token = str(uuid.uuid4())
+    expires = (datetime.utcnow() + timedelta(hours=1)).isoformat()
+    sb.table('password_resets').insert({'user_id': user_id, 'token': token, 'expires_at': expires}).execute()
+    return token
+
 # ── Register ──────────────────────────────────────────────────────────────────
 @app.route('/api/auth/register', methods=['POST'])
 def register():
@@ -291,6 +357,99 @@ def accept_invite():
             'token': tok,
             'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'role': user['role'], 'is_platform_admin': False},
             'company': {'id': co['id'], 'name': co['name']}
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# ── Invite details (public — lets the accept-invite screen show who/what before
+# the user commits to setting a password) ───────────────────────────────────────
+@app.route('/api/auth/invite-details', methods=['GET'])
+def invite_details():
+    try:
+        sb = get_sb()
+        token = request.args.get('token', '')
+        inv = sb.table('invites').select('*').eq('token', token).eq('accepted', False).execute()
+        if not inv.data:
+            return jsonify({'error': 'This invite link is invalid or has already been used'}), 400
+        invite = inv.data[0]
+        co = sb.table('companies').select('name').eq('id', invite['company_id']).execute().data[0]
+        return jsonify({'email': invite['email'], 'role': invite['role'], 'company_name': co['name']})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ── Forgot / reset password ───────────────────────────────────────────────────
+# forgot-password always returns a generic success message regardless of whether
+# the email exists, so this endpoint can't be used to enumerate registered users.
+@app.route('/api/auth/forgot-password', methods=['POST'])
+def forgot_password():
+    try:
+        sb = get_sb()
+        email = ((request.json or {}).get('email') or '').strip().lower()
+        if email:
+            rows = sb.table('users').select('id,name,email').eq('email', email).execute()
+            if rows.data:
+                user = rows.data[0]
+                token = create_reset_token(sb, user['id'])
+                reset_url = f"{APP_URL}?reset={token}"
+                send_reset_email(user['email'], reset_url, user.get('name', ''))
+        return jsonify({'message': "If that email is registered, we've sent a password reset link."})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/auth/reset-password', methods=['POST'])
+def reset_password():
+    try:
+        sb = get_sb()
+        d = request.json or {}
+        token = d.get('token', '')
+        password = d.get('password', '')
+        if not token:
+            return jsonify({'error': 'Missing reset token'}), 400
+        if len(password) < 8:
+            return jsonify({'error': 'Password must be at least 8 characters'}), 400
+
+        rows = sb.table('password_resets').select('*').eq('token', token).eq('used', False).execute()
+        if not rows.data:
+            return jsonify({'error': 'This reset link is invalid or has already been used'}), 400
+        reset = rows.data[0]
+        from datetime import timezone
+        expires_at = datetime.fromisoformat(reset['expires_at'].replace('Z', '+00:00'))
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > expires_at:
+            return jsonify({'error': 'This reset link has expired. Please request a new one.'}), 400
+
+        pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        sb.table('users').update({'password_hash': pw_hash}).eq('id', reset['user_id']).execute()
+        sb.table('password_resets').update({'used': True}).eq('token', token).execute()
+        return jsonify({'message': 'Password updated — you can now sign in.'})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# ── Admin-triggered reset for a team member ──────────────────────────────────
+@app.route('/api/auth/team/<user_id>/reset-password', methods=['POST'])
+def admin_reset_password(user_id):
+    try:
+        sb = get_sb()
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+
+        target = sb.table('users').select('id,name,email').eq('id', user_id).eq('company_id', claims['company_id']).execute()
+        if not target.data:
+            return jsonify({'error': 'Team member not found'}), 404
+        user = target.data[0]
+
+        token = create_reset_token(sb, user['id'])
+        reset_url = f"{APP_URL}?reset={token}"
+        email_sent = send_reset_email(user['email'], reset_url, user.get('name', ''))
+        return jsonify({
+            'reset_url': reset_url,
+            'email_sent': email_sent,
+            'message': f"Reset link {'emailed to ' + user['email'] if email_sent else 'created (email failed — share the link manually)'}"
         })
     except Exception as e:
         traceback.print_exc()
