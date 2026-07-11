@@ -1213,12 +1213,27 @@ function vendorHTML(){
 }
 
 // ── Print ─────────────────────────────────────────────────────────────────────
+// Builds a standalone HTML document from the exact same printHTML() markup
+// shown on screen (minus the theme-picker/tip-banner UI, which don't belong
+// in the PDF) plus the page's own CSS, so the PDF-rendering service produces
+// a byte-for-byte match of what the user actually sees — instead of a
+// separately hand-built PDF template that can only ever approximate it.
+function buildExportHTML(){
+  const css=document.querySelector('style')?.textContent||'';
+  const body=printHTML(true);
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${css}
+  body{background:#fff;margin:0;padding:16px}
+  .print-doc{box-shadow:none;max-width:100%}
+  </style></head><body>${body}</body></html>`;
+}
 async function downloadPDF(){
   const q=A.activeQuote;if(!q)return;
   const btns=document.querySelectorAll('button');let b=null;btns.forEach(x=>{if(x.textContent.includes('PDF'))b=x;});
   if(b){b.disabled=true;b.textContent='⏳ Generating…';}
   try{
-    const r=await fetch('/api/pdf/quote/'+q.id+'?which='+encodeURIComponent(printWhich()),{headers:{Authorization:'Bearer '+A.token}});
+    const html=buildExportHTML();
+    const r=await fetch('/api/pdf/render',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+A.token},
+      body:JSON.stringify({html, filename:'Quotation-'+(q.quote_data?.[0]?.ref||q.title||'quote').replace(/[^\w\-]+/g,'-')+'.pdf'})});
     if(!r.ok){const e=await r.json().catch(()=>({}));alert(e.error||'PDF generation failed');return;}
     const blob=await r.blob();
     const cd=r.headers.get('Content-Disposition')||'';
@@ -1292,7 +1307,7 @@ function printThemeSwitcherHTML(){
     </div>
   </div>`;
 }
-function printHTML(){
+function printHTML(forExport){
   const q=A.activeQuote; if(!q)return'';
   const which=printWhich();
   const os=which==='all'?q.quote_data||[]:[q.quote_data?.[+which]||q.quote_data?.[0]].filter(Boolean);
@@ -1300,11 +1315,13 @@ function printHTML(){
   const multi=os.length>1;
   const TH=getPrintTheme();
   let html='';
-  html+=printThemeSwitcherHTML();
-  html+=`<div class="print-controls" style="background:#fffbeb;border:1.5px solid #f59e0b;border-radius:8px;padding:10px 16px;margin-bottom:16px;font-size:13px;color:#92400e;display:flex;align-items:center;gap:10px">
-    <span style="font-size:18px">💡</span>
-    <span><strong>Before printing:</strong> In Chrome print dialog → <strong>More settings</strong> → uncheck <strong>"Headers and footers"</strong> to remove the URL and date from the printout.</span>
-  </div>`;
+  if(!forExport){
+    html+=printThemeSwitcherHTML();
+    html+=`<div class="print-controls" style="background:#fffbeb;border:1.5px solid #f59e0b;border-radius:8px;padding:10px 16px;margin-bottom:16px;font-size:13px;color:#92400e;display:flex;align-items:center;gap:10px">
+      <span style="font-size:18px">💡</span>
+      <span><strong>Before printing:</strong> In Chrome print dialog → <strong>More settings</strong> → uncheck <strong>"Headers and footers"</strong> to remove the URL and date from the printout.</span>
+    </div>`;
+  }
   os.forEach((o,oi)=>{
     const T=calcOpt(o); let rn=1; let sectionBlocks=[];
     (o.sections||[]).forEach(s=>{
