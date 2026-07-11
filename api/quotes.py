@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import os, jwt
+from werkzeug.exceptions import HTTPException
+import os, jwt, traceback
 from datetime import datetime
 from supabase import create_client
 
@@ -12,6 +13,16 @@ SUPABASE_KEY = os.environ.get('SUPABASE_SERVICE_KEY')
 JWT_SECRET   = os.environ.get('JWT_SECRET')
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Catch anything a route doesn't handle itself and return clean JSON
+    instead of Flask's raw HTML error page, so the frontend always gets a
+    parseable {'error': ...} response."""
+    if isinstance(e, HTTPException):
+        return e
+    traceback.print_exc()
+    return jsonify({'error': str(e)}), 500
 
 def verify_token(req):
     auth = req.headers.get('Authorization','')
@@ -27,12 +38,22 @@ def list_quotes():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
 
+    # Optional limit/offset, defaulting high enough to behave like "no limit"
+    # for any company's realistic current size — added as pagination
+    # infrastructure for when a company's quote count grows large, without
+    # changing today's dashboard behavior (which doesn't pass these yet).
+    try: limit = min(1000, max(1, int(request.args.get('limit', 500))))
+    except: limit = 500
+    try: offset = max(0, int(request.args.get('offset', 0)))
+    except: offset = 0
+
     rows = sb.table('quotes')\
-        .select('id,title,customer,status,currency,total_sell,total_gp,margin,created_at,updated_at,created_by')\
+        .select('id,title,customer,status,currency,total_sell,total_gp,margin,created_at,updated_at,created_by', count='exact')\
         .eq('company_id', claims['company_id'])\
         .order('updated_at', desc=True)\
+        .range(offset, offset + limit - 1)\
         .execute()
-    return jsonify({'quotes': rows.data})
+    return jsonify({'quotes': rows.data, 'total': rows.count or 0})
 
 # ── Get single quote ───────────────────────────────────────────────────────────
 @app.route('/api/quotes/<qid>', methods=['GET'])
@@ -50,7 +71,7 @@ def create_quote():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
 
-    d = request.json
+    d = request.json or {}
     row = sb.table('quotes').insert({
         'company_id':    claims['company_id'],
         'created_by':    claims['user_id'],
@@ -80,7 +101,7 @@ def update_quote(qid):
     if claims['role'] != 'admin' and existing.data[0]['created_by'] != claims['user_id']:
         return jsonify({'error': 'Forbidden'}), 403
 
-    d = request.json
+    d = request.json or {}
     allowed = ['title','customer','status','currency','exchange_rate','quote_data','vendor_data','terms_data','total_sell','total_gp','margin']
     update = {k: d[k] for k in allowed if k in d}
 

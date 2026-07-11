@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import os, jwt
+from werkzeug.exceptions import HTTPException
+import os, jwt, traceback
 from supabase import create_client
 
 app = Flask(__name__)
@@ -11,6 +12,13 @@ SUPABASE_KEY = os.environ.get('SUPABASE_SERVICE_KEY')
 JWT_SECRET   = os.environ.get('JWT_SECRET')
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    if isinstance(e, HTTPException):
+        return e
+    traceback.print_exc()
+    return jsonify({'error': str(e)}), 500
 
 def verify_token(req):
     auth = req.headers.get('Authorization','')

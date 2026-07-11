@@ -15,7 +15,17 @@ MS_TENANT_ID = os.environ.get('MS_TENANT_ID', 'b36855d2-9d26-43a4-bec6-82268a771
 MS_CLIENT_ID = os.environ.get('MS_CLIENT_ID', '491f22c7-9dee-4c30-b828-acf8ba8d948c')
 MS_CLIENT_SECRET = os.environ.get('MS_CLIENT_SECRET')
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'nishant@sysconic.com')
-APP_URL = os.environ.get('APP_URL', 'https://sysconic-quotes.vercel.app')
+def get_app_url():
+    """Prefer an explicit APP_URL override; otherwise self-detect from the
+    incoming request so invite/reset links always point at whichever
+    environment (dev/staging/production) actually sent them. A hardcoded
+    fallback here previously meant emails sent from staging could link to
+    production instead, since the token they contain only exists in the
+    environment that issued it."""
+    override = os.environ.get('APP_URL')
+    if override:
+        return override.rstrip('/')
+    return request.url_root.rstrip('/')
 
 def get_sb():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -306,7 +316,7 @@ def invite():
             'token': token, 'invited_by': claims['user_id']
         }).execute()
 
-        invite_url = f"{APP_URL}?invite={token}"
+        invite_url = f"{get_app_url()}?invite={token}"
 
         # Get inviter details for email
         inviter = sb.table('users').select('name').eq('id', claims['user_id']).execute()
@@ -391,7 +401,7 @@ def forgot_password():
             if rows.data:
                 user = rows.data[0]
                 token = create_reset_token(sb, user['id'])
-                reset_url = f"{APP_URL}?reset={token}"
+                reset_url = f"{get_app_url()}?reset={token}"
                 send_reset_email(user['email'], reset_url, user.get('name', ''))
         return jsonify({'message': "If that email is registered, we've sent a password reset link."})
     except Exception as e:
@@ -444,7 +454,7 @@ def admin_reset_password(user_id):
         user = target.data[0]
 
         token = create_reset_token(sb, user['id'])
-        reset_url = f"{APP_URL}?reset={token}"
+        reset_url = f"{get_app_url()}?reset={token}"
         email_sent = send_reset_email(user['email'], reset_url, user.get('name', ''))
         return jsonify({
             'reset_url': reset_url,

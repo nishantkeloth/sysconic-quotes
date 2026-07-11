@@ -365,48 +365,12 @@ def run_auto_sync():
             results.append({'company_id': cid, 'type': kind, 'provider': provider, 'synced': count, 'error': err})
     return jsonify({'companies_processed': len(companies.data or []), 'results': results})
 
-# ── Live customer search (used by the quote editor's Zoho-style search icon) ──
-@app.route('/api/integrations/search-customers', methods=['GET'])
-def search_customers():
-    claims = verify_token(request)
-    if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    # Not admin-gated — any team member can look up customers while building a
-    # quote. It just uses whichever provider the admin configured for customer
-    # sync (Team & Settings → Integrations); if none is configured yet, this
-    # quietly returns no matches rather than erroring on every keystroke.
-    provider = (request.args.get('provider') or '').strip().lower() or _company_provider(claims['company_id'], 'customer_sync_provider')
-    if not provider:
-        return jsonify({'customers': []})
-    adapter = ADAPTERS.get(provider)
-    if not adapter: return jsonify({'customers': []})
-
-    search = (request.args.get('search') or '').strip().lower()
-    if len(search) < 2:
-        return jsonify({'customers': []})
-
-    creds = _get_creds_for(claims['company_id'], provider)
-    if not creds or not adapter.is_configured(creds):
-        return jsonify({'customers': []})
-
-    try:
-        contacts = adapter.fetch_customers(creds)
-    except Exception:
-        return jsonify({'error': f'{PROVIDER_LABELS.get(provider, provider)} is unreachable right now'}), 502
-
-    def rank(ct):
-        name = (ct['name'] or '').lower(); comp = (ct['company'] or '').lower(); mail = (ct['email'] or '').lower()
-        if name.startswith(search): return 0
-        if any(w.startswith(search) for w in name.split()): return 1
-        if search in name or search in comp: return 2
-        if search in mail: return 3
-        return None
-
-    matches = []
-    for ct in contacts:
-        r = rank(ct)
-        if r is not None: matches.append((r, ct['name'].lower(), ct))
-    matches.sort(key=lambda t: (t[0], t[1]))
-    return jsonify({'customers': [m[2] for m in matches[:10]]})
+# Note: a live "/api/integrations/search-customers" route used to live here,
+# searching the connected provider (e.g. Zoho) directly on every keystroke.
+# It's no longer called from anywhere in the frontend — customer search during
+# quote creation now searches the local, synced `customers` table instead
+# (see api/customers.py), which is faster and works even when nothing is
+# connected. Removed as dead code.
 
 if __name__ == '__main__':
     app.run(debug=True)

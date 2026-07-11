@@ -1,11 +1,19 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import os, jwt, json, time, re
+from werkzeug.exceptions import HTTPException
+import os, jwt, json, time, re, socket, ipaddress, traceback
 import urllib.request, urllib.error, urllib.parse
 from supabase import create_client
 
 app = Flask(__name__)
 CORS(app)
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    if isinstance(e, HTTPException):
+        return e
+    traceback.print_exc()
+    return jsonify({'error': str(e)}), 500
 
 SUPABASE_URL   = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY   = os.environ.get('SUPABASE_SERVICE_KEY')
@@ -17,6 +25,24 @@ BUCKET = 'product-images'
 MAX_IMAGE_BYTES = 4 * 1024 * 1024  # 4 MB
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def is_safe_public_url(url):
+    """Basic SSRF guard for the user-supplied image URL in set_image(): resolve
+    the hostname and reject anything that lands on a private/loopback/link-local
+    address (e.g. internal infra, cloud metadata endpoints at 169.254.169.254)
+    before the server ever fetches it. Not bulletproof against DNS-rebinding
+    attacks, but blocks the straightforward case."""
+    try:
+        host = urllib.parse.urlparse(url).hostname
+        if not host:
+            return False
+        for info in socket.getaddrinfo(host, None):
+            ip = ipaddress.ip_address(info[4][0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+                return False
+        return True
+    except Exception:
+        return False
 
 def verify_token(req):
     auth = req.headers.get('Authorization','')
@@ -178,6 +204,8 @@ def set_image(pid):
         url = str(d['url'])
         if not url.startswith(('http://','https://')):
             return jsonify({'error': 'Invalid image URL'}), 400
+        if not is_safe_public_url(url):
+            return jsonify({'error': 'That URL cannot be fetched. Please use a direct public image link.'}), 400
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (SysconicQuotes ImageFetch)'})
         try:
             with urllib.request.urlopen(req, timeout=25) as resp:
