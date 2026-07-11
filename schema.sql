@@ -4,6 +4,12 @@ create table if not exists companies (
   name text not null,
   slug text unique not null,
   plan text default 'free',
+  status text default 'active',
+  -- Marks the single dedicated, non-customer company row that houses
+  -- platform-admin (is_platform_admin=true) users. Since users.company_id is
+  -- NOT NULL, platform staff still need *a* company row — this keeps them out
+  -- of any real tenant's company_id instead. See migrate-internal-company.sql.
+  is_internal boolean default false,
   created_at timestamptz default now()
 );
 
@@ -16,6 +22,7 @@ create table if not exists users (
   password_hash text not null default '',
   role text default 'user' check (role in ('admin','user')),
   invited_by uuid references users(id),
+  is_platform_admin boolean default false,
   created_at timestamptz default now()
 );
 

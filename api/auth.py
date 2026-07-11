@@ -448,9 +448,13 @@ def admin_reset_password(user_id):
         if not claims: return jsonify({'error': 'Unauthorized'}), 401
         if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
 
-        target = sb.table('users').select('id,name,email').eq('id', user_id).eq('company_id', claims['company_id']).execute()
+        target = sb.table('users').select('id,name,email,is_platform_admin').eq('id', user_id).eq('company_id', claims['company_id']).execute()
         if not target.data:
             return jsonify({'error': 'Team member not found'}), 404
+        if target.data[0].get('is_platform_admin'):
+            # Platform-admin accounts are managed at the platform level, not by a
+            # tenant's company admin, even if the row happens to share a company_id.
+            return jsonify({'error': 'This account is managed at the platform level'}), 403
         user = target.data[0]
 
         token = create_reset_token(sb, user['id'])
@@ -472,15 +476,30 @@ def team():
         sb = get_sb()
         claims = verify_token(request)
         if not claims: return jsonify({'error': 'Unauthorized'}), 401
+<<<<<<< HEAD
         members = sb.table('users').select('id,name,email,role,created_at').eq('company_id', claims['company_id']).execute()
         pending = sb.table('invites').select('token,email,role,created_at,expires_at').eq('company_id', claims['company_id']).eq('accepted', False).execute()
         return jsonify({'members': members.data, 'pending': pending.data})
+=======
+        members = sb.table('users').select('id,name,email,role,created_at,is_platform_admin').eq('company_id', claims['company_id']).execute()
+        # Platform-admin accounts are excluded even if their row happens to share
+        # this company_id — they're managed at the platform level, not visible
+        # to (or manageable by) a regular tenant's company admin.
+        visible_members = [m for m in members.data if not m.get('is_platform_admin')]
+        pending = sb.table('invites').select('token,email,role,created_at,expires_at').eq('company_id', claims['company_id']).eq('accepted', False).execute()
+        return jsonify({'members': visible_members, 'pending': pending.data})
+>>>>>>> staging
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 # ── Change an existing team member's role ──────────────────────────────────────
+<<<<<<< HEAD
 # Admin-only. Blocks demoting the company's last remaining admin so nobody can
 # accidentally lock the whole company out of admin-only settings/team pages.
+=======
+# Admin-only. Blocks demoting the company's last remaining admin, and blocks
+# touching any platform-admin account entirely (see note above).
+>>>>>>> staging
 @app.route('/api/auth/team/<user_id>/role', methods=['PUT'])
 def update_team_role(user_id):
     try:
@@ -493,12 +512,23 @@ def update_team_role(user_id):
         if new_role not in ('admin', 'user'):
             return jsonify({'error': 'Role must be admin or user'}), 400
 
+<<<<<<< HEAD
         target = sb.table('users').select('id,role').eq('id', user_id).eq('company_id', claims['company_id']).execute()
         if not target.data:
             return jsonify({'error': 'Team member not found'}), 404
 
         if target.data[0]['role'] == 'admin' and new_role != 'admin':
             admins = sb.table('users').select('id', count='exact').eq('company_id', claims['company_id']).eq('role', 'admin').execute()
+=======
+        target = sb.table('users').select('id,role,is_platform_admin').eq('id', user_id).eq('company_id', claims['company_id']).execute()
+        if not target.data:
+            return jsonify({'error': 'Team member not found'}), 404
+        if target.data[0].get('is_platform_admin'):
+            return jsonify({'error': 'This account is managed at the platform level'}), 403
+
+        if target.data[0]['role'] == 'admin' and new_role != 'admin':
+            admins = sb.table('users').select('id', count='exact').eq('company_id', claims['company_id']).eq('role', 'admin').eq('is_platform_admin', False).execute()
+>>>>>>> staging
             if (admins.count or 0) <= 1:
                 return jsonify({'error': 'Cannot remove the last admin. Promote someone else first.'}), 400
 
