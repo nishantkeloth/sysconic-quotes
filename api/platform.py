@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import os, jwt, bcrypt, uuid, re, traceback
+import os, jwt, bcrypt, uuid, re, traceback, requests
 from supabase import create_client
 
 # ── Global (platform-level) admin panel ──────────────────────────────────────────
@@ -20,6 +20,10 @@ CORS(app)
 SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_SERVICE_KEY')
 JWT_SECRET   = os.environ.get('JWT_SECRET')
+MS_TENANT_ID = os.environ.get('MS_TENANT_ID', 'b36855d2-9d26-43a4-bec6-82268a7713fb')
+MS_CLIENT_ID = os.environ.get('MS_CLIENT_ID', '491f22c7-9dee-4c30-b828-acf8ba8d948c')
+MS_CLIENT_SECRET = os.environ.get('MS_CLIENT_SECRET')
+SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'nishant@sysconic.com')
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -38,6 +42,72 @@ PLATFORM_ADMIN_ONLY = {'error': 'Platform admin only.'}
 
 def slugify(name):
     return re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+
+def get_app_url():
+    override = os.environ.get('APP_URL')
+    if override:
+        return override.rstrip('/')
+    return request.url_root.rstrip('/')
+
+def get_ms_token():
+    url = f'https://login.microsoftonline.com/{MS_TENANT_ID}/oauth2/v2.0/token'
+    data = {
+        'client_id': MS_CLIENT_ID,
+        'client_secret': MS_CLIENT_SECRET,
+        'scope': 'https://graph.microsoft.com/.default',
+        'grant_type': 'client_credentials'
+    }
+    r = requests.post(url, data=data)
+    return r.json().get('access_token')
+
+def send_invite_email(to_email, invite_url, company_name, invited_by_name, role):
+    """Send invite email via Microsoft Graph. Mirrors api/auth.py's version —
+    duplicated rather than imported per the Vercel single-file-per-route constraint."""
+    try:
+        token = get_ms_token()
+        if not token:
+            print('Failed to get MS token')
+            return False
+        subject = f"You're invited to join {company_name} on Sysconic Quote Manager"
+        body = f"""
+        <html><body style="font-family:Segoe UI,Arial,sans-serif;color:#1a1a1a;max-width:600px;margin:0 auto;padding:20px">
+            <div style="background:#1a3c6e;padding:24px;border-radius:8px 8px 0 0;text-align:center">
+                <div style="font-size:22px;font-weight:800;color:#fff;letter-spacing:.02em">SYSCONIC</div>
+                <div style="font-size:12px;color:rgba(255,255,255,.6);margin-top:4px">Quote Manager · SaaS Platform</div>
+            </div>
+            <div style="background:#fff;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;padding:32px">
+                <h2 style="color:#1a3c6e;margin:0 0 16px">You've been invited!</h2>
+                <p style="color:#555;line-height:1.6;margin-bottom:20px">
+                    <strong>{invited_by_name}</strong> has invited you to join <strong>{company_name}</strong>
+                    on Sysconic Quote Manager as a <strong>{role}</strong>.
+                </p>
+                <div style="text-align:center;margin-bottom:28px">
+                    <a href="{invite_url}" style="background:#1a3c6e;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:700;display:inline-block">
+                        Accept Invitation →
+                    </a>
+                </div>
+                <div style="background:#f8f9fc;border-radius:6px;padding:14px;margin-bottom:20px">
+                    <p style="font-size:12px;color:#888;margin:0 0 6px">Or copy this link:</p>
+                    <p style="font-size:12px;color:#1a3c6e;word-break:break-all;margin:0">{invite_url}</p>
+                </div>
+                <p style="font-size:12px;color:#aaa;margin:0">This invite expires in 7 days. If you didn't expect this invitation, you can ignore this email.</p>
+            </div>
+            <div style="text-align:center;padding:16px;font-size:11px;color:#aaa">Sysconic Technologies LLC · Abu Dhabi, UAE · www.sysconic.com</div>
+        </body></html>
+        """
+        resp = requests.post(
+            f'https://graph.microsoft.com/v1.0/users/{SENDER_EMAIL}/sendMail',
+            headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
+            json={'message': {
+                'subject': subject,
+                'body': {'contentType': 'HTML', 'content': body},
+                'toRecipients': [{'emailAddress': {'address': to_email}}],
+            }}
+        )
+        return resp.status_code == 202
+    except Exception:
+        traceback.print_exc()
+        return False
 
 # ── Internal/platform company (houses platform-admin accounts only) ────────────
 # Standard SaaS pattern: platform staff shouldn't belong to any real customer
@@ -149,6 +219,59 @@ def reactivate_company(cid):
     if not require_platform_admin(claims): return jsonify(PLATFORM_ADMIN_ONLY), 403
     sb.table('companies').update({'status': 'active'}).eq('id', cid).execute()
     return jsonify({'ok': True})
+
+# ── Invite a user into a specific, explicitly-chosen existing company ──────────
+# This is the actual fix for data segregation: a platform admin picks the exact
+# target company from the list (`cid` in the URL) rather than the invite
+# implicitly landing wherever the platform admin's own company_id happens to
+# point. Reuses the same `invites` table + accept-invite flow that a regular
+# company admin's invite goes through, so acceptance/onboarding behaves
+# identically no matter who sent the invite.
+@app.route('/api/platform/companies/<cid>/invite', methods=['POST'])
+def invite_to_company(cid):
+    try:
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        if not require_platform_admin(claims): return jsonify(PLATFORM_ADMIN_ONLY), 403
+
+        co = sb.table('companies').select('id,name,is_internal').eq('id', cid).execute()
+        if not co.data:
+            return jsonify({'error': 'Company not found'}), 404
+        if co.data[0].get('is_internal'):
+            return jsonify({'error': 'Cannot invite a tenant user into the internal platform company'}), 400
+        company_name = co.data[0]['name']
+
+        d = request.json or {}
+        email = (d.get('email') or '').strip().lower()
+        role = (d.get('role') or 'admin').strip().lower()
+        if role not in ('admin', 'user'):
+            return jsonify({'error': 'Role must be admin or user'}), 400
+        if not email:
+            return jsonify({'error': 'Email required'}), 400
+
+        existing = sb.table('users').select('id').eq('email', email).execute()
+        if existing.data:
+            return jsonify({'error': 'That email is already registered to an account'}), 409
+
+        token = str(uuid.uuid4())
+        sb.table('invites').insert({
+            'company_id': cid, 'email': email, 'role': role,
+            'token': token, 'invited_by': claims['user_id'],
+        }).execute()
+
+        invite_url = f"{get_app_url()}?invite={token}"
+        inviter = sb.table('users').select('name').eq('id', claims['user_id']).execute()
+        inviter_name = inviter.data[0]['name'] if inviter.data else 'The Sysconic Platform Team'
+        email_sent = send_invite_email(email, invite_url, company_name, inviter_name, role)
+
+        return jsonify({
+            'invite_url': invite_url,
+            'email_sent': email_sent,
+            'message': f"Invite {'emailed to ' + email if email_sent else 'created (email failed — share the link manually)'}"
+        }), 201
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 # ── Create a new platform-admin account ─────────────────────────────────────────
 # Always assigns the internal company, never a real tenant's company_id — the

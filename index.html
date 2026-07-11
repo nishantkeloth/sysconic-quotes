@@ -2037,18 +2037,44 @@ async function loadPlatformCompanies(){
   if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
   const list=r.companies||[];
   if(!list.length){el.innerHTML='<div style="color:var(--gray-500)">No companies yet.</div>';return;}
-  el.innerHTML=`<div class="prod-hd" style="grid-template-columns:1.5fr 90px 90px 90px 110px 130px 120px"><div>Company</div><div>Plan</div><div>Users</div><div>Quotes</div><div>Status</div><div>Created</div><div></div></div>`+
-    list.map(co=>`<div class="prod-row" style="grid-template-columns:1.5fr 90px 90px 90px 110px 130px 120px">
+  el.innerHTML=`<div class="prod-hd" style="grid-template-columns:1.3fr 80px 80px 80px 100px 110px 100px 140px"><div>Company</div><div>Plan</div><div>Users</div><div>Quotes</div><div>Status</div><div>Created</div><div></div><div></div></div>`+
+    list.map(co=>`<div class="prod-row" style="grid-template-columns:1.3fr 80px 80px 80px 100px 110px 100px 140px">
       <div>${esc(co.name)}<div style="font-size:12px;color:var(--gray-500)">${esc(co.slug||'')}</div></div>
       <div style="font-size:13px;color:var(--gray-500)">${esc(co.plan||'free')}</div>
       <div style="font-size:13px;color:var(--gray-500)">${co.user_count}</div>
       <div style="font-size:13px;color:var(--gray-500)">${co.quote_count}</div>
       <div style="font-size:12px;color:${co.status==='suspended'?'var(--red)':'var(--green)'}">${co.status==='suspended'?'Suspended':'Active'}</div>
       <div style="font-size:12px;color:var(--gray-500)">${co.created_at?new Date(co.created_at).toLocaleDateString():''}</div>
+      <div><button class="btn btn-sm" onclick="showInviteToCompanyModal('${co.id}','${esc(co.name).replace(/'/g,"&#39;")}')">Invite</button></div>
       <div>${co.status==='suspended'
         ?`<button class="btn btn-sm" onclick="reactivateCompany('${co.id}')">Reactivate</button>`
         :`<button class="btn btn-sm btn-red" onclick="suspendCompany('${co.id}')">Suspend</button>`}</div>
     </div>`).join('');
+}
+function showInviteToCompanyModal(cid,coName){
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="platInviteOverlay" onclick="if(event.target===this)document.getElementById('platInviteOverlay').remove()">
+    <div class="modal">
+      <div class="modal-title">Invite a user to ${esc(coName)}</div>
+      <div class="modal-sub">The invite is scoped to this company only — the invited user's data access will be limited to ${esc(coName)}.</div>
+      <div id="platInviteErr" class="auth-err" style="display:none"></div>
+      <div class="fld"><label>Email</label><input id="platInviteEmail" type="email" placeholder="jane@acme.com"></div>
+      <div class="fld"><label>Role</label><select id="platInviteRole" style="padding:10px 12px;font-size:15px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit;width:100%">
+        <option value="admin">Admin</option><option value="user">User</option>
+      </select></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="document.getElementById('platInviteOverlay').remove()">Cancel</button>
+        <button class="btn btn-navy" onclick="sendInviteToCompany('${cid}')">Send invite</button>
+      </div>
+    </div></div>`);
+}
+async function sendInviteToCompany(cid){
+  const email=document.getElementById('platInviteEmail').value;
+  const role=document.getElementById('platInviteRole').value;
+  const r=await api('POST',`/api/platform/companies/${cid}/invite`,{email,role});
+  if(r.error){const e=document.getElementById('platInviteErr');e.textContent=r.error;e.style.display='block';return;}
+  document.getElementById('platInviteOverlay').remove();
+  if(r.email_sent){alert('✅ Invite emailed to '+email);}
+  else{alert('⚠️ Email failed — share this link manually:\n\n'+r.invite_url);}
 }
 async function suspendCompany(cid){
   if(!confirm('Suspend this company? Their team will be blocked from logging in until reactivated.'))return;
