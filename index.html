@@ -798,10 +798,10 @@ function appHTML(){
       <div class="sb-item ${A.page==='customers'?'active':''}" onclick="A.page='customers';draw()"><span class="sb-icon">👤</span>Customers</div>
       <div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="A.page='vendorMaster';draw()"><span class="sb-icon">🏭</span>Vendors</div>
       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="A.page='editor';draw()"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}
-      <div class="sb-sec">Settings</div>
+      ${A.user?.role==='admin'?`<div class="sb-sec">Settings</div>
       <div class="sb-item ${A.page==='team'?'active':''}" onclick="A.page='team';draw()"><span class="sb-icon">👥</span>Team</div>
-      ${A.user?.role==='admin'?`<div class="sb-item ${A.page==='integrations'?'active':''}" onclick="A.page='integrations';draw()"><span class="sb-icon">🔌</span>Integrations</div>`:''}
-      ${A.user?.role==='admin'?`<div class="sb-item ${A.page==='companyProfile'?'active':''}" onclick="A.page='companyProfile';draw()"><span class="sb-icon">🏢</span>Company Profile</div>`:''}
+      <div class="sb-item ${A.page==='integrations'?'active':''}" onclick="A.page='integrations';draw()"><span class="sb-icon">🔌</span>Integrations</div>
+      <div class="sb-item ${A.page==='companyProfile'?'active':''}" onclick="A.page='companyProfile';draw()"><span class="sb-icon">🏢</span>Company Profile</div>`:''}
       ${A.user?.is_platform_admin?`<div class="sb-sec">Platform</div><div class="sb-item ${A.page==='platform'?'active':''}" onclick="A.page='platform';draw()"><span class="sb-icon">🌐</span>All Companies</div>`:''}
     </nav>
     <div class="sb-foot">
