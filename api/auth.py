@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import os, jwt, bcrypt, uuid, re, traceback, requests
+import os, jwt, bcrypt, uuid, re, traceback, requests, base64, time
+import urllib.request
 from datetime import datetime, timedelta
 from supabase import create_client
 
@@ -306,6 +307,91 @@ def team():
         pending = sb.table('invites').select('email,role,created_at,expires_at').eq('company_id', claims['company_id']).eq('accepted', False).execute()
         return jsonify({'members': members.data, 'pending': pending.data})
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ── Company Profile (branding used on the Quotation PDF / proposals) ───────────
+# Every company gets its own logo, address, TRN, phone, website and bank
+# details instead of one hardcoded identity baked into the PDF generator —
+# closes the multi-tenancy branding gap flagged in the earlier SaaS-readiness
+# review. Editing is admin-only; any logged-in user can read it (needed so the
+# PDF/proposal generation flow can pull it for the current company).
+COMPANY_PROFILE_FIELDS = [
+    'legal_name', 'address', 'trn', 'phone', 'website', 'logo_url',
+    'bank_name', 'bank_account_name', 'bank_account_no', 'bank_iban', 'bank_swift', 'bank_branch',
+]
+LOGO_BUCKET = 'company-assets'
+MAX_LOGO_BYTES = 4 * 1024 * 1024  # 4 MB
+
+@app.route('/api/auth/company-profile', methods=['GET'])
+def get_company_profile():
+    try:
+        sb = get_sb()
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        row = sb.table('companies').select('id,name,' + ','.join(COMPANY_PROFILE_FIELDS)).eq('id', claims['company_id']).execute()
+        if not row.data: return jsonify({'error': 'Not found'}), 404
+        return jsonify({'profile': row.data[0]})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/auth/company-profile', methods=['PUT'])
+def update_company_profile():
+    try:
+        sb = get_sb()
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+
+        d = request.json or {}
+        update = {}
+        for f in COMPANY_PROFILE_FIELDS:
+            if f in d and f != 'logo_url':  # logo is set separately via the upload endpoint
+                update[f] = str(d[f] or '').strip()[:500]
+        if update:
+            sb.table('companies').update(update).eq('id', claims['company_id']).execute()
+        return jsonify({'ok': True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/auth/company-profile/logo', methods=['POST'])
+def upload_company_logo():
+    try:
+        sb = get_sb()
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+
+        d = request.json or {}
+        raw = str(d.get('data') or '')
+        if not raw: return jsonify({'error': 'No image data provided'}), 400
+        if ',' in raw: raw = raw.split(',', 1)[1]  # strip data: prefix
+        try:
+            data = base64.b64decode(raw)
+        except Exception:
+            return jsonify({'error': 'Invalid image data'}), 400
+
+        ctype = str(d.get('content_type') or 'image/png').split(';')[0].strip().lower()
+        ext = {'image/jpeg':'jpg','image/jpg':'jpg','image/png':'png','image/webp':'webp'}.get(ctype)
+        if not ext:
+            return jsonify({'error': f'Unsupported image type ({ctype or "unknown"}). Use JPG, PNG or WEBP.'}), 400
+        if len(data) > MAX_LOGO_BYTES:
+            return jsonify({'error': 'Logo is larger than 4 MB. Please use a smaller image.'}), 400
+
+        path = f"{claims['company_id']}/logo-{int(time.time())}.{ext}"
+        try:
+            sb.storage.from_(LOGO_BUCKET).upload(path, data, {'content-type': ctype})
+        except Exception:
+            return jsonify({'error': 'Could not save logo to storage. Check that the company-assets bucket exists and is public.'}), 502
+
+        public_url = sb.storage.from_(LOGO_BUCKET).get_public_url(path)
+        if isinstance(public_url, str): public_url = public_url.rstrip('?')
+
+        sb.table('companies').update({'logo_url': public_url}).eq('id', claims['company_id']).execute()
+        return jsonify({'logo_url': public_url})
+    except Exception as e:
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
