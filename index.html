@@ -160,18 +160,19 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 
 /* ── Column headers ── */
 .col-hd{display:grid;padding:9px 14px;background:var(--navy);border-radius:8px 8px 0 0;font-size:12px;font-weight:700;color:rgba(255,255,255,.85);text-transform:uppercase;letter-spacing:.05em}
-.col-hd.int{grid-template-columns:28px 80px 130px 1fr 75px 85px 55px 70px 85px 45px 90px 65px 100px 28px;font-size:10.5px;letter-spacing:.02em}
+.col-hd.int{grid-template-columns:28px 80px 130px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 95px 92px 128px 28px;min-width:1180px;font-size:10.5px;letter-spacing:.02em}
 .col-hd.int div{padding:0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-right:1px solid rgba(255,255,255,.15)}
 .col-hd.int div:last-child{border-right:none}
 .item-row.int>*{border-right:1px solid var(--gray-100)}
 .item-row.int>*:last-child{border-right:none}
-.col-hd.int.img{grid-template-columns:28px 44px 80px 130px 1fr 75px 85px 55px 70px 85px 45px 90px 65px 100px 28px}
+.col-hd.int.img{grid-template-columns:28px 44px 80px 130px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 95px 92px 128px 28px;min-width:1224px}
 .col-hd.cli{grid-template-columns:28px 90px 140px 1fr 60px 95px 115px 28px}
 .col-hd.cli.img{grid-template-columns:28px 44px 90px 140px 1fr 60px 95px 115px 28px}
 .col-hd div{padding:0 5px}
+.grid-scroll{overflow-x:auto;overflow-y:hidden}
 
 /* ── Item rows ── */
-.items-wrap{background:var(--white);border:1.5px solid var(--gray-200);border-top:none;border-radius:0 0 10px 10px;overflow-x:auto;overflow-y:hidden;margin-bottom:4px}
+.items-wrap{background:var(--white);border:1.5px solid var(--gray-200);border-top:none;border-radius:0 0 10px 10px;overflow:hidden;margin-bottom:4px}
 .item-row{display:grid;padding:9px 14px;align-items:start;border-bottom:1px solid var(--gray-100);transition:background .12s}
 .item-row:last-child{border-bottom:none}
 .item-row:hover{background:#f5f8ff}
@@ -314,7 +315,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
      (.item-row.int/.int.img already scroll at their own min-width on all screen
      sizes — see base rules above; this just covers the simpler .cli/.cli.img view.) */
   .items-wrap{-webkit-overflow-scrolling:touch}
-  .item-row.cli,.item-row.cli.img{min-width:900px}
+  .item-row.cli,.item-row.cli.img,.col-hd.cli,.col-hd.cli.img{min-width:900px}
   .sec-hd{flex-wrap:wrap;gap:6px}
 }
 @media (max-width:600px){
@@ -1079,8 +1080,10 @@ function editorHTML(){
           <button class="btn btn-sm btn-red" onclick="delSec(${si})">Remove</button>
         </div>
       </div>
-      <div class="col-hd ${isInt?'int':'cli'}${IMG?' img':''}">${hds.map(h=>`<div>${h}</div>`).join('')}</div>
-      <div class="items-wrap">${rows||`<div style="padding:20px;text-align:center;color:var(--gray-500);font-size:14px">No items yet — <button class="btn btn-sm" onclick="addItem(${si})">+ Add item</button></div>`}</div>
+      <div class="grid-scroll">
+        <div class="col-hd ${isInt?'int':'cli'}${IMG?' img':''}">${hds.map(h=>`<div>${h}</div>`).join('')}</div>
+        <div class="items-wrap">${rows||`<div style="padding:20px;text-align:center;color:var(--gray-500);font-size:14px">No items yet — <button class="btn btn-sm" onclick="addItem(${si})">+ Add item</button></div>`}</div>
+      </div>
     </div>`;
   });
 
