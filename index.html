@@ -2095,19 +2095,38 @@ async function saveNewCompany(){
   loadPlatformCompanies();
 }
 
+function roleSelectHTML(currentRole,onchange){
+  return `<select class="input" style="width:auto;padding:4px 8px;font-size:13px;margin-left:10px" onchange="${onchange}">
+    <option value="user"${currentRole==='user'?' selected':''}>User</option>
+    <option value="admin"${currentRole==='admin'?' selected':''}>Admin</option>
+  </select>`;
+}
 async function loadTeam(){
   const el=document.getElementById('teamList'); if(!el)return;
   const r=await api('GET','/api/auth/team');
   const members=r.members||[], pending=r.pending||[];
+  const isAdmin=A.user?.role==='admin';
   let html=members.map(m=>`<div class="team-member">
     <div class="team-avatar">${(m.name||m.email)[0].toUpperCase()}</div>
     <div style="flex:1"><div style="font-size:15px;font-weight:600">${esc(m.name||'—')}</div><div style="font-size:13px;color:var(--gray-500)">${esc(m.email)}</div></div>
-    <span class="role-badge role-${m.role}">${m.role}</span>
-    ${A.user?.role==='admin'?`<button class="btn btn-sm" style="margin-left:10px" onclick="adminResetPassword('${m.id}','${esc(m.email).replace(/'/g,"&#39;")}')">Reset password</button>`:''}
+    ${isAdmin?roleSelectHTML(m.role,`changeMemberRole('${m.id}',this.value,'${esc(m.email).replace(/'/g,"&#39;")}')`):`<span class="role-badge role-${m.role}">${m.role}</span>`}
+    ${isAdmin?`<button class="btn btn-sm" style="margin-left:10px" onclick="adminResetPassword('${m.id}','${esc(m.email).replace(/'/g,"&#39;")}')">Reset password</button>`:''}
   </div>`).join('');
   if(pending.length){html+=`<div style="font-size:12px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px">Pending invites</div>`;
-    html+=pending.map(p=>`<div class="team-member"><div class="team-avatar" style="background:var(--amber-light);color:var(--amber)">✉</div><div style="flex:1"><div style="font-size:15px;font-weight:600">${esc(p.email)}</div><div style="font-size:13px;color:var(--gray-500)">Pending · ${p.role}</div></div></div>`).join('');}
+    html+=pending.map(p=>`<div class="team-member"><div class="team-avatar" style="background:var(--amber-light);color:var(--amber)">✉</div><div style="flex:1"><div style="font-size:15px;font-weight:600">${esc(p.email)}</div><div style="font-size:13px;color:var(--gray-500)">Pending</div></div>
+    ${isAdmin?roleSelectHTML(p.role,`changeInviteRole('${p.token}',this.value,'${esc(p.email).replace(/'/g,"&#39;")}')`):`<span class="role-badge role-${p.role}">${p.role}</span>`}
+    </div>`).join('');}
   el.innerHTML=html||'<div style="color:var(--gray-500)">No team members yet</div>';
+}
+async function changeMemberRole(userId,newRole,email){
+  const r=await api('PUT',`/api/auth/team/${userId}/role`,{role:newRole});
+  if(r.error){alert('❌ '+r.error);loadTeam();return;}
+  loadTeam();
+}
+async function changeInviteRole(token,newRole,email){
+  const r=await api('PUT',`/api/auth/invites/${token}/role`,{role:newRole});
+  if(r.error){alert('❌ '+r.error);loadTeam();return;}
+  loadTeam();
 }
 async function adminResetPassword(userId,email){
   if(!confirm(`Send a password reset link to ${email}?`))return;

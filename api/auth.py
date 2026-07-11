@@ -448,9 +448,13 @@ def admin_reset_password(user_id):
         if not claims: return jsonify({'error': 'Unauthorized'}), 401
         if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
 
-        target = sb.table('users').select('id,name,email').eq('id', user_id).eq('company_id', claims['company_id']).execute()
+        target = sb.table('users').select('id,name,email,is_platform_admin').eq('id', user_id).eq('company_id', claims['company_id']).execute()
         if not target.data:
             return jsonify({'error': 'Team member not found'}), 404
+        if target.data[0].get('is_platform_admin'):
+            # Platform-admin accounts are managed at the platform level, not by a
+            # tenant's company admin, even if the row happens to share a company_id.
+            return jsonify({'error': 'This account is managed at the platform level'}), 403
         user = target.data[0]
 
         token = create_reset_token(sb, user['id'])
@@ -472,10 +476,69 @@ def team():
         sb = get_sb()
         claims = verify_token(request)
         if not claims: return jsonify({'error': 'Unauthorized'}), 401
-        members = sb.table('users').select('id,name,email,role,created_at').eq('company_id', claims['company_id']).execute()
-        pending = sb.table('invites').select('email,role,created_at,expires_at').eq('company_id', claims['company_id']).eq('accepted', False).execute()
-        return jsonify({'members': members.data, 'pending': pending.data})
+        members = sb.table('users').select('id,name,email,role,created_at,is_platform_admin').eq('company_id', claims['company_id']).execute()
+        # Platform-admin accounts are excluded even if their row happens to share
+        # this company_id — they're managed at the platform level, not visible
+        # to (or manageable by) a regular tenant's company admin.
+        visible_members = [m for m in members.data if not m.get('is_platform_admin')]
+        pending = sb.table('invites').select('token,email,role,created_at,expires_at').eq('company_id', claims['company_id']).eq('accepted', False).execute()
+        return jsonify({'members': visible_members, 'pending': pending.data})
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ── Change an existing team member's role ──────────────────────────────────────
+# Admin-only. Blocks demoting the company's last remaining admin, and blocks
+# touching any platform-admin account entirely (see note above).
+@app.route('/api/auth/team/<user_id>/role', methods=['PUT'])
+def update_team_role(user_id):
+    try:
+        sb = get_sb()
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+
+        new_role = (request.json or {}).get('role', '').strip().lower()
+        if new_role not in ('admin', 'user'):
+            return jsonify({'error': 'Role must be admin or user'}), 400
+
+        target = sb.table('users').select('id,role,is_platform_admin').eq('id', user_id).eq('company_id', claims['company_id']).execute()
+        if not target.data:
+            return jsonify({'error': 'Team member not found'}), 404
+        if target.data[0].get('is_platform_admin'):
+            return jsonify({'error': 'This account is managed at the platform level'}), 403
+
+        if target.data[0]['role'] == 'admin' and new_role != 'admin':
+            admins = sb.table('users').select('id', count='exact').eq('company_id', claims['company_id']).eq('role', 'admin').eq('is_platform_admin', False).execute()
+            if (admins.count or 0) <= 1:
+                return jsonify({'error': 'Cannot remove the last admin. Promote someone else first.'}), 400
+
+        row = sb.table('users').update({'role': new_role}).eq('id', user_id).execute()
+        return jsonify({'user': {'id': row.data[0]['id'], 'role': row.data[0]['role']}})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# ── Change the role on a pending (not-yet-accepted) invite ─────────────────────
+@app.route('/api/auth/invites/<token>/role', methods=['PUT'])
+def update_invite_role(token):
+    try:
+        sb = get_sb()
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+
+        new_role = (request.json or {}).get('role', '').strip().lower()
+        if new_role not in ('admin', 'user'):
+            return jsonify({'error': 'Role must be admin or user'}), 400
+
+        existing = sb.table('invites').select('id').eq('token', token).eq('company_id', claims['company_id']).eq('accepted', False).execute()
+        if not existing.data:
+            return jsonify({'error': 'Invite not found'}), 404
+
+        sb.table('invites').update({'role': new_role}).eq('token', token).execute()
+        return jsonify({'ok': True})
+    except Exception as e:
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 # ── Company Profile (branding used on the Quotation PDF / proposals) ───────────
