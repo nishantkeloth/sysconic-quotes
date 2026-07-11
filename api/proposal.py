@@ -601,16 +601,36 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
     doc.build(E)
     return buf.getvalue()
 
-# ── Route ─────────────────────────────────────────────────────────────────────
-@app.route('/api/proposal/generate', methods=['POST'])
-def generate_proposal():
+# ── Routes ────────────────────────────────────────────────────────────────────
+# Two-step flow: draft the AI content first (no PDF yet) so it can be reviewed
+# and edited in the UI, then render whichever document(s) are confirmed —
+# Technical, Commercial, and Combined can each be generated independently.
+
+def _load_quote(claims, quote_id):
+    row = sb.table('quotes').select('*').eq('id', quote_id).eq('company_id', claims['company_id']).execute()
+    if not row.data: return None
+    quote = row.data[0]
+    for f in ('quote_data', 'terms_data', 'vendor_data'):
+        if isinstance(quote.get(f), str):
+            try: quote[f] = json.loads(quote[f])
+            except: quote[f] = []
+    return quote
+
+def _load_company(claims):
+    co_row = sb.table('companies').select('name,legal_name,address,trn,phone,website,logo_url').eq('id', claims['company_id']).execute()
+    co_raw = co_row.data[0] if co_row.data else {}
+    company = build_company_dict(co_raw, co_raw.get('name'))
+    logo_bytes = _fetch_bytes(co_raw.get('logo_url'))
+    return company, logo_bytes
+
+@app.route('/api/proposal/draft', methods=['POST'])
+def draft_proposal():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
 
     d = request.json or {}
     quote_id = d.get('quote_id')
     brief = (d.get('brief') or '').strip()
-    combine = bool(d.get('combine'))
     which = str(d.get('which') or 'all')
     attachment = d.get('attachment') or None  # {filename, data (base64)}
 
@@ -619,18 +639,8 @@ def generate_proposal():
     if not brief and not attachment:
         return jsonify({'error': 'Describe the project or attach a reference document'}), 400
 
-    row = sb.table('quotes').select('*').eq('id', quote_id).eq('company_id', claims['company_id']).execute()
-    if not row.data: return jsonify({'error': 'Quote not found'}), 404
-    quote = row.data[0]
-    for f in ('quote_data', 'terms_data', 'vendor_data'):
-        if isinstance(quote.get(f), str):
-            try: quote[f] = json.loads(quote[f])
-            except: quote[f] = []
-
-    co_row = sb.table('companies').select('name,legal_name,address,trn,phone,website,logo_url').eq('id', claims['company_id']).execute()
-    co_raw = co_row.data[0] if co_row.data else {}
-    company = build_company_dict(co_raw, co_raw.get('name'))
-    logo_bytes = _fetch_bytes(co_raw.get('logo_url'))
+    quote = _load_quote(claims, quote_id)
+    if not quote: return jsonify({'error': 'Quote not found'}), 404
 
     attachment_text = ''
     if attachment and attachment.get('data'):
@@ -656,35 +666,55 @@ def generate_proposal():
     content.setdefault('title', quote.get('title') or 'Technical Proposal')
     content['customer_name'] = quote.get('customer') or ''
     content['date'] = (opts[0].get('date') if opts else '') or time.strftime('%d %B %Y')
-    content['prepared_by'] = (opts[0].get('by') if opts else '') or company.get('name')
+    content['prepared_by'] = (opts[0].get('by') if opts else '') or ''
 
-    files = []
-    ts = int(time.time())
+    return jsonify({'content': content})
+
+@app.route('/api/proposal/render', methods=['POST'])
+def render_proposal():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+
+    d = request.json or {}
+    quote_id = d.get('quote_id')
+    which = str(d.get('which') or 'all')
+    kind = d.get('kind') or 'combined'
+    content = d.get('content') or {}
+
+    if not quote_id:
+        return jsonify({'error': 'No quote selected'}), 400
+    if kind not in ('technical', 'commercial', 'combined'):
+        return jsonify({'error': 'Invalid document type'}), 400
+    if not content.get('title'):
+        return jsonify({'error': 'Missing proposal content — please draft it first'}), 400
+
+    quote = _load_quote(claims, quote_id)
+    if not quote: return jsonify({'error': 'Quote not found'}), 404
+    company, logo_bytes = _load_company(claims)
+
+    # Pricing is always pulled fresh from the live quote, never from the AI draft.
+    _, opts = get_equipment_summary(quote, which)
+    cur = quote.get('currency') or 'AED'
+
+    labels = {'technical': 'TECHNICAL PROPOSAL', 'commercial': 'COMMERCIAL PROPOSAL', 'combined': 'TECHNICAL & COMMERCIAL PROPOSAL'}
+    label_map = {'technical': 'Technical-Proposal', 'commercial': 'Commercial-Proposal', 'combined': 'Proposal'}
+
     try:
-        if combine:
-            pdf_bytes = build_proposal_pdf('combined', content, quote, opts, company, logo_bytes, cur, 'TECHNICAL & COMMERCIAL PROPOSAL')
-            files.append(('Proposal', pdf_bytes))
-        else:
-            tech_pdf = build_proposal_pdf('technical', content, quote, opts, company, logo_bytes, cur, 'TECHNICAL PROPOSAL')
-            files.append(('Technical-Proposal', tech_pdf))
-            comm_pdf = build_proposal_pdf('commercial', content, quote, opts, company, logo_bytes, cur, 'COMMERCIAL PROPOSAL')
-            files.append(('Commercial-Proposal', comm_pdf))
+        pdf_bytes = build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, labels[kind])
     except Exception as e:
         return jsonify({'error': f'Proposal generation failed while building the PDF: {str(e)[:250]}'}), 500
 
-    out = []
+    ts = int(time.time())
     safe_title = ''.join(c if c.isalnum() or c in ' -_' else '' for c in (content.get('title') or 'Proposal')).strip().replace(' ', '-')[:60]
-    for label, pdf_bytes in files:
-        path = f"{claims['company_id']}/{safe_title}-{label}-{ts}.pdf"
-        try:
-            sb.storage.from_(BUCKET).upload(path, pdf_bytes, {'content-type': 'application/pdf'})
-            url = sb.storage.from_(BUCKET).get_public_url(path)
-            if isinstance(url, str): url = url.rstrip('?')
-        except Exception as e:
-            return jsonify({'error': f'Could not save the generated proposal: {str(e)[:250]}'}), 502
-        out.append({'name': f"{label}.pdf", 'url': url})
+    path = f"{claims['company_id']}/{safe_title}-{label_map[kind]}-{ts}.pdf"
+    try:
+        sb.storage.from_(BUCKET).upload(path, pdf_bytes, {'content-type': 'application/pdf'})
+        url = sb.storage.from_(BUCKET).get_public_url(path)
+        if isinstance(url, str): url = url.rstrip('?')
+    except Exception as e:
+        return jsonify({'error': f'Could not save the generated proposal: {str(e)[:250]}'}), 502
 
-    return jsonify({'files': out, 'title': content.get('title')})
+    return jsonify({'file': {'name': f"{label_map[kind]}.pdf", 'url': url}})
 
 if __name__ == '__main__':
     app.run(debug=True)
