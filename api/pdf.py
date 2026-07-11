@@ -212,8 +212,8 @@ def build_quote_pdf(quote, logo_bytes, which='all', company=None):
         # table) followed by its own item table — mirrors the on-screen/print
         # view, where sections are visually separate blocks rather than rows
         # merged into one continuous table.
-        widths = [CW*0.05, CW*0.11, CW*0.15, CW*0.37, CW*0.12, CW*0.07, CW*0.13]
-        header = [Paragraph(x, S['th']) for x in ['#','Brand','Model','Description',f'Unit Price ({cur})','Qty',f'Total ({cur})']]
+        widths = [CW*0.04, CW*0.10, CW*0.13, CW*0.30, CW*0.12, CW*0.06, CW*0.11, CW*0.14]
+        header = [Paragraph(x, S['th']) for x in ['#','Brand','Model','Description',f'Unit ({cur})','Qty','VAT',f'Total ({cur})']]
         rn = 1
         for s in (o.get('sections') or []):
             if s.get('name'):
@@ -225,14 +225,19 @@ def build_quote_pdf(quote, logo_bytes, which='all', company=None):
             rows = [header]
             for it in (s.get('items') or []):
                 up, tp = calc_item(it)
+                vat_amt = tp * (rate/100.0) if vat_on else None
+                vat_style = ParagraphStyle('vatc', parent=S['baseR'], textColor=HexColor('#a8b0bd'))
                 rows.append([Paragraph(str(rn), S['baseC']), Paragraph(str(it.get('brand') or ''), S['base']),
                              Paragraph(str(it.get('model') or ''), S['base']), Paragraph(str(it.get('desc') or ''), S['base']),
                              Paragraph(fmt(up), S['baseR']), Paragraph(fmt(_num(it.get('qty'))), S['baseC']),
+                             Paragraph(fmt(vat_amt) if vat_amt is not None else '—', vat_style),
                              Paragraph(fmt(tp), S['baseR'])])
                 rn += 1
             tbl = Table(rows, colWidths=widths, repeatRows=1)
             style = [('BACKGROUND',(0,0),(-1,0),NAVY),('VALIGN',(0,0),(-1,-1),'TOP'),
                      ('LINEBELOW',(0,1),(-1,-1),0.4,GRAYB),
+                     ('LINEAFTER',(0,0),(-2,0),0.5,HexColor('#3a4d75')),
+                     ('LINEAFTER',(0,1),(-2,-1),0.5,GRAYB),
                      ('TOPPADDING',(0,0),(-1,-1),4.5),('BOTTOMPADDING',(0,0),(-1,-1),4.5),
                      ('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5)]
             for ri in range(1, len(rows)):
