@@ -732,6 +732,7 @@ function buildTopbarRight(){
     <label class="btn" style="cursor:pointer" title="Import from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importExcel(event)"></label>
     <button class="btn${imgOn()?' btn-navy':''}" onclick="toggleImgOn()" title="Toggle product images & catalog assist for this quote">🖼 Images ${imgOn()?'ON':'OFF'}</button>
     <button class="btn" onclick="openBomModal()" title="Generate a bill of materials from a project description using AI">✨ Auto-BOM</button>
+    <button class="btn" onclick="openProposalModal()" title="Generate a technical/commercial proposal document from this quote using AI">📑 Generate Proposal</button>
     <button class="btn" onclick="reviewQuote()">🔍 Review</button>
     <button class="btn" onclick="A.page='dashboard';draw()">← Back</button>
     <button class="btn btn-navy" onclick="saveQuote()">💾 Save</button>`;
@@ -1422,6 +1423,75 @@ function applyBom(){
   });
   if(!added){alert('No items selected.');return;}
   schedSave();closeBomModal();draw();
+}
+
+// ── Proposal generator ───────────────────────────────────────────────────────────
+let PROP={busy:false,file:null};
+
+function openProposalModal(){
+  if(!A.activeQuote)return;
+  PROP={busy:false,file:null};
+  const opts_=opts();
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="propOverlay" onclick="if(event.target===this)closeProposalModal()">
+    <div class="modal" style="max-width:640px;max-height:85vh;overflow-y:auto">
+      <div class="modal-title">📑 Generate Technical & Commercial Proposal</div>
+      <div class="modal-sub">Describe the project (or attach a brief/spec document) — AI will draft a modern proposal. Pricing always comes from this quote's real numbers, never invented.</div>
+      <textarea id="propBrief" rows="4" style="width:100%;padding:10px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit;resize:vertical;margin-bottom:12px" placeholder="e.g. Signage and interactive flat panel rollout across 3 floors, includes control system and 1-year warranty"></textarea>
+      <div style="margin-bottom:12px">
+        <label style="font-size:13px;font-weight:600;color:var(--gray-500);display:block;margin-bottom:6px">Attachment (optional — PDF, Word, or text)</label>
+        <input type="file" id="propFile" accept=".pdf,.docx,.txt" onchange="propFileChosen(event)">
+      </div>
+      <div class="field-grid g2" style="margin-bottom:6px">
+        <div class="fld2"><label>Option to price</label>
+          <select id="propWhich">
+            ${opts_.map((op,i)=>`<option value="${i}" ${i===A.activeOpt?'selected':''}>${esc(op.label)}</option>`).join('')}
+            <option value="all">All options</option>
+          </select>
+        </div>
+        <div class="fld2"><label>Combine into one document?</label>
+          <select id="propCombine">
+            <option value="yes">Yes — single combined proposal (priced)</option>
+            <option value="no" selected>No — separate Technical (no pricing) + Commercial docs</option>
+          </select>
+        </div>
+      </div>
+      <div id="propBody"></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeProposalModal()">Cancel</button>
+        <button class="btn btn-navy" id="propGenBtn" onclick="generateProposal()">Generate</button>
+      </div>
+    </div></div>`);
+}
+function closeProposalModal(){const el=document.getElementById('propOverlay');if(el)el.remove();PROP={busy:false,file:null};}
+function propFileChosen(e){
+  const f=e.target.files&&e.target.files[0];if(!f)return;
+  const reader=new FileReader();
+  reader.onload=()=>{PROP.file={filename:f.name,data:reader.result};};
+  reader.readAsDataURL(f);
+}
+async function generateProposal(){
+  if(PROP.busy)return;
+  const brief=(document.getElementById('propBrief')?.value||'').trim();
+  if(!brief&&!PROP.file){alert('Describe the project or attach a reference document first.');return;}
+  const which=document.getElementById('propWhich')?.value||'all';
+  const combine=(document.getElementById('propCombine')?.value||'no')==='yes';
+  PROP.busy=true;
+  const btn=document.getElementById('propGenBtn');if(btn){btn.disabled=true;btn.textContent='Generating…';}
+  const body=document.getElementById('propBody');
+  if(body)body.innerHTML='<div style="text-align:center;padding:26px;color:var(--gray-500)">⏳ Drafting your proposal… this can take up to a minute</div>';
+  let r;
+  try{
+    r=await api('POST','/api/proposal/generate',{quote_id:A.activeQuote.id,brief,which,combine,attachment:PROP.file});
+  }catch(e){
+    if(body)body.innerHTML='<div class="auth-err">Could not reach the proposal service. Please try again.</div>';
+    PROP.busy=false;if(btn){btn.disabled=false;btn.textContent='Generate';}return;
+  }
+  PROP.busy=false;if(btn){btn.disabled=false;btn.textContent='Generate';}
+  if(r.error){if(body)body.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  if(body)body.innerHTML=`<div style="margin-top:4px">
+    <div style="font-weight:700;font-size:14px;color:var(--navy);margin-bottom:10px">✅ ${esc(r.title||'Proposal')} generated</div>
+    ${(r.files||[]).map(f=>`<a href="${f.url}" target="_blank" class="btn btn-navy" style="display:inline-block;margin:0 8px 8px 0;text-decoration:none">⬇ ${esc(f.name)}</a>`).join('')}
+  </div>`;
 }
 
 // ── Customer Master ────────────────────────────────────────────────────────────

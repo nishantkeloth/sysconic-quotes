@@ -85,6 +85,31 @@ def all_customers():
     _cust['exp']  = time.time() + 600
     return out
 
+# ── Cached vendor list (refreshed every 10 minutes) ────────────────────────────
+_vend = {'list': None, 'exp': 0}
+
+def all_vendors():
+    if _vend['list'] is not None and time.time() < _vend['exp']:
+        return _vend['list']
+    out, page = [], 1
+    while page <= 10:  # safety cap: 10 pages x 200 = 2000 vendors
+        data = zoho_get('/contacts', {'contact_type': 'vendor', 'per_page': 200,
+                                      'page': page, 'sort_column': 'contact_name'})
+        for ct in data.get('contacts', []):
+            out.append({
+                'id':      ct.get('contact_id'),
+                'name':    ct.get('contact_name') or ct.get('company_name') or '',
+                'company': ct.get('company_name') or '',
+                'email':   ct.get('email') or '',
+                'phone':   ct.get('phone') or ct.get('mobile') or '',
+            })
+        if not (data.get('page_context') or {}).get('has_more_page'):
+            break
+        page += 1
+    _vend['list'] = out
+    _vend['exp']  = time.time() + 600
+    return out
+
 # ── Connection status (for quick verification) ────────────────────────────────
 @app.route('/api/zoho/status', methods=['GET'])
 def status():
@@ -180,6 +205,47 @@ def sync_customers():
         sb.table('customers').upsert(rows, on_conflict='company_id,zoho_contact_id').execute()
     except Exception as e:
         return jsonify({'error': f'Could not save synced customers: {str(e)[:300]}'}), 502
+
+    return jsonify({'synced': len(rows)})
+
+# ── Sync Zoho vendor contacts into the native vendors table ───────────────────
+@app.route('/api/zoho/sync-vendors', methods=['POST'])
+def sync_vendors():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not zoho_ready():
+        return jsonify({'error': 'Zoho is not configured for this account (missing ZOHO_* environment variables). Add vendors manually instead.'}), 500
+
+    try:
+        vends = all_vendors()
+    except urllib.error.HTTPError as e:
+        return jsonify({'error': f'Zoho API error ({e.code})'}), 502
+    except Exception as e:
+        return jsonify({'error': f'Zoho is unreachable right now: {str(e)[:200]}'}), 502
+
+    if not vends:
+        return jsonify({'synced': 0})
+
+    rows = []
+    for ct in vends:
+        if not ct.get('id'):
+            continue
+        rows.append({
+            'company_id':      claims['company_id'],
+            'name':            (ct.get('name') or '')[:500] or 'Unnamed contact',
+            'email':           (ct.get('email') or '')[:500],
+            'phone':           (ct.get('phone') or '')[:500],
+            'source':          'zoho',
+            'zoho_contact_id': ct['id'],
+        })
+
+    if not rows:
+        return jsonify({'synced': 0})
+
+    try:
+        sb.table('vendors').upsert(rows, on_conflict='company_id,zoho_contact_id').execute()
+    except Exception as e:
+        return jsonify({'error': f'Could not save synced vendors: {str(e)[:300]}'}), 502
 
     return jsonify({'synced': len(rows)})
 
