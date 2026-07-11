@@ -14,6 +14,9 @@
     { "src": "api/proposal.py", "use": "@vercel/python" },
     { "src": "index.html",    "use": "@vercel/static" }
   ],
+  "functions": {
+    "api/pdf.py": { "maxDuration": 30 }
+  },
   "routes": [
     { "src": "/api/auth/(.*)",   "dest": "api/auth.py" },
     { "src": "/api/quotes/(.*)", "dest": "api/quotes.py" },

@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
-import os, jwt, base64
+import os, jwt, base64, json, re
 import urllib.request, urllib.error
 from supabase import create_client
 
@@ -10,6 +10,7 @@ CORS(app)
 SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_SERVICE_KEY')
 JWT_SECRET   = os.environ.get('JWT_SECRET')
+PDFSHIFT_API_KEY = os.environ.get('PDFSHIFT_API_KEY')
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -350,6 +351,53 @@ def quote_pdf(qid):
     fname = f"Quotation-{ref or qid[:8]}.pdf".replace(' ', '-')
     return Response(pdf, mimetype='application/pdf',
                     headers={'Content-Disposition': f'attachment; filename="{fname}"'})
+
+
+# ══ Pixel-exact PDF via PDFShift ═════════════════════════════════════════════
+# Renders the *actual* HTML the browser shows (built client-side from the same
+# printHTML() used for the on-screen print view), through a real Chromium
+# instance — guaranteeing the download matches what the user sees, instead of
+# the best-effort reportlab reconstruction above (kept as a fallback route).
+@app.route('/api/pdf/render', methods=['POST'])
+def render_pdf():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not PDFSHIFT_API_KEY:
+        return jsonify({'error': 'PDF rendering is not configured (missing PDFSHIFT_API_KEY)'}), 500
+
+    d = request.json or {}
+    html = d.get('html', '')
+    if not html:
+        return jsonify({'error': 'No HTML provided'}), 400
+    filename = (d.get('filename') or 'Quotation.pdf').strip()
+    filename = re.sub(r'[\r\n"\\]', '', filename)[:150] or 'Quotation.pdf'
+    if not filename.lower().endswith('.pdf'):
+        filename += '.pdf'
+
+    payload = json.dumps({
+        'source': html,
+        'use_print': True,   # apply the same @media print CSS rules the browser uses
+        'format': 'A4',
+        'sandbox': False,
+    }).encode('utf-8')
+
+    req = urllib.request.Request(
+        'https://api.pdfshift.io/v3/convert/pdf',
+        data=payload,
+        headers={'X-API-Key': PDFSHIFT_API_KEY, 'Content-Type': 'application/json'},
+        method='POST'
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            pdf_bytes = resp.read()
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='ignore')
+        return jsonify({'error': f'PDF service error ({e.code}): {body[:300]}'}), 502
+    except Exception as e:
+        return jsonify({'error': f'PDF generation failed: {str(e)[:200]}'}), 500
+
+    return Response(pdf_bytes, mimetype='application/pdf',
+                    headers={'Content-Disposition': f'attachment; filename="{filename}"'})
 
 if __name__ == '__main__':
     app.run(debug=True)
