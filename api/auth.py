@@ -212,13 +212,37 @@ def register():
         if existing.data:
             return jsonify({'error': 'Email already registered'}), 409
 
+        # If this email has a pending (unexpired) invite to a company, honor it
+        # instead of spinning up a brand-new tenant — otherwise someone who
+        # signs up directly (rather than via the invite link) would silently
+        # orphan the invite (it stays "Pending" forever) and land in their own
+        # disconnected company instead of the one they were actually invited to.
+        pending_invite = sb.table('invites').select('*').eq('email', email).eq('accepted', False)\
+            .gt('expires_at', datetime.utcnow().isoformat()).order('created_at', desc=True).limit(1).execute()
+
+        pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+        if pending_invite.data:
+            invite = pending_invite.data[0]
+            co = sb.table('companies').select('*').eq('id', invite['company_id']).execute().data[0]
+            user = sb.table('users').insert({
+                'company_id': co['id'], 'email': email, 'name': name,
+                'role': invite['role'], 'password_hash': pw_hash, 'invited_by': invite['invited_by']
+            }).execute().data[0]
+            sb.table('invites').update({'accepted': True}).eq('token', invite['token']).execute()
+            token = make_token(user['id'], co['id'], user['role'], is_platform_admin=False)
+            return jsonify({
+                'token': token,
+                'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'role': user['role'], 'is_platform_admin': False},
+                'company': {'id': co['id'], 'name': co['name'], 'slug': co['slug']}
+            })
+
         slug = slugify(company)
         slug_check = sb.table('companies').select('id').eq('slug', slug).execute()
         if slug_check.data:
             slug = slug + '-' + str(uuid.uuid4())[:4]
 
         co = sb.table('companies').insert({'name': company, 'slug': slug}).execute().data[0]
-        pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
         user = sb.table('users').insert({
             'company_id': co['id'], 'email': email, 'name': name,
             'role': 'admin', 'password_hash': pw_hash
