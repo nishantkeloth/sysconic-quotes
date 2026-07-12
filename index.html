@@ -270,6 +270,20 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .cust-name{font-size:14px;font-weight:600;color:var(--navy-dark, #0f2544)}
 .cust-sub{font-size:12px;color:var(--gray-500)}
 .cust-src{padding:6px 12px;font-size:11px;color:var(--gray-500);background:var(--gray-100, #f0f2f5);border-radius:0 0 8px 8px}
+/* Model-field autocomplete dropdown — position:fixed (JS-positioned via getBoundingClientRect)
+   rather than absolute, since the item grid's scroll container has overflow-y:hidden and
+   would otherwise clip it. */
+.pm-drop{position:fixed;background:var(--white);border:1.5px solid var(--gray-200);border-radius:8px;box-shadow:0 8px 24px rgba(15,37,68,.18);z-index:1200;max-height:300px;overflow-y:auto;text-align:left}
+.pm-opt{padding:7px 10px;cursor:pointer;border-bottom:1px solid var(--gray-100);display:flex;gap:8px;align-items:center}
+.pm-opt:last-child{border-bottom:0}
+.pm-opt:hover{background:#f0f5ff}
+.pm-thumb{width:32px;height:32px;object-fit:contain;background:#fff;border:1px solid var(--gray-100);border-radius:4px;flex-shrink:0}
+.pm-thumb.empty{display:flex;align-items:center;justify-content:center;font-size:14px;color:var(--gray-400,#c2c8d4)}
+.pm-txt{min-width:0}
+.pm-model{font-size:13px;font-weight:600;color:var(--navy-dark,#0f2544);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pm-sub{font-size:11px;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pm-online{padding:9px 10px;cursor:pointer;font-size:12.5px;color:var(--navy);font-weight:600;background:var(--navy-light,#eef3fb)}
+.pm-online:hover{background:#dfe9f9}
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px}
 .modal{background:var(--white);border-radius:14px;padding:32px;width:100%;max-width:440px;box-shadow:var(--shadow-lg)}
 .modal-title{font-size:19px;font-weight:700;margin-bottom:6px}
@@ -1671,7 +1685,7 @@ function editorHTML(){
           <div class="inum">${rn++}</div>
           ${IMG?thumbCell(si,ii,it):''}
           <textarea class="iinput" oninput="sec(${si}).items[${ii}].brand=this.value;schedSave()" onblur="captureProduct(${si},${ii})" placeholder="Brand">${esc(it.brand)}</textarea>
-          <textarea class="iinput" oninput="sec(${si}).items[${ii}].model=this.value;schedSave()" onblur="captureProduct(${si},${ii})" placeholder="Model">${esc(it.model)}</textarea>
+          <textarea class="iinput" id="pmInput-${si}-${ii}" oninput="sec(${si}).items[${ii}].model=this.value;schedSave();pmSearchInput(${si},${ii},this.value)" onfocus="pmSearchInput(${si},${ii},this.value)" onblur="setTimeout(hidePmDrop,180);captureProduct(${si},${ii})" placeholder="Model">${esc(it.model)}</textarea>
           <textarea class="iinput" oninput="sec(${si}).items[${ii}].desc=this.value;schedSave()" placeholder="Description">${esc(it.desc)}</textarea>
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="costusd" value="${it.costUsd||0}" oninput="liveCalc(this)" title="Cost in USD — auto-converts to Cost using Rate to AED" placeholder="0">
           <input class="iinput" type="number" id="cost-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="cost" value="${it.cost}" oninput="liveCalc(this)" placeholder="0">
@@ -2074,6 +2088,128 @@ async function captureProduct(si,ii){
     const cr=await api('POST','/api/products',{brand,model,description:it.desc||'',default_cost:+it.cost||0,default_margin:+it.margin||0.2});
     if(cr.product){it.product_id=cr.product.id;schedSave();updThumb(si,ii);}
   }catch(e){}
+}
+
+// ── Model-field live search (Product Master first, online search fallback) ────
+// Gated behind the same "Images & catalog assist" toggle as captureProduct
+// above, so it's a no-op (zero behavior change) for quotes that have it off.
+let PMD={si:-1,ii:-1,t:null,last:'',matches:[]};
+function pmSearchInput(si,ii,val){
+  if(!imgOn())return;
+  clearTimeout(PMD.t);
+  const q=(val||'').trim();
+  if(q.length<2){hidePmDrop();return;}
+  PMD.t=setTimeout(async()=>{
+    PMD.last=q;
+    let r;
+    try{r=await api('GET','/api/products?limit=8&search='+encodeURIComponent(q));}catch(e){return;}
+    if(PMD.last!==q)return; // stale response — a newer keystroke has since fired
+    const matches=(r.products||[]).filter(p=>p.is_active!==false);
+    PMD.si=si;PMD.ii=ii;PMD.matches=matches;
+    showPmDrop(si,ii,q,matches);
+  },300);
+}
+function showPmDrop(si,ii,query,matches){
+  const inp=document.getElementById(`pmInput-${si}-${ii}`);if(!inp)return;
+  let el=document.getElementById('pmDrop');
+  if(!el){el=document.createElement('div');el.id='pmDrop';el.className='pm-drop';document.body.appendChild(el);}
+  const rect=inp.getBoundingClientRect();
+  el.style.left=Math.round(rect.left)+'px';
+  el.style.top=Math.round(rect.bottom+4)+'px';
+  el.style.width=Math.max(Math.round(rect.width),260)+'px';
+  const rows=matches.map((p,idx)=>`<div class="pm-opt" onmousedown="pmPick(${idx})">
+    ${p.image_url?`<img class="pm-thumb" src="${esc(p.image_url)}">`:`<div class="pm-thumb empty">📦</div>`}
+    <div class="pm-txt"><div class="pm-model">${esc(p.model||p.brand||'(unnamed)')}</div><div class="pm-sub">${esc(p.brand||'')}${p.category?' · '+esc(p.category):''}${p.sku?' · '+esc(p.sku):''}</div></div>
+  </div>`).join('');
+  const noMatch=matches.length?'':`<div style="padding:10px 12px;font-size:12.5px;color:var(--gray-500)">No matches in your Product Master.</div>`;
+  const onlineRow=`<div class="pm-online" onmousedown="pmOnlineSearch(${si},${ii})">🔍 ${matches.length?'Not the right one? ':''}Search online</div>`;
+  el.innerHTML=rows+noMatch+onlineRow;
+  el.style.display='block';
+}
+function hidePmDrop(){const el=document.getElementById('pmDrop');if(el)el.style.display='none';}
+function pmPick(idx){
+  const p=PMD.matches[idx];if(!p)return;
+  const it=sec(PMD.si)?.items?.[PMD.ii];if(!it)return;
+  it.brand=p.brand||'';it.model=p.model||'';
+  if(p.description)it.desc=p.description;
+  if(+p.default_cost>0)it.cost=+p.default_cost;
+  if(p.default_margin!=null)it.margin=+p.default_margin;
+  if(p.image_url)it.img=p.image_url;
+  it.product_id=p.id;
+  it._pk=((p.brand||'')+'|'+(p.model||'')).toLowerCase();
+  hidePmDrop();
+  schedSave();draw();
+}
+
+// ── Online search fallback (model not found in Product Master) ────────────────
+let PMOS={si:-1,ii:-1,images:[],selectedImg:''};
+function pmOnlineSearch(si,ii){
+  hidePmDrop();
+  const inp=document.getElementById(`pmInput-${si}-${ii}`);
+  const query=((inp?inp.value:sec(si)?.items?.[ii]?.model)||'').trim();
+  if(!query){alert('Type a model number first.');return;}
+  showPmOnlineModal(si,ii,query);
+}
+function pmManualFormHTML(query,brand,desc){
+  return`<div class="fld"><label>Brand</label><input id="pmoBrand" value="${esc(brand)}" placeholder="Brand"></div>
+  <div class="fld"><label>Model</label><input id="pmoModel" value="${esc(query)}" placeholder="Model"></div>
+  <div class="fld"><label>Description</label><input id="pmoDesc" value="${esc(desc)}" placeholder="Short description"></div>`;
+}
+async function showPmOnlineModal(si,ii,query){
+  closePmOnlineModal();
+  PMOS={si,ii,images:[],selectedImg:''};
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="pmOnlineOverlay" onclick="if(event.target===this)closePmOnlineModal()">
+    <div class="modal" style="max-width:560px;max-height:85vh;overflow-y:auto">
+      <div class="modal-title">🔍 Search online</div>
+      <div class="modal-sub">"${esc(query)}"</div>
+      <div id="pmOnlineBody"><div style="text-align:center;padding:26px;color:var(--gray-500)">Searching online…</div></div>
+    </div></div>`);
+  let r;
+  try{r=await api('GET','/api/products/online-search?q='+encodeURIComponent(query));}
+  catch(e){r={error:'Search failed. Check your connection and try again.'};}
+  const body=document.getElementById('pmOnlineBody');if(!body)return;
+  if(r.error){
+    body.innerHTML=`<div class="auth-err">${esc(r.error)}</div><div style="font-size:13px;color:var(--gray-500);margin:10px 0">You can still add this item manually — it will be saved to your Product Master.</div>${pmManualFormHTML(query,'','')}<div class="modal-actions"><button class="btn" onclick="closePmOnlineModal()">Cancel</button><button class="btn btn-navy" onclick="pmOnlineConfirm(${si},${ii})">Add to quote</button></div>`;
+    return;
+  }
+  const top=(r.results||[])[0];
+  PMOS.images=r.images||[];
+  body.innerHTML=`
+    ${top?`<div style="font-size:12px;color:var(--gray-500);margin-bottom:10px">Top result: <strong>${esc(top.title||'')}</strong>${top.link?` — <a href="${esc(top.link)}" target="_blank" rel="noopener" style="color:var(--navy)">source</a>`:''}</div>`:`<div style="font-size:12px;color:var(--gray-500);margin-bottom:10px">No web results found — fill in the details manually.</div>`}
+    ${pmManualFormHTML(query,r.guessed_brand||'',top?(top.snippet||top.title||''):'')}
+    <div class="fld"><label>Image</label>${(r.images||[]).length?`<div class="img-grid">${r.images.map((im,idx)=>`<div class="img-opt" id="pmImgOpt-${idx}" onclick="pmSelectImg(${idx})"><img src="${esc(im.thumb)}" loading="lazy" onerror="this.parentNode.style.display='none'"><div class="img-src">${esc((im.source||'').replace(/^https?:\/\/(www\.)?/,'').split('/')[0])}</div></div>`).join('')}</div><div style="font-size:11px;color:var(--gray-500);margin-top:4px">Click an image to select it (optional).</div>`:`<div style="font-size:12.5px;color:var(--gray-500)">No images found — you can add one later from the Products page.</div>`}</div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closePmOnlineModal()">Cancel</button>
+      <button class="btn btn-navy" onclick="pmOnlineConfirm(${si},${ii})">Add to quote</button>
+    </div>`;
+}
+function pmSelectImg(idx){
+  document.querySelectorAll('#pmOnlineBody .img-opt').forEach(e=>e.style.outline='');
+  const el=document.getElementById('pmImgOpt-'+idx);if(el)el.style.outline='2.5px solid var(--navy)';
+  PMOS.selectedImg=(PMOS.images[idx]||{}).url||'';
+}
+function closePmOnlineModal(){const el=document.getElementById('pmOnlineOverlay');if(el)el.remove();}
+async function pmOnlineConfirm(si,ii){
+  const brand=(document.getElementById('pmoBrand')?.value||'').trim();
+  const model=(document.getElementById('pmoModel')?.value||'').trim();
+  const desc=(document.getElementById('pmoDesc')?.value||'').trim();
+  if(!brand&&!model){alert('Enter at least a brand or model.');return;}
+  const cr=await api('POST','/api/products',{brand,model,description:desc,default_cost:0,default_margin:0.2});
+  if(cr.error){alert(cr.error);return;}
+  let product=cr.product;
+  if(PMOS.selectedImg&&product?.id){
+    const ir=await api('POST','/api/products/'+product.id+'/image',{url:PMOS.selectedImg});
+    if(ir.product)product=ir.product;
+  }
+  const it=sec(si)?.items?.[ii];
+  if(it){
+    it.brand=brand;it.model=model;if(desc)it.desc=desc;
+    if(product&&product.image_url)it.img=product.image_url;
+    it.product_id=product?product.id:it.product_id;
+    it._pk=(brand+'|'+model).toLowerCase();
+  }
+  closePmOnlineModal();
+  schedSave();draw();
 }
 
 async function openRowImage(si,ii){
