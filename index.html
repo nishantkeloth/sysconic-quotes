@@ -2544,11 +2544,20 @@ async function loadTeam(){
     ${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;margin-right:10px" title="Eligible to be picked as a quote reviewer">
       <input type="checkbox" ${m.can_review?'checked':''} onchange="toggleCanReview('${m.id}',this.checked)"> Reviewer
     </label>`:(m.can_review?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600);margin-right:10px">Reviewer</span>`:'')}
+    ${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;margin-right:10px" title="Sees every quote in the company on the dashboard, not just their own">
+      <input type="checkbox" ${m.can_view_all_quotes?'checked':''} onchange="toggleCanViewAllQuotes('${m.id}',this.checked)"> View all quotes
+    </label>`:(m.can_view_all_quotes?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600);margin-right:10px">Views all quotes</span>`:'')}
     ${isAdmin?roleSelectHTML(m.role,`changeMemberRole('${m.id}',this.value,'${esc(m.email).replace(/'/g,"&#39;")}')`):`<span class="role-badge role-${m.role}">${m.role}</span>`}
     ${isAdmin?`<button class="btn btn-sm" style="margin-left:10px" onclick="adminResetPassword('${m.id}','${esc(m.email).replace(/'/g,"&#39;")}')">Reset password</button>`:''}
   </div>`).join('');
   if(pending.length){html+=`<div style="font-size:12px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px">Pending invites</div>`;
     html+=pending.map(p=>`<div class="team-member"><div class="team-avatar" style="background:var(--amber-light);color:var(--amber)">✉</div><div style="flex:1"><div style="font-size:15px;font-weight:600">${esc(p.email)}</div><div style="font-size:13px;color:var(--gray-500)">Pending</div></div>
+    ${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;margin-right:10px" title="Eligible to be picked as a quote reviewer once they join">
+      <input type="checkbox" ${p.can_review?'checked':''} onchange="toggleInviteCanReview('${p.token}',this.checked)"> Reviewer
+    </label>`:(p.can_review?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600);margin-right:10px">Reviewer</span>`:'')}
+    ${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;margin-right:10px" title="Sees every company quote once they join, not just their own">
+      <input type="checkbox" ${p.can_view_all_quotes?'checked':''} onchange="toggleInviteCanViewAllQuotes('${p.token}',this.checked)"> View all quotes
+    </label>`:(p.can_view_all_quotes?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600);margin-right:10px">Views all quotes</span>`:'')}
     ${isAdmin?roleSelectHTML(p.role,`changeInviteRole('${p.token}',this.value,'${esc(p.email).replace(/'/g,"&#39;")}')`):`<span class="role-badge role-${p.role}">${p.role}</span>`}
     </div>`).join('');}
   el.innerHTML=html||'<div style="color:var(--gray-500)">No team members yet</div>';
@@ -2565,6 +2574,18 @@ async function changeInviteRole(token,newRole,email){
 }
 async function toggleCanReview(userId,checked){
   const r=await api('PUT',`/api/auth/team/${userId}/can-review`,{can_review:checked});
+  if(r.error){alert('❌ '+r.error);loadTeam();return;}
+}
+async function toggleCanViewAllQuotes(userId,checked){
+  const r=await api('PUT',`/api/auth/team/${userId}/can-view-all-quotes`,{can_view_all_quotes:checked});
+  if(r.error){alert('❌ '+r.error);loadTeam();return;}
+}
+async function toggleInviteCanReview(token,checked){
+  const r=await api('PUT',`/api/auth/invites/${token}/can-review`,{can_review:checked});
+  if(r.error){alert('❌ '+r.error);loadTeam();return;}
+}
+async function toggleInviteCanViewAllQuotes(token,checked){
+  const r=await api('PUT',`/api/auth/invites/${token}/can-view-all-quotes`,{can_view_all_quotes:checked});
   if(r.error){alert('❌ '+r.error);loadTeam();return;}
 }
 async function adminResetPassword(userId,email){
@@ -2671,6 +2692,10 @@ function showInviteModal(){
         <option value="user">User — create and edit quotes</option>
         <option value="admin">Admin — full access + invite others</option>
       </select></div>
+      <div class="fld">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:400;margin-bottom:6px"><input type="checkbox" id="invCanReview"> Reviewer — eligible to be picked to review quotes</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:400"><input type="checkbox" id="invCanViewAll"> View all quotes — sees every company quote, not just their own</label>
+      </div>
       <div class="modal-actions">
         <button class="btn" onclick="document.getElementById('invOverlay').remove()">Cancel</button>
         <button class="btn btn-navy" onclick="sendInvite()">Send invite</button>
@@ -2681,7 +2706,11 @@ function showInviteModal(){
 async function sendInvite(){
   const btn=document.querySelector('#invOverlay .btn-navy');
   if(btn){btn.textContent='Sending...';btn.disabled=true;}
-  const r=await api('POST','/api/auth/invite',{email:document.getElementById('invEmail').value,role:document.getElementById('invRole').value});
+  const r=await api('POST','/api/auth/invite',{
+    email:document.getElementById('invEmail').value,role:document.getElementById('invRole').value,
+    can_review:document.getElementById('invCanReview').checked,
+    can_view_all_quotes:document.getElementById('invCanViewAll').checked,
+  });
   if(r.error){
     const e=document.getElementById('invErr');e.textContent=r.error;e.style.display='block';
     if(btn){btn.textContent='Send invite';btn.disabled=false;}

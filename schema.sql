@@ -32,6 +32,11 @@ create table if not exists users (
   -- Add-on capability layered on top of role (admin/user), not a separate
   -- role: whether this person is eligible to be picked as a quote reviewer.
   can_review boolean default false,
+  -- Add-on capability: a plain User only sees quotes they created by
+  -- default (see quotes list/get scoping) unless this is set, or they're
+  -- admin. Assigned reviewers can still open the specific quote they were
+  -- asked to review regardless of this flag.
+  can_view_all_quotes boolean default false,
   created_at timestamptz default now()
 );
 
@@ -46,7 +51,13 @@ create table if not exists invites (
   invited_by uuid references users(id),
   accepted boolean default false,
   expires_at timestamptz default now() + interval '7 days',
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  -- Set at invite time so a new team member can start with reviewer /
+  -- view-all-quotes access already granted, instead of an admin having to
+  -- remember to flip it on afterward in Team & Settings. Copied onto the
+  -- new `users` row when the invite is accepted.
+  can_review boolean default false,
+  can_view_all_quotes boolean default false
 );
 
 -- ─── Quotes ───────────────────────────────────────────────────────────────────

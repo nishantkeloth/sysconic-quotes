@@ -51,6 +51,30 @@ def verify_token(req):
     except:
         return None
 
+def _can_view_all_quotes(claims):
+    """Admins always see every quote in their company. A plain User only
+    gets that too if a Company Admin has flagged can_view_all_quotes for
+    them (Team & Settings). Looked up fresh each call (not baked into the
+    JWT) so toggling the flag takes effect without forcing a re-login."""
+    if claims['role'] == 'admin':
+        return True
+    u = sb.table('users').select('can_view_all_quotes').eq('id', claims['user_id']).execute()
+    return bool(u.data and u.data[0].get('can_view_all_quotes'))
+
+def _is_assigned_reviewer_on_quote(qid, user_id):
+    """Whether this user is an assigned reviewer on the quote's current
+    pending version — the narrow exception that lets a reviewer open a
+    specific quote they were asked to review, without granting them
+    visibility into the company's other quotes."""
+    q = sb.table('quotes').select('current_version').eq('id', qid).execute()
+    if not q.data: return False
+    vrows = sb.table('quote_versions').select('id').eq('quote_id', qid)\
+        .eq('version_number', q.data[0].get('current_version')).execute()
+    if not vrows.data: return False
+    vid = vrows.data[0]['id']
+    mine = sb.table('quote_version_reviewers').select('id').eq('version_id', vid).eq('user_id', user_id).execute()
+    return bool(mine.data)
+
 # ── List quotes ────────────────────────────────────────────────────────────────
 @app.route('/api/quotes', methods=['GET'])
 def list_quotes():
@@ -66,12 +90,12 @@ def list_quotes():
     try: offset = max(0, int(request.args.get('offset', 0)))
     except: offset = 0
 
-    rows = sb.table('quotes')\
+    q = sb.table('quotes')\
         .select('id,title,customer,status,currency,total_sell,total_gp,margin,created_at,updated_at,created_by', count='exact')\
-        .eq('company_id', claims['company_id'])\
-        .order('updated_at', desc=True)\
-        .range(offset, offset + limit - 1)\
-        .execute()
+        .eq('company_id', claims['company_id'])
+    if not _can_view_all_quotes(claims):
+        q = q.eq('created_by', claims['user_id'])
+    rows = q.order('updated_at', desc=True).range(offset, offset + limit - 1).execute()
     return jsonify({'quotes': rows.data, 'total': rows.count or 0})
 
 # ── Get single quote ───────────────────────────────────────────────────────────
@@ -82,7 +106,13 @@ def get_quote(qid):
 
     row = sb.table('quotes').select('*').eq('id', qid).eq('company_id', claims['company_id']).execute()
     if not row.data: return jsonify({'error': 'Not found'}), 404
-    return jsonify({'quote': row.data[0]})
+    quote = row.data[0]
+
+    if quote.get('created_by') != claims['user_id'] and not _can_view_all_quotes(claims):
+        if not _is_assigned_reviewer_on_quote(qid, claims['user_id']):
+            return jsonify({'error': 'Forbidden'}), 403
+
+    return jsonify({'quote': quote})
 
 # ── Create quote ───────────────────────────────────────────────────────────────
 @app.route('/api/quotes', methods=['POST'])
@@ -149,6 +179,8 @@ def duplicate_quote(qid):
 
     orig = sb.table('quotes').select('*').eq('id', qid).eq('company_id', claims['company_id']).execute()
     if not orig.data: return jsonify({'error': 'Not found'}), 404
+    if orig.data[0].get('created_by') != claims['user_id'] and not _can_view_all_quotes(claims):
+        return jsonify({'error': 'Forbidden'}), 403
 
     o = orig.data[0]
     row = sb.table('quotes').insert({
