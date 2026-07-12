@@ -326,6 +326,18 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
   .auth-card{padding:24px}
   .auth-shell{padding:12px}
 }
+/* The sticky totals bar (.grand-strip) stays pinned to the bottom of the
+   editor while scrolling, which is helpful on normal screens but on short
+   viewports (small/mini laptops) there isn't enough vertical room left —
+   it ends up visually overlapping the last row or two of a section, and
+   since it's an opaque, clickable-looking bar, those covered rows become
+   unreachable. Isolated to short screens only, and only changes whether
+   the bar sticks — no layout, column, or calculation changes, so normal
+   desktop behavior (and the item grid's own horizontal scroll above) is
+   untouched. */
+@media (max-height:800px){
+  .grand-strip{position:static}
+}
 @media (max-width:640px){
   .modal{width:100%;max-width:100%;max-height:88vh;overflow-y:auto;border-radius:12px}
   .modal-overlay{padding:0;align-items:flex-end}
