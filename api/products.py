@@ -229,6 +229,7 @@ def online_search():
         'num': 5, 'safe': 'active',
     })
     results = []
+    web_err = None
     try:
         with urllib.request.urlopen('https://www.googleapis.com/customsearch/v1?' + web_params, timeout=20) as resp:
             wdata = json.loads(resp.read().decode('utf-8'))
@@ -238,8 +239,10 @@ def online_search():
                 'snippet': (it.get('snippet') or '')[:400],
                 'link': it.get('link'),
             })
-    except Exception:
-        pass  # web results are best-effort — still return images/brand guess below
+    except urllib.error.HTTPError as e:
+        web_err = f'HTTP {e.code}: {e.read().decode("utf-8","ignore")[:300]}'
+    except Exception as e:
+        web_err = f'{type(e).__name__}: {e}'
 
     # Image results, same shape as /image-search.
     img_params = urllib.parse.urlencode({
@@ -247,6 +250,7 @@ def online_search():
         'searchType': 'image', 'num': 8, 'safe': 'active',
     })
     images = []
+    img_err = None
     try:
         with urllib.request.urlopen('https://www.googleapis.com/customsearch/v1?' + img_params, timeout=20) as resp:
             idata = json.loads(resp.read().decode('utf-8'))
@@ -257,10 +261,17 @@ def online_search():
                 'thumb': img.get('thumbnailLink') or it.get('link'),
                 'source': img.get('contextLink') or '',
             })
-    except Exception:
-        pass
+    except urllib.error.HTTPError as e:
+        img_err = f'HTTP {e.code}: {e.read().decode("utf-8","ignore")[:300]}'
+    except Exception as e:
+        img_err = f'{type(e).__name__}: {e}'
 
     if not results and not images:
+        # Surface the real cause when both calls actually failed (bad CSE config,
+        # quota, auth, etc.) rather than always claiming "no results" — a
+        # genuinely empty query still gets the plain not-found message.
+        if web_err or img_err:
+            return jsonify({'error': f'Online search failed. Web: {web_err or "ok"} | Image: {img_err or "ok"}'}), 502
         return jsonify({'error': f'No online results found for "{q}". Enter the details manually below.'}), 200
 
     # Brand guess: does any brand already in this company's catalog appear in
