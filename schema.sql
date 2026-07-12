@@ -23,6 +23,12 @@ create table if not exists users (
   role text default 'user' check (role in ('admin','user')),
   invited_by uuid references users(id),
   is_platform_admin boolean default false,
+  -- The Microsoft 365 mailbox this user sends quote/review emails from —
+  -- separate from their app login `email` (which may not be a real M365
+  -- mailbox, e.g. a Gmail address used just to sign into the app). Falls
+  -- back to `email` if unset; the user sets this themselves the first time
+  -- they send an email.
+  ms365_email text,
   created_at timestamptz default now()
 );
 

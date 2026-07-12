@@ -757,10 +757,14 @@ function defaultEmailDraft(){
 }
 function showEmailQuoteModal(){
   if(!A.activeQuote)return;
+  const fromVal=A.user?.ms365_email||A.user?.email||'';
   document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="emlOverlay" onclick="if(event.target===this)closeEmailQuoteModal()">'+
     '<div class="modal" style="max-width:480px">'+
     '<div class="modal-title">✉️ Email quote to customer</div>'+
-    '<div class="modal-sub">Sends from your own mailbox ('+esc(A.user?.email||'')+') with the quote attached as a PDF. Review the draft below before sending.</div>'+
+    '<div class="modal-sub">Sends with the quote attached as a PDF. Review the draft below before sending.</div>'+
+    '<label style="font-size:13px;font-weight:600;color:var(--gray-500);display:block;margin:12px 0 6px">Send from (your Microsoft 365 email)</label>'+
+    '<input id="emlFrom" type="email" class="iinput" style="width:100%;border:1.5px solid var(--gray-200);border-radius:8px;padding:10px;box-sizing:border-box" value="'+esc(fromVal)+'" placeholder="you@yourcompany.com">'+
+    (A.user?.ms365_email?'':'<div style="font-size:12px;color:var(--gray-500);margin-top:4px">This must be a real mailbox in your Microsoft 365 tenant — not just your app login email. We\'ll remember it for next time.</div>')+
     '<label style="font-size:13px;font-weight:600;color:var(--gray-500);display:block;margin:12px 0 6px">To</label>'+
     '<input id="emlTo" type="email" class="iinput" style="width:100%;border:1.5px solid var(--gray-200);border-radius:8px;padding:10px;box-sizing:border-box" placeholder="customer@example.com">'+
     '<label style="font-size:13px;font-weight:600;color:var(--gray-500);display:block;margin:12px 0 6px">Subject</label>'+
@@ -773,16 +777,19 @@ function showEmailQuoteModal(){
 }
 function closeEmailQuoteModal(){const el=document.getElementById('emlOverlay');if(el)el.remove();}
 async function sendQuoteEmail(){
+  const from_email=(document.getElementById('emlFrom').value||'').trim();
   const to=(document.getElementById('emlTo').value||'').trim();
   const subject=(document.getElementById('emlSubject').value||'').trim();
   const message=(document.getElementById('emlMessage').value||'').trim();
   const errEl=document.getElementById('emlErr');errEl.style.display='none';
+  if(!from_email){errEl.textContent='Your Microsoft 365 send-from email is required';errEl.style.display='block';return;}
   if(!to){errEl.textContent='Recipient email is required';errEl.style.display='block';return;}
   const btn=document.getElementById('emlSendBtn');btn.disabled=true;btn.textContent='Sending…';
   try{
     const html=buildExportHTML();
-    const r=await api('POST','/api/quotes/'+A.activeQuote.id+'/email',{to,subject,message,html});
+    const r=await api('POST','/api/quotes/'+A.activeQuote.id+'/email',{to,subject,message,html,from_email});
     if(r.error){errEl.textContent=r.error;errEl.style.display='block';return;}
+    if(A.user)A.user.ms365_email=from_email; // remember it for next time without a re-login
     closeEmailQuoteModal();
     alert('Sent from '+r.sent_from);
   }catch(e){errEl.textContent='Could not reach the email service.';errEl.style.display='block';}
