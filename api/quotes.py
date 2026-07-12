@@ -63,6 +63,16 @@ def _can_view_all_quotes(claims):
     u = sb.table('users').select('can_view_all_quotes').eq('id', claims['user_id']).execute()
     return bool(u.data and u.data[0].get('can_view_all_quotes'))
 
+def _can_edit_quote(quote, claims):
+    """Who can mutate a quote's content/lifecycle — save, submit for review,
+    email to the customer, duplicate: the creator, a Company Admin, or
+    anyone flagged can_view_all_quotes. That flag doubles as edit rights
+    here (not just read visibility) by design — it's meant for people who
+    need to manage quotes across the whole company, not just look at them."""
+    if quote.get('created_by') == claims['user_id']:
+        return True
+    return _can_view_all_quotes(claims)
+
 def _log_activity(qid, actor_id, action, detail=''):
     """Best-effort activity log entry — shown as a timeline in the quote's
     Log tab. Never raises: a logging failure must not block the actual
@@ -196,7 +206,7 @@ def update_quote(qid):
     # Check ownership
     existing = sb.table('quotes').select('id,created_by,status').eq('id', qid).eq('company_id', claims['company_id']).execute()
     if not existing.data: return jsonify({'error': 'Not found'}), 404
-    if claims['role'] != 'admin' and existing.data[0]['created_by'] != claims['user_id']:
+    if not _can_edit_quote(existing.data[0], claims):
         return jsonify({'error': 'Forbidden'}), 403
 
     d = request.json or {}
@@ -240,7 +250,7 @@ def duplicate_quote(qid):
 
     orig = sb.table('quotes').select('*').eq('id', qid).eq('company_id', claims['company_id']).execute()
     if not orig.data: return jsonify({'error': 'Not found'}), 404
-    if orig.data[0].get('created_by') != claims['user_id'] and not _can_view_all_quotes(claims):
+    if not _can_edit_quote(orig.data[0], claims):
         return jsonify({'error': 'Forbidden'}), 403
 
     o = orig.data[0]
@@ -361,6 +371,10 @@ def submit_review(qid):
     q = sb.table('quotes').select('*').eq('id', qid).eq('company_id', claims['company_id']).execute()
     if not q.data: return jsonify({'error': 'Not found'}), 404
     quote = q.data[0]
+    # Same reasoning as email_quote() — submitting for review mutates the
+    # quote, so it needs the same edit permission as saving.
+    if not _can_edit_quote(quote, claims):
+        return jsonify({'error': 'You don\'t have permission to submit this quote for review — ask a Company Admin to enable "view all quotes" for your account, or have the quote creator submit it'}), 403
 
     d = request.json or {}
     reviewer_ids = list({rid for rid in (d.get('reviewer_ids') or []) if rid})
@@ -750,10 +764,14 @@ def email_quote(qid):
         return jsonify({'error': 'PDF rendering is not configured (missing PDFSHIFT_API_KEY)'}), 500
 
     q = sb.table('quotes').select(
-        'id,title,customer,status,currency,exchange_rate,quote_data,terms_data,vendor_data,customer_version'
+        'id,title,customer,status,currency,exchange_rate,quote_data,terms_data,vendor_data,customer_version,created_by'
     ).eq('id', qid).eq('company_id', claims['company_id']).execute()
     if not q.data: return jsonify({'error': 'Not found'}), 404
     quote = q.data[0]
+    # Sending to the customer mutates the quote (status, version) just like
+    # saving does, so it requires the same edit permission as update_quote().
+    if not _can_edit_quote(quote, claims):
+        return jsonify({'error': 'You don\'t have permission to email this quote — ask a Company Admin to enable "view all quotes" for your account, or have the quote creator send it'}), 403
 
     d = request.json or {}
     to_email = (d.get('to') or '').strip()
