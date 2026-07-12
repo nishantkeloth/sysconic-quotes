@@ -56,9 +56,65 @@ create table if not exists quotes (
   total_sell numeric default 0,
   total_gp numeric default 0,
   margin numeric default 0,
+  -- Internal review workflow (separate from the customer-facing `status`
+  -- lifecycle above): 'none' | 'pending' | 'approved' | 'changes_requested'.
+  review_status text default 'none' check (review_status in ('none','pending','approved','changes_requested')),
+  current_version int default 0,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
+
+-- ─── Quote versions (snapshots taken each time a quote is submitted for
+-- internal review, so past submissions stay viewable even after the live
+-- quote_data keeps changing) ────────────────────────────────────────────────
+create table if not exists quote_versions (
+  id uuid default gen_random_uuid() primary key,
+  quote_id uuid references quotes(id) on delete cascade not null,
+  version_number int not null,
+  title text,
+  customer text,
+  quote_data jsonb,
+  terms_data jsonb,
+  vendor_data jsonb,
+  status text default 'pending' check (status in ('pending','approved','changes_requested')),
+  submitted_by uuid references users(id),
+  submitted_at timestamptz default now(),
+  reviewed_by uuid references users(id),
+  reviewed_at timestamptz,
+  review_comment text
+);
+create index if not exists idx_quote_versions_quote on quote_versions(quote_id);
+create index if not exists idx_quote_versions_status on quote_versions(status);
+
+-- ─── Quote version reviewers (the specific users the quote creator picked to
+-- review a given submission — review is assigned, not open to the whole
+-- company). quote_versions.status is the aggregate: 'changes_requested' if
+-- any assigned reviewer requested changes, 'approved' once all of them have
+-- approved, otherwise 'pending' ────────────────────────────────────────────
+create table if not exists quote_version_reviewers (
+  id uuid default gen_random_uuid() primary key,
+  version_id uuid references quote_versions(id) on delete cascade not null,
+  user_id uuid references users(id) not null,
+  status text default 'pending' check (status in ('pending','approved','changes_requested')),
+  comment text,
+  decided_at timestamptz,
+  created_at timestamptz default now(),
+  unique(version_id, user_id)
+);
+create index if not exists idx_qvr_version on quote_version_reviewers(version_id);
+create index if not exists idx_qvr_user on quote_version_reviewers(user_id);
+
+-- ─── Quote emails (lightweight send log — who emailed this quote to whom,
+-- and when) ────────────────────────────────────────────────────────────────
+create table if not exists quote_emails (
+  id uuid default gen_random_uuid() primary key,
+  quote_id uuid references quotes(id) on delete cascade not null,
+  sent_by uuid references users(id),
+  sent_to text not null,
+  subject text,
+  sent_at timestamptz default now()
+);
+create index if not exists idx_quote_emails_quote on quote_emails(quote_id);
 
 -- ─── Indexes ──────────────────────────────────────────────────────────────────
 create index if not exists idx_quotes_company on quotes(company_id);

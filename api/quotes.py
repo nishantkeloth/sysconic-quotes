@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
-import os, jwt, traceback
+import os, jwt, traceback, base64, requests, re
 from datetime import datetime
 from supabase import create_client
 
@@ -12,7 +12,26 @@ SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_SERVICE_KEY')
 JWT_SECRET   = os.environ.get('JWT_SECRET')
 
+# Duplicated from api/auth.py — Vercel Python functions must be fully
+# self-contained (no cross-file imports between api/*.py routes).
+MS_TENANT_ID = os.environ.get('MS_TENANT_ID', 'b36855d2-9d26-43a4-bec6-82268a7713fb')
+MS_CLIENT_ID = os.environ.get('MS_CLIENT_ID', '491f22c7-9dee-4c30-b828-acf8ba8d948c')
+MS_CLIENT_SECRET = os.environ.get('MS_CLIENT_SECRET')
+PDFSHIFT_API_KEY = os.environ.get('PDFSHIFT_API_KEY')
+
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def get_ms_token():
+    """Get a Microsoft Graph access token using client credentials."""
+    url = f'https://login.microsoftonline.com/{MS_TENANT_ID}/oauth2/v2.0/token'
+    data = {
+        'client_id': MS_CLIENT_ID,
+        'client_secret': MS_CLIENT_SECRET,
+        'scope': 'https://graph.microsoft.com/.default',
+        'grant_type': 'client_credentials'
+    }
+    r = requests.post(url, data=data)
+    return r.json().get('access_token')
 
 @app.errorhandler(Exception)
 def handle_exception(e):
@@ -148,6 +167,379 @@ def duplicate_quote(qid):
         'margin':        o['margin'],
     }).execute()
     return jsonify({'quote': row.data[0]}), 201
+
+# ── Internal review workflow ────────────────────────────────────────────────
+# A quote can be submitted for internal review before it goes to a customer.
+# Each submission snapshots the current quote_data/terms_data/vendor_data as
+# a new immutable `quote_versions` row, so a reviewer always sees exactly
+# what was submitted even if the preparer keeps editing the live quote
+# afterwards — and past submissions stay viewable for audit/history.
+
+@app.route('/api/quotes/company-users', methods=['GET'])
+def company_users():
+    """Lightweight user picker list (id/name/email only) for any authenticated
+    company user — used by the quote creator to pick who reviews a
+    submission. Deliberately NOT admin-gated like /api/auth/team, and
+    doesn't expose role/invite-management data."""
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+
+    rows = sb.table('users').select('id,name,email,is_platform_admin')\
+        .eq('company_id', claims['company_id']).order('name').execute()
+    # Filter in Python (not via .eq(bool)) to match the same safe pattern
+    # /api/auth/team already uses for excluding platform-admin accounts.
+    users = [{'id': u['id'], 'name': u.get('name'), 'email': u.get('email')}
+             for u in (rows.data or []) if not u.get('is_platform_admin')]
+    return jsonify({'users': users})
+
+def _reviewers_by_version(version_ids):
+    """id -> [{user_id,name,email,status,comment,decided_at}] for the given
+    version ids, in one round trip each to quote_version_reviewers/users."""
+    if not version_ids: return {}
+    rr = sb.table('quote_version_reviewers').select('*').in_('version_id', version_ids).execute()
+    rows = rr.data or []
+    uids = list({r['user_id'] for r in rows})
+    users_by_id = {}
+    if uids:
+        ur = sb.table('users').select('id,name,email').in_('id', uids).execute()
+        users_by_id = {u['id']: u for u in (ur.data or [])}
+    out = {}
+    for r in rows:
+        u = users_by_id.get(r['user_id'], {})
+        out.setdefault(r['version_id'], []).append({
+            'user_id': r['user_id'], 'name': u.get('name'), 'email': u.get('email'),
+            'status': r['status'], 'comment': r.get('comment'), 'decided_at': r.get('decided_at'),
+        })
+    return out
+
+def _send_review_notification(sender_email, sender_name, to_email, quote_title, comment_note=''):
+    """Best-effort notification email — failures here must never block the
+    review action itself (submit/approve/request-changes all still succeed
+    even if Graph is unreachable or misconfigured)."""
+    if not MS_CLIENT_SECRET or not to_email:
+        return False
+    try:
+        token = get_ms_token()
+        if not token: return False
+        body_html = f"""
+        <html><body style="font-family:Segoe UI,Arial,sans-serif;color:#1a1a1a;max-width:600px;margin:0 auto;padding:20px">
+            <p style="line-height:1.6">{comment_note}</p>
+            <p style="line-height:1.6;color:#555">— {sender_name}</p>
+        </body></html>
+        """
+        payload = {
+            'message': {
+                'subject': f"Review requested — {quote_title or 'Quotation'}",
+                'body': {'contentType': 'HTML', 'content': body_html},
+                'toRecipients': [{'emailAddress': {'address': to_email}}],
+                'from': {'emailAddress': {'address': sender_email}},
+            },
+            'saveToSentItems': True,
+        }
+        r = requests.post(
+            f'https://graph.microsoft.com/v1.0/users/{sender_email}/sendMail',
+            json=payload, headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
+            timeout=15
+        )
+        return r.status_code == 202
+    except Exception:
+        traceback.print_exc()
+        return False
+
+@app.route('/api/quotes/<qid>/submit-review', methods=['POST'])
+def submit_review(qid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+
+    q = sb.table('quotes').select('*').eq('id', qid).eq('company_id', claims['company_id']).execute()
+    if not q.data: return jsonify({'error': 'Not found'}), 404
+    quote = q.data[0]
+
+    d = request.json or {}
+    reviewer_ids = list({rid for rid in (d.get('reviewer_ids') or []) if rid})
+    if not reviewer_ids:
+        return jsonify({'error': 'Select at least one reviewer'}), 400
+
+    # Only allow picking reviewers who actually belong to this company.
+    valid = sb.table('users').select('id,name,email').in_('id', reviewer_ids)\
+        .eq('company_id', claims['company_id']).execute()
+    reviewers = valid.data or []
+    if not reviewers:
+        return jsonify({'error': 'None of the selected reviewers are valid'}), 400
+
+    next_version = (quote.get('current_version') or 0) + 1
+    ver = sb.table('quote_versions').insert({
+        'quote_id': qid,
+        'version_number': next_version,
+        'title': quote.get('title'),
+        'customer': quote.get('customer'),
+        'quote_data': quote.get('quote_data'),
+        'terms_data': quote.get('terms_data'),
+        'vendor_data': quote.get('vendor_data'),
+        'status': 'pending',
+        'submitted_by': claims['user_id'],
+    }).execute()
+    version = ver.data[0]
+
+    sb.table('quote_version_reviewers').insert([
+        {'version_id': version['id'], 'user_id': r['id']} for r in reviewers
+    ]).execute()
+
+    sb.table('quotes').update({
+        'review_status': 'pending',
+        'current_version': next_version,
+    }).eq('id', qid).execute()
+
+    sender = sb.table('users').select('email,name').eq('id', claims['user_id']).execute()
+    sender_email = sender.data[0]['email'] if sender.data else None
+    sender_name = (sender.data[0].get('name') or sender_email) if sender.data else 'A colleague'
+    if sender_email:
+        note = f'{sender_name} sent you "{quote.get("title") or "a quotation"}" for review (version {next_version}). Log in to Sysconic Quote Manager and open Review Queue to take a look.'
+        for r in reviewers:
+            _send_review_notification(sender_email, sender_name, r.get('email'), quote.get('title'), note)
+
+    return jsonify({'version': version}), 201
+
+@app.route('/api/quotes/<qid>/versions', methods=['GET'])
+def list_versions(qid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+
+    q = sb.table('quotes').select('id').eq('id', qid).eq('company_id', claims['company_id']).execute()
+    if not q.data: return jsonify({'error': 'Not found'}), 404
+
+    rows = sb.table('quote_versions').select(
+        'id,version_number,status,submitted_by,submitted_at,reviewed_by,reviewed_at,review_comment,title,customer'
+    ).eq('quote_id', qid).order('version_number', desc=True).execute()
+    versions = rows.data or []
+    rmap = _reviewers_by_version([v['id'] for v in versions])
+    for v in versions:
+        v['reviewers'] = rmap.get(v['id'], [])
+    return jsonify({'versions': versions})
+
+@app.route('/api/quotes/<qid>/versions/<vid>', methods=['GET'])
+def get_version(qid, vid):
+    """Full snapshot (including quote_data/terms_data) for a single version —
+    kept separate from the list endpoint above so the list stays light."""
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+
+    q = sb.table('quotes').select('id').eq('id', qid).eq('company_id', claims['company_id']).execute()
+    if not q.data: return jsonify({'error': 'Not found'}), 404
+
+    v = sb.table('quote_versions').select('*').eq('id', vid).eq('quote_id', qid).execute()
+    if not v.data: return jsonify({'error': 'Not found'}), 404
+    version = v.data[0]
+    version['reviewers'] = _reviewers_by_version([vid]).get(vid, [])
+    return jsonify({'version': version})
+
+@app.route('/api/quotes/review-queue', methods=['GET'])
+def review_queue():
+    """Quotes where the current user has been personally assigned as a
+    reviewer and hasn't decided yet — a "waiting on me" queue. Review is
+    assigned per-quote by the creator, not open to the whole company, so
+    this is scoped to the caller rather than company-wide."""
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+
+    mine = sb.table('quote_version_reviewers').select('version_id')\
+        .eq('user_id', claims['user_id']).eq('status', 'pending').execute()
+    version_ids = list({r['version_id'] for r in (mine.data or [])})
+    if not version_ids:
+        return jsonify({'quotes': []})
+
+    vrows = sb.table('quote_versions').select('id,quote_id,version_number').in_('id', version_ids).execute()
+    latest_by_quote = {v['quote_id']: (v['id'], v['version_number']) for v in (vrows.data or [])}
+    if not latest_by_quote:
+        return jsonify({'quotes': []})
+
+    qrows = sb.table('quotes').select('id,title,customer,total_sell,current_version,updated_at,created_by')\
+        .eq('company_id', claims['company_id']).eq('review_status', 'pending')\
+        .in_('id', list(latest_by_quote.keys())).order('updated_at', desc=True).execute()
+    out = []
+    for q in (qrows.data or []):
+        vid, vnum = latest_by_quote.get(q['id'], (None, None))
+        # Only surface it if my pending assignment is on the quote's current
+        # submission — a superseded older version shouldn't keep nagging me.
+        if vnum != q.get('current_version'):
+            continue
+        q['pending_version_id'] = vid
+        out.append(q)
+    return jsonify({'quotes': out})
+
+def _resolve_version(qid, vid, claims):
+    q = sb.table('quotes').select('*').eq('id', qid).eq('company_id', claims['company_id']).execute()
+    if not q.data: return None, None
+    v = sb.table('quote_versions').select('*').eq('id', vid).eq('quote_id', qid).execute()
+    if not v.data: return q.data[0], None
+    return q.data[0], v.data[0]
+
+def _record_reviewer_decision(qid, vid, claims, status, comment):
+    """Records one assigned reviewer's decision on a version, then
+    recomputes the version's aggregate status: any 'changes_requested'
+    wins immediately; otherwise it only becomes 'approved' once every
+    assigned reviewer has approved. Returns (quote, agg_status, error_response)."""
+    quote, version = _resolve_version(qid, vid, claims)
+    if not quote: return None, None, (jsonify({'error': 'Quote not found'}), 404)
+    if not version: return None, None, (jsonify({'error': 'Version not found'}), 404)
+
+    mine = sb.table('quote_version_reviewers').select('id')\
+        .eq('version_id', vid).eq('user_id', claims['user_id']).execute()
+    if not mine.data:
+        return None, None, (jsonify({'error': 'You are not an assigned reviewer for this version'}), 403)
+
+    sb.table('quote_version_reviewers').update({
+        'status': status, 'comment': comment or None, 'decided_at': datetime.utcnow().isoformat(),
+    }).eq('version_id', vid).eq('user_id', claims['user_id']).execute()
+
+    all_rows = sb.table('quote_version_reviewers').select('status').eq('version_id', vid).execute()
+    statuses = [r['status'] for r in (all_rows.data or [])]
+    if any(s == 'changes_requested' for s in statuses):
+        agg = 'changes_requested'
+    elif statuses and all(s == 'approved' for s in statuses):
+        agg = 'approved'
+    else:
+        agg = 'pending'
+
+    ver_update = {'status': agg}
+    if agg != 'pending':
+        ver_update['reviewed_by'] = claims['user_id']
+        ver_update['reviewed_at'] = datetime.utcnow().isoformat()
+        if comment: ver_update['review_comment'] = comment
+    sb.table('quote_versions').update(ver_update).eq('id', vid).execute()
+
+    # Only reflect onto the parent quote once the group decision is final,
+    # and only if this is still the quote's latest submission.
+    if agg != 'pending' and quote.get('current_version') == version.get('version_number'):
+        sb.table('quotes').update({'review_status': agg}).eq('id', qid).execute()
+
+    return quote, agg, None
+
+@app.route('/api/quotes/<qid>/versions/<vid>/approve', methods=['POST'])
+def approve_version(qid, vid):
+    """Only a user the quote creator assigned as a reviewer on this specific
+    version can approve it. Comment is optional."""
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+
+    d = request.json or {}
+    comment = (d.get('comment') or '').strip()
+
+    quote, agg, err = _record_reviewer_decision(qid, vid, claims, 'approved', comment)
+    if err: return err
+    return jsonify({'ok': True, 'version_status': agg})
+
+@app.route('/api/quotes/<qid>/versions/<vid>/request-changes', methods=['POST'])
+def request_changes(qid, vid):
+    """Only an assigned reviewer on this version can request changes."""
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+
+    d = request.json or {}
+    comment = (d.get('comment') or '').strip()
+    if not comment:
+        return jsonify({'error': 'A comment is required when requesting changes'}), 400
+
+    quote, agg, err = _record_reviewer_decision(qid, vid, claims, 'changes_requested', comment)
+    if err: return err
+    return jsonify({'ok': True, 'version_status': agg})
+
+# ── Email to customer ────────────────────────────────────────────────────────
+# Sends from the logged-in user's own Microsoft mailbox (not a fixed service
+# account), with the quote PDF attached. Requires the app's Graph app
+# registration to have Mail.Send application permission across the tenant
+# (already true today, since the same setup already sends invite emails as a
+# fixed sender) — no per-user OAuth needed.
+@app.route('/api/quotes/<qid>/email', methods=['POST'])
+def email_quote(qid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not MS_CLIENT_SECRET:
+        return jsonify({'error': 'Email sending is not configured (missing MS_CLIENT_SECRET)'}), 500
+    if not PDFSHIFT_API_KEY:
+        return jsonify({'error': 'PDF rendering is not configured (missing PDFSHIFT_API_KEY)'}), 500
+
+    q = sb.table('quotes').select('id,title').eq('id', qid).eq('company_id', claims['company_id']).execute()
+    if not q.data: return jsonify({'error': 'Not found'}), 404
+    quote = q.data[0]
+
+    d = request.json or {}
+    to_email = (d.get('to') or '').strip()
+    subject = (d.get('subject') or f"Quotation — {quote.get('title') or 'Sysconic'}").strip()
+    message = d.get('message') or ''
+    html = d.get('html') or ''
+    if not to_email:
+        return jsonify({'error': 'Recipient email is required'}), 400
+    if not html:
+        return jsonify({'error': 'No quote HTML provided to render'}), 400
+
+    sender = sb.table('users').select('email,name').eq('id', claims['user_id']).execute()
+    if not sender.data:
+        return jsonify({'error': 'Could not look up your account'}), 500
+    sender_email = sender.data[0]['email']
+    sender_name = sender.data[0].get('name') or sender_email
+
+    # Render the exact same HTML the browser shows, to a PDF, via PDFShift.
+    try:
+        pdf_resp = requests.post(
+            'https://api.pdfshift.io/v3/convert/pdf',
+            json={'source': html, 'use_print': True, 'format': 'A4', 'sandbox': False},
+            headers={'X-API-Key': PDFSHIFT_API_KEY, 'Content-Type': 'application/json'},
+            timeout=25
+        )
+        if pdf_resp.status_code != 200:
+            return jsonify({'error': f'PDF service error ({pdf_resp.status_code}): {pdf_resp.text[:300]}'}), 502
+        pdf_b64 = base64.b64encode(pdf_resp.content).decode('ascii')
+    except Exception as e:
+        return jsonify({'error': f'PDF generation failed: {str(e)[:200]}'}), 500
+
+    fname = re.sub(r'[^\w\-]+', '-', f"Quotation-{quote.get('title') or qid[:8]}") + '.pdf'
+
+    token = get_ms_token()
+    if not token:
+        return jsonify({'error': 'Could not authenticate with Microsoft Graph'}), 502
+
+    body_html = f"""
+    <html><body style="font-family:Segoe UI,Arial,sans-serif;color:#1a1a1a;max-width:600px;margin:0 auto;padding:20px">
+        <p style="line-height:1.6">{message.replace(chr(10), '<br>') if message else f'Please find attached the quotation <strong>{quote.get("title") or ""}</strong>.'}</p>
+        <p style="line-height:1.6;color:#555">Best regards,<br>{sender_name}</p>
+    </body></html>
+    """
+
+    payload = {
+        'message': {
+            'subject': subject,
+            'body': {'contentType': 'HTML', 'content': body_html},
+            'toRecipients': [{'emailAddress': {'address': to_email}}],
+            'from': {'emailAddress': {'address': sender_email}},
+            'attachments': [{
+                '@odata.type': '#microsoft.graph.fileAttachment',
+                'name': fname,
+                'contentType': 'application/pdf',
+                'contentBytes': pdf_b64,
+            }],
+        },
+        'saveToSentItems': True,
+    }
+
+    try:
+        r = requests.post(
+            f'https://graph.microsoft.com/v1.0/users/{sender_email}/sendMail',
+            json=payload,
+            headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
+            timeout=25
+        )
+    except Exception as e:
+        return jsonify({'error': f'Could not reach Microsoft Graph: {str(e)[:200]}'}), 502
+
+    if r.status_code != 202:
+        return jsonify({'error': f'Email send failed ({r.status_code}): {r.text[:300]}'}), 502
+
+    sb.table('quote_emails').insert({
+        'quote_id': qid, 'sent_by': claims['user_id'], 'sent_to': to_email, 'subject': subject,
+    }).execute()
+
+    return jsonify({'ok': True, 'sent_from': sender_email})
 
 if __name__ == '__main__':
     app.run(debug=True)
