@@ -520,7 +520,7 @@ def team():
         claims = verify_token(request)
         if not claims: return jsonify({'error': 'Unauthorized'}), 401
         if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
-        members = sb.table('users').select('id,name,email,role,created_at,is_platform_admin').eq('company_id', claims['company_id']).execute()
+        members = sb.table('users').select('id,name,email,role,created_at,is_platform_admin,can_review').eq('company_id', claims['company_id']).execute()
         # Platform-admin accounts are excluded even if their row happens to share
         # this company_id — they're managed at the platform level, not visible
         # to (or manageable by) a regular tenant's company admin.
@@ -558,6 +558,32 @@ def update_team_role(user_id):
 
         row = sb.table('users').update({'role': new_role}).eq('id', user_id).execute()
         return jsonify({'user': {'id': row.data[0]['id'], 'role': row.data[0]['role']}})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# ── Grant/revoke a team member's reviewer eligibility ───────────────────────────
+# Company-Admin-only. "Reviewer" is an add-on capability layered on top of a
+# regular Admin or User account (not a separate role) — anyone flagged here
+# becomes eligible to be picked in the review-assignment picker.
+@app.route('/api/auth/team/<user_id>/can-review', methods=['PUT'])
+def update_team_can_review(user_id):
+    try:
+        sb = get_sb()
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+
+        can_review = bool((request.json or {}).get('can_review'))
+
+        target = sb.table('users').select('id,is_platform_admin').eq('id', user_id).eq('company_id', claims['company_id']).execute()
+        if not target.data:
+            return jsonify({'error': 'Team member not found'}), 404
+        if target.data[0].get('is_platform_admin'):
+            return jsonify({'error': 'This account is managed at the platform level'}), 403
+
+        row = sb.table('users').update({'can_review': can_review}).eq('id', user_id).execute()
+        return jsonify({'user': {'id': row.data[0]['id'], 'can_review': row.data[0]['can_review']}})
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500

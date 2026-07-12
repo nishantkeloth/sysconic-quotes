@@ -29,6 +29,9 @@ create table if not exists users (
   -- back to `email` if unset; the user sets this themselves the first time
   -- they send an email.
   ms365_email text,
+  -- Add-on capability layered on top of role (admin/user), not a separate
+  -- role: whether this person is eligible to be picked as a quote reviewer.
+  can_review boolean default false,
   created_at timestamptz default now()
 );
 
@@ -87,7 +90,11 @@ create table if not exists quote_versions (
   submitted_at timestamptz default now(),
   reviewed_by uuid references users(id),
   reviewed_at timestamptz,
-  review_comment text
+  review_comment text,
+  -- True when the final decision on this version was made by a Company
+  -- Admin overriding/short-circuiting the assigned reviewers (force-approve,
+  -- or cancelling the submission), rather than the reviewers themselves.
+  admin_override boolean default false
 );
 create index if not exists idx_quote_versions_quote on quote_versions(quote_id);
 create index if not exists idx_quote_versions_status on quote_versions(status);
