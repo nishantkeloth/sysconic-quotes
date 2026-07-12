@@ -540,6 +540,16 @@ async function saveQuote(){
   else setStatus('error');
 }
 function schedSave(){if(A.reviewMode)return;if(_st)clearTimeout(_st);_st=setTimeout(saveQuote,3000);}
+// A quote is only editable while its status is Draft — once it's Sent (or
+// manually marked Awarded/Lost), content is locked until someone flips the
+// status back to Draft. Backend enforces this too; these just drive the UI.
+function isQuoteLocked(){return !!(A.activeQuote&&A.activeQuote.status!=='draft');}
+async function unlockForEditing(){
+  if(!A.activeQuote)return;
+  A.activeQuote.status='draft';
+  await saveQuote();
+  draw();
+}
 function setStatus(s){A.saveStatus=s;const el=document.getElementById('saveStatus');if(!el)return;
   const m={saving:'<span class="save-pill save-ing">⏳ Saving…</span>',saved:'<span class="save-pill save-ok">✓ Saved</span>',error:'<span class="save-pill save-err">⚠ Failed</span>'};
   el.innerHTML=m[s]||'';}
@@ -821,6 +831,42 @@ async function confirmReassignReviewers(qid,vid){
   if(A.page==='reviewQueue')loadReviewQueue();
 }
 
+// ── Quote activity log ────────────────────────────────────────────────────────
+const ACTIVITY_LABELS={
+  created:{icon:'✨',label:'Quote created'},
+  status_changed:{icon:'🔄',label:'Status changed'},
+  submitted_for_review:{icon:'📤',label:'Sent for review'},
+  reviewer_approved:{icon:'✅',label:'Reviewer approved'},
+  reviewer_requested_changes:{icon:'✏️',label:'Reviewer requested changes'},
+  admin_force_approved:{icon:'✅',label:'Admin force-approved'},
+  admin_force_requested_changes:{icon:'✏️',label:'Admin force-requested changes'},
+  admin_cancelled_review:{icon:'✕',label:'Review cancelled by admin'},
+  admin_reassigned_reviewers:{icon:'🔁',label:'Reviewers reassigned'},
+  emailed_to_customer:{icon:'✉️',label:'Emailed to customer'},
+};
+function logHTML(){
+  return `<div class="card" style="padding:0"><div id="quoteLogList"></div></div>`;
+}
+async function loadLog(){
+  const el=document.getElementById('quoteLogList');if(!el||!A.activeQuote)return;
+  el.innerHTML='<div style="text-align:center;padding:30px;color:var(--gray-500)">Loading…</div>';
+  const r=await api('GET','/api/quotes/'+A.activeQuote.id+'/activity');
+  if(r.error){el.innerHTML='<div class="auth-err" style="margin:16px">'+esc(r.error)+'</div>';return;}
+  const entries=r.activity||[];
+  if(!entries.length){el.innerHTML='<div style="text-align:center;padding:40px;color:var(--gray-500)">No activity recorded yet.</div>';return;}
+  el.innerHTML=entries.map(e=>{
+    const m=ACTIVITY_LABELS[e.action]||{icon:'•',label:e.action};
+    return `<div style="display:flex;gap:12px;padding:14px 20px;border-bottom:1px solid var(--gray-200)">
+      <div style="font-size:18px;flex-shrink:0">${m.icon}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:14px">${esc(m.label)}</div>
+        ${e.detail?`<div style="font-size:13px;color:var(--gray-500);margin-top:2px">${esc(e.detail)}</div>`:''}
+        <div style="font-size:12px;color:var(--gray-500);margin-top:4px">${esc(e.actor_name||'System')} · ${e.created_at?new Date(e.created_at).toLocaleString():''}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 // ── Email quote to customer ──────────────────────────────────────────────────
 function defaultEmailDraft(){
   const o=opt();const T=o?calcOpt(o):null;
@@ -867,8 +913,12 @@ async function sendQuoteEmail(){
     const r=await api('POST','/api/quotes/'+A.activeQuote.id+'/email',{to,subject,message,html,from_email});
     if(r.error){errEl.textContent=r.error;errEl.style.display='block';return;}
     if(A.user)A.user.ms365_email=from_email; // remember it for next time without a re-login
+    if(A.activeQuote){
+      if(!['awarded','lost'].includes(A.activeQuote.status))A.activeQuote.status='sent';
+      A.activeQuote.customer_version=r.customer_version;
+    }
     closeEmailQuoteModal();
-    alert('Sent from '+r.sent_from);
+    alert('Sent from '+r.sent_from+' (v'+r.customer_version+')');
   }catch(e){errEl.textContent='Could not reach the email service.';errEl.style.display='block';}
   finally{btn.disabled=false;btn.textContent='Send';}
 }
@@ -978,6 +1028,7 @@ function draw(){
   if(A.page==='customers')setTimeout(loadCustomersPage,50);
   if(A.page==='vendorMaster')setTimeout(loadVendorsMaster,50);
   if(A.page==='reviewQueue')setTimeout(loadReviewQueue,50);
+  if(A.page==='log')setTimeout(loadLog,50);
 }
 function initTA(){document.querySelectorAll('textarea.iinput').forEach(el=>{el.style.height='auto';el.style.height=el.scrollHeight+'px';el.addEventListener('input',()=>{el.style.height='auto';el.style.height=el.scrollHeight+'px';});});}
 
@@ -1123,8 +1174,8 @@ function resetPasswordHTML(){
 // ── App shell ─────────────────────────────────────────────────────────────────
 function appHTML(){
   const init=(A.user?.name||'U').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
-  const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master',integrations:'Integrations',platform:'All Companies',companyProfile:'Company Profile',reviewQueue:'Review Queue'};
-  const inEditor=['editor','terms','summary','vendor','print'].includes(A.page);
+  const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',log:'Activity Log',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master',integrations:'Integrations',platform:'All Companies',companyProfile:'Company Profile',reviewQueue:'Review Queue'};
+  const inEditor=['editor','terms','summary','vendor','print','log'].includes(A.page);
 
   const nav=(page,cb)=>`A.page='${page}';${cb||''}closeSidebar();draw()`;
   const sidebar=`<div class="sidebar${A.sbOpen?' open':''}">
@@ -1167,6 +1218,7 @@ function appHTML(){
   else if(A.page==='summary')pageContent=summaryHTML();
   else if(A.page==='vendor')pageContent=vendorHTML();
   else if(A.page==='print')pageContent=printHTML();
+  else if(A.page==='log')pageContent=logHTML();
   else if(A.page==='products')pageContent=productsHTML();
   else if(A.page==='customers')pageContent=customersHTML();
   else if(A.page==='vendorMaster')pageContent=vendorsMasterHTML();
@@ -1175,6 +1227,14 @@ function appHTML(){
   else if(A.page==='platform')pageContent=platformHTML();
   else if(A.page==='companyProfile')pageContent=companyProfileHTML();
   else if(A.page==='reviewQueue')pageContent=reviewQueueHTML();
+
+  if(['editor','terms','vendor'].includes(A.page)&&isQuoteLocked()&&!A.reviewMode){
+    pageContent=`<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+      <div><div style="font-weight:700;color:#9a3412">🔒 This quote is locked (status: ${esc(STATUS_LABELS[A.activeQuote.status]||A.activeQuote.status)})</div>
+      <div style="font-size:13px;color:#9a3412">Set the status back to Draft to make changes.</div></div>
+      <button class="btn btn-navy" onclick="unlockForEditing()">Unlock — set to Draft</button>
+    </div><div style="pointer-events:none;opacity:.55;user-select:none">${pageContent}</div>`;
+  }
 
   return`<div class="shell">${sidebar}${sbOverlay}<div class="main">
     <div class="topbar"><div style="display:flex;align-items:center;gap:6px;min-width:0"><button class="sb-toggle" onclick="toggleSidebar()" aria-label="Menu">☰</button><div class="topbar-title">${PAGE_TITLES[A.page]||''}</div></div><div class="topbar-right">${topbarRight}</div></div>
@@ -1191,16 +1251,16 @@ function buildTopbarRight(){
       <button class="vtbtn ${A.view==='client'?'active':''}" onclick="A.view='client';draw()">Client</button>
     </div>
     <button class="btn" onclick="downloadTemplate()" title="Download Excel template">📄 Template</button>
-    <label class="btn" style="cursor:pointer" title="Import from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importExcel(event)"></label>
+    ${!isQuoteLocked()?`<label class="btn" style="cursor:pointer" title="Import from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importExcel(event)"></label>`:''}
     <button class="btn${imgOn()?' btn-navy':''}" onclick="toggleImgOn()" title="Toggle product images & catalog assist for this quote">🖼 Images ${imgOn()?'ON':'OFF'}</button>
-    <button class="btn" onclick="openBomModal()" title="Generate a bill of materials from a project description using AI">✨ Auto-BOM</button>
+    ${!isQuoteLocked()?`<button class="btn" onclick="openBomModal()" title="Generate a bill of materials from a project description using AI">✨ Auto-BOM</button>`:''}
     <button class="btn" onclick="openProposalModal()" title="Generate a technical/commercial proposal document from this quote using AI">📑 Generate Proposal</button>
     <button class="btn" onclick="reviewQuote()">🔍 AI Review</button>
     ${reviewStatusBadgeHTML()}
     <button class="btn" onclick="showVersionHistoryModal()" title="View past review submissions">📜 History</button>
-    <button class="btn" onclick="submitForReview()" title="Snapshot this quote and send it for internal approval before it goes to the customer">📤 Send to Review</button>
+    ${!isQuoteLocked()?`<button class="btn" onclick="submitForReview()" title="Snapshot this quote and send it for internal approval before it goes to the customer">📤 Send to Review</button>`:''}
     <button class="btn" onclick="A.page='dashboard';draw()">← Back</button>
-    <button class="btn btn-navy" onclick="saveQuote()">💾 Save</button>`;
+    ${!isQuoteLocked()?`<button class="btn btn-navy" onclick="saveQuote()">💾 Save</button>`:`<button class="btn btn-navy" onclick="unlockForEditing()">🔓 Unlock to edit</button>`}`;
   if(A.page==='products')return`
     <button class="btn" onclick="downloadProdTemplate()">⬇ Template</button>
     <label class="btn" style="cursor:pointer" title="Import products from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importProducts(event)"></label>
@@ -1233,14 +1293,15 @@ function buildTopbarRight(){
 
 function buildCstrip(){
   const o=opt();
+  const locked=isQuoteLocked();
   return`<div class="cstrip">
     <span class="cstrip-label">Currency</span>
-    <select onchange="A.cur=this.value;A.rate=RATES[this.value]||1;schedSave();draw()">
+    <select ${locked?'disabled title="Locked — unlock the quote to change"':''} onchange="A.cur=this.value;A.rate=RATES[this.value]||1;schedSave();draw()">
       ${['AED','USD','EUR','GBP','SAR','QAR'].map(c=>`<option value="${c}" ${A.cur===c?'selected':''}>${c}</option>`).join('')}
     </select>
     <span style="color:var(--gray-300)">|</span>
     <span class="cstrip-label">Rate to AED</span>
-    <input type="number" value="${A.rate}" step="0.01" onchange="A.rate=+this.value;schedSave()">
+    <input type="number" ${locked?'disabled title="Locked — unlock the quote to change"':''} value="${A.rate}" step="0.01" onchange="A.rate=+this.value;schedSave()">
     ${A.activeQuote?`<span style="color:var(--gray-300)">|</span>
     <span class="cstrip-label">Status</span>
     <select onchange="A.activeQuote.status=this.value;schedSave()">
@@ -1248,7 +1309,7 @@ function buildCstrip(){
     </select>`:''}
     <span style="color:var(--gray-300)">|</span>
     <div class="tab-btns">
-      ${['editor','terms','summary','vendor','print'].map(p=>`<button class="tab-btn ${A.page===p?'active':''}" onclick="A.page='${p}';draw()">${{editor:'Quote',terms:'Terms',summary:'Summary',vendor:'Vendors',print:'Print'}[p]}</button>`).join('')}
+      ${['editor','terms','summary','vendor','print','log'].map(p=>`<button class="tab-btn ${A.page===p?'active':''}" onclick="A.page='${p}';draw()">${{editor:'Quote',terms:'Terms',summary:'Summary',vendor:'Vendors',print:'Print',log:'Log'}[p]}</button>`).join('')}
     </div>
   </div>`;
 }
