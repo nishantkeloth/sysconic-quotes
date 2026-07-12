@@ -227,7 +227,9 @@ def register():
             co = sb.table('companies').select('*').eq('id', invite['company_id']).execute().data[0]
             user = sb.table('users').insert({
                 'company_id': co['id'], 'email': email, 'name': name,
-                'role': invite['role'], 'password_hash': pw_hash, 'invited_by': invite['invited_by']
+                'role': invite['role'],
+                'can_review': invite.get('can_review', False), 'can_view_all_quotes': invite.get('can_view_all_quotes', False),
+                'password_hash': pw_hash, 'invited_by': invite['invited_by']
             }).execute().data[0]
             sb.table('invites').update({'accepted': True}).eq('token', invite['token']).execute()
             token = make_token(user['id'], co['id'], user['role'], is_platform_admin=False)
@@ -343,6 +345,8 @@ def invite():
         d     = request.json or {}
         email = (d.get('email') or '').strip().lower()
         role  = d.get('role', 'user')
+        can_review = bool(d.get('can_review'))
+        can_view_all_quotes = bool(d.get('can_view_all_quotes'))
 
         if not email:
             return jsonify({'error': 'Email required'}), 400
@@ -356,6 +360,7 @@ def invite():
         sb.table('invites').insert({
             'company_id': claims['company_id'],
             'email': email, 'role': role,
+            'can_review': can_review, 'can_view_all_quotes': can_view_all_quotes,
             'token': token, 'invited_by': claims['user_id']
         }).execute()
 
@@ -399,6 +404,7 @@ def accept_invite():
         user = sb.table('users').insert({
             'company_id': invite['company_id'], 'email': invite['email'],
             'name': name, 'role': invite['role'],
+            'can_review': invite.get('can_review', False), 'can_view_all_quotes': invite.get('can_view_all_quotes', False),
             'password_hash': pw_hash, 'invited_by': invite['invited_by']
         }).execute().data[0]
 
@@ -520,12 +526,12 @@ def team():
         claims = verify_token(request)
         if not claims: return jsonify({'error': 'Unauthorized'}), 401
         if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
-        members = sb.table('users').select('id,name,email,role,created_at,is_platform_admin,can_review').eq('company_id', claims['company_id']).execute()
+        members = sb.table('users').select('id,name,email,role,created_at,is_platform_admin,can_review,can_view_all_quotes').eq('company_id', claims['company_id']).execute()
         # Platform-admin accounts are excluded even if their row happens to share
         # this company_id — they're managed at the platform level, not visible
         # to (or manageable by) a regular tenant's company admin.
         visible_members = [m for m in members.data if not m.get('is_platform_admin')]
-        pending = sb.table('invites').select('token,email,role,created_at,expires_at').eq('company_id', claims['company_id']).eq('accepted', False).execute()
+        pending = sb.table('invites').select('token,email,role,can_review,can_view_all_quotes,created_at,expires_at').eq('company_id', claims['company_id']).eq('accepted', False).execute()
         return jsonify({'members': visible_members, 'pending': pending.data})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -588,6 +594,32 @@ def update_team_can_review(user_id):
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
+# ── Grant/revoke a team member's "view all quotes" visibility ──────────────────
+# Company-Admin-only, add-on capability. Without it, a plain User only sees
+# quotes they personally created — set this for someone who needs company-
+# wide visibility (e.g. a sales manager) without making them a full Admin.
+@app.route('/api/auth/team/<user_id>/can-view-all-quotes', methods=['PUT'])
+def update_team_can_view_all_quotes(user_id):
+    try:
+        sb = get_sb()
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+
+        can_view_all_quotes = bool((request.json or {}).get('can_view_all_quotes'))
+
+        target = sb.table('users').select('id,is_platform_admin').eq('id', user_id).eq('company_id', claims['company_id']).execute()
+        if not target.data:
+            return jsonify({'error': 'Team member not found'}), 404
+        if target.data[0].get('is_platform_admin'):
+            return jsonify({'error': 'This account is managed at the platform level'}), 403
+
+        row = sb.table('users').update({'can_view_all_quotes': can_view_all_quotes}).eq('id', user_id).execute()
+        return jsonify({'user': {'id': row.data[0]['id'], 'can_view_all_quotes': row.data[0]['can_view_all_quotes']}})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 # ── Change the role on a pending (not-yet-accepted) invite ─────────────────────
 @app.route('/api/auth/invites/<token>/role', methods=['PUT'])
 def update_invite_role(token):
@@ -606,6 +638,47 @@ def update_invite_role(token):
             return jsonify({'error': 'Invite not found'}), 404
 
         sb.table('invites').update({'role': new_role}).eq('token', token).execute()
+        return jsonify({'ok': True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# ── Change the reviewer / view-all-quotes flags on a pending invite ────────────
+# Same "user maintenance at invite time" idea as the role — an admin can set
+# these before the person even joins, not just afterward in Team & Settings.
+@app.route('/api/auth/invites/<token>/can-review', methods=['PUT'])
+def update_invite_can_review(token):
+    try:
+        sb = get_sb()
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+
+        can_review = bool((request.json or {}).get('can_review'))
+        existing = sb.table('invites').select('id').eq('token', token).eq('company_id', claims['company_id']).eq('accepted', False).execute()
+        if not existing.data:
+            return jsonify({'error': 'Invite not found'}), 404
+
+        sb.table('invites').update({'can_review': can_review}).eq('token', token).execute()
+        return jsonify({'ok': True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/auth/invites/<token>/can-view-all-quotes', methods=['PUT'])
+def update_invite_can_view_all_quotes(token):
+    try:
+        sb = get_sb()
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+
+        can_view_all_quotes = bool((request.json or {}).get('can_view_all_quotes'))
+        existing = sb.table('invites').select('id').eq('token', token).eq('company_id', claims['company_id']).eq('accepted', False).execute()
+        if not existing.data:
+            return jsonify({'error': 'Invite not found'}), 404
+
+        sb.table('invites').update({'can_view_all_quotes': can_view_all_quotes}).eq('token', token).execute()
         return jsonify({'ok': True})
     except Exception as e:
         traceback.print_exc()
