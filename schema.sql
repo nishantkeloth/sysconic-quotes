@@ -133,17 +133,42 @@ create table if not exists quote_version_reviewers (
 create index if not exists idx_qvr_version on quote_version_reviewers(version_id);
 create index if not exists idx_qvr_user on quote_version_reviewers(user_id);
 
--- ─── Quote emails (lightweight send log — who emailed this quote to whom,
--- and when) ────────────────────────────────────────────────────────────────
+-- ─── Quote emails (one row per customer send — who emailed this quote to
+-- whom, when, and a full content snapshot at that moment, mirroring what
+-- quote_versions does for review submissions. version_number matches
+-- quotes.customer_version at the time of that send, so past sends stay
+-- viewable/comparable even after the live quote_data keeps changing) ───────
 create table if not exists quote_emails (
   id uuid default gen_random_uuid() primary key,
   quote_id uuid references quotes(id) on delete cascade not null,
   sent_by uuid references users(id),
   sent_to text not null,
   subject text,
-  sent_at timestamptz default now()
+  sent_at timestamptz default now(),
+  version_number int,
+  title text,
+  customer text,
+  currency text,
+  exchange_rate numeric,
+  quote_data jsonb,
+  terms_data jsonb,
+  vendor_data jsonb
 );
 create index if not exists idx_quote_emails_quote on quote_emails(quote_id);
+create index if not exists idx_quote_emails_version on quote_emails(quote_id, version_number);
+
+-- ─── Quote activity log (one row per notable action on a quote — created,
+-- status changed, submitted/approved/rejected for review, admin overrides,
+-- emailed to customer — shown as a timeline in the quote's Log tab) ────────
+create table if not exists quote_activity (
+  id uuid default gen_random_uuid() primary key,
+  quote_id uuid references quotes(id) on delete cascade not null,
+  action text not null,
+  detail text,
+  actor_id uuid references users(id),
+  created_at timestamptz default now()
+);
+create index if not exists idx_quote_activity_quote on quote_activity(quote_id);
 
 -- ─── Quote activity log (one row per notable action on a quote — created,
 -- status changed, submitted/approved/rejected for review, admin overrides,

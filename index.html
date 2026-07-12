@@ -680,6 +680,212 @@ async function showVersionHistoryModal(){
 }
 function closeVersionModal(){const el=document.getElementById('verOverlay');if(el)el.remove();}
 
+// ── Compare versions (works across review submissions + customer sends —
+// both are stored as full content snapshots, so the same diff engine can
+// compare any two of either kind) ───────────────────────────────────────────
+async function showCompareModal(){
+  if(!A.activeQuote)return;
+  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="cmpOverlay" onclick="if(event.target===this)closeCompareModal()">'+
+    '<div class="modal" style="max-width:960px;max-height:86vh;overflow-y:auto">'+
+    '<div class="modal-title">🔍 Compare versions</div>'+
+    '<div class="modal-sub">'+esc(A.activeQuote.title||'')+'</div>'+
+    '<div id="cmpPickers" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin:14px 0">'+
+      '<div style="flex:1;min-width:220px"><label style="font-size:12px;font-weight:700;color:var(--gray-500)">Version A</label><select id="cmpSelA" class="iinput" style="width:100%"></select></div>'+
+      '<div style="flex:1;min-width:220px"><label style="font-size:12px;font-weight:700;color:var(--gray-500)">Version B</label><select id="cmpSelB" class="iinput" style="width:100%"></select></div>'+
+      '<button class="btn btn-navy" onclick="runCompare()">Compare</button>'+
+    '</div>'+
+    '<div id="cmpBody"><div style="text-align:center;padding:20px;color:var(--gray-500)">Loading…</div></div>'+
+    '<div class="modal-actions"><button class="btn" onclick="closeCompareModal()">Close</button></div>'+
+    '</div></div>');
+  const [vr,sr]=await Promise.all([
+    api('GET','/api/quotes/'+A.activeQuote.id+'/versions'),
+    api('GET','/api/quotes/'+A.activeQuote.id+'/customer-sends'),
+  ]);
+  const entries=[
+    ...((vr.versions)||[]).map(v=>({kind:'review',id:v.id,label:'Review v'+v.version_number+' — '+(REVIEW_STATUS_STYLE[v.status]?.t||v.status),date:v.submitted_at})),
+    ...((sr.sends)||[]).map(s=>({kind:'send',id:s.id,label:'Sent v'+s.version_number+' — to '+(s.sent_to||''),date:s.sent_at})),
+  ].sort((a,b)=>new Date(b.date)-new Date(a.date));
+  A._cmpEntries=entries;
+  const body=document.getElementById('cmpBody');
+  if(entries.length<2){
+    const pk=document.getElementById('cmpPickers');if(pk)pk.style.display='none';
+    if(body)body.innerHTML='<div style="text-align:center;padding:40px;color:var(--gray-500)">Need at least two saved versions (review submissions or customer sends) to compare.</div>';
+    return;
+  }
+  const opts=entries.map((e,i)=>`<option value="${i}">${esc(e.label)} · ${e.date?new Date(e.date).toLocaleString():''}</option>`).join('');
+  const selA=document.getElementById('cmpSelA'),selB=document.getElementById('cmpSelB');
+  selA.innerHTML=opts;selB.innerHTML=opts;
+  selA.value=1;selB.value=0; // default: previous vs most recent
+  runCompare();
+}
+function closeCompareModal(){const el=document.getElementById('cmpOverlay');if(el)el.remove();A._cmpEntries=null;}
+async function fetchSnapshot(e){
+  const qid=A.activeQuote.id;
+  const r=e.kind==='review'?await api('GET','/api/quotes/'+qid+'/versions/'+e.id):await api('GET','/api/quotes/'+qid+'/customer-sends/'+e.id);
+  if(r.error)return{error:r.error};
+  const snap=e.kind==='review'?r.version:r.send;
+  if(!snap||!snap.quote_data)return{error:'This version has no saved content snapshot (it predates version comparison being added).'};
+  return{snap};
+}
+async function runCompare(){
+  const body=document.getElementById('cmpBody');if(!body)return;
+  const entries=A._cmpEntries||[];
+  const ai=+document.getElementById('cmpSelA').value, bi=+document.getElementById('cmpSelB').value;
+  const ea=entries[ai],eb=entries[bi];
+  if(!ea||!eb)return;
+  if(ai===bi){body.innerHTML='<div style="text-align:center;padding:20px;color:var(--gray-500)">Pick two different versions to compare.</div>';return;}
+  body.innerHTML='<div style="text-align:center;padding:20px;color:var(--gray-500)">Loading…</div>';
+  const [ra,rb]=await Promise.all([fetchSnapshot(ea),fetchSnapshot(eb)]);
+  if(ra.error||rb.error){body.innerHTML='<div class="auth-err">'+esc(ra.error||rb.error)+'</div>';return;}
+  body.innerHTML=renderVersionDiff(ea,ra.snap,eb,rb.snap);
+}
+function cmpFieldRow(label,av,bv,fmtFn){
+  fmtFn=fmtFn||(x=>esc(x==null||x===''?'—':String(x)));
+  const changed=String(av??'')!==String(bv??'');
+  return `<tr>
+    <td style="padding:6px 10px;font-size:12px;color:var(--gray-500);white-space:nowrap">${esc(label)}</td>
+    <td style="padding:6px 10px;font-size:13px;${changed?'background:#fdeceb':''}">${fmtFn(av)}</td>
+    <td style="padding:6px 10px;font-size:13px;${changed?'background:#e9f9ef':''}">${fmtFn(bv)}</td>
+  </tr>`;
+}
+function renderVersionDiff(ea,snapA,eb,snapB){
+  let html=`<div style="display:flex;gap:10px;margin-bottom:14px">
+    <div style="flex:1;background:#f7f9fc;border-radius:8px;padding:10px 14px">
+      <div style="font-size:11px;font-weight:700;color:var(--gray-500);text-transform:uppercase">Version A</div>
+      <div style="font-weight:700">${esc(ea.label)}</div>
+      <div style="font-size:12px;color:var(--gray-500)">${ea.date?new Date(ea.date).toLocaleString():''}</div>
+    </div>
+    <div style="flex:1;background:#f7f9fc;border-radius:8px;padding:10px 14px">
+      <div style="font-size:11px;font-weight:700;color:var(--gray-500);text-transform:uppercase">Version B</div>
+      <div style="font-weight:700">${esc(eb.label)}</div>
+      <div style="font-size:12px;color:var(--gray-500)">${eb.date?new Date(eb.date).toLocaleString():''}</div>
+    </div>
+  </div>`;
+
+  html+=`<table style="width:100%;border-collapse:collapse;margin-bottom:16px">
+    <thead><tr><th style="text-align:left;padding:6px 10px;font-size:11px;color:var(--gray-500);text-transform:uppercase">Field</th>
+    <th style="text-align:left;padding:6px 10px;font-size:11px;color:var(--gray-500);text-transform:uppercase">A</th>
+    <th style="text-align:left;padding:6px 10px;font-size:11px;color:var(--gray-500);text-transform:uppercase">B</th></tr></thead><tbody>`
+    +cmpFieldRow('Title',snapA.title,snapB.title)
+    +cmpFieldRow('Customer',snapA.customer,snapB.customer)
+    +cmpFieldRow('Currency',snapA.currency,snapB.currency)
+    +`</tbody></table>`;
+
+  const optsA=snapA.quote_data||[], optsB=snapB.quote_data||[];
+  const optIds=optsA.map(o=>o.id);
+  optsB.forEach(o=>{if(!optIds.includes(o.id))optIds.push(o.id);});
+  optIds.forEach(oid=>{
+    const oa=optsA.find(o=>o.id===oid), ob=optsB.find(o=>o.id===oid);
+    const label=(oa||ob).label||'Option';
+    if(!oa||!ob){
+      html+=`<div class="card" style="border-left:4px solid ${oa?'#e05252':'#2ea36c'}">
+        <div style="font-weight:700">${esc(label)} — ${oa?'removed in B':'added in B'}</div>
+      </div>`;
+      return;
+    }
+    html+=cmpOptionHTML(label,oa,ob);
+  });
+
+  html+=cmpTermsHTML(snapA.terms_data||[],snapB.terms_data||[]);
+  html+=cmpVendorHTML(snapA.vendor_data||[],snapB.vendor_data||[]);
+  return html;
+}
+function cmpOptionHTML(label,oa,ob){
+  const Ta=calcOpt(oa), Tb=calcOpt(ob);
+  let html=`<div class="card"><div class="card-title">${esc(label)}</div>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:10px"><tbody>`
+    +cmpFieldRow('VAT',oa.vatEnabled?oa.vatRate+'%':'Off',ob.vatEnabled?ob.vatRate+'%':'Off')
+    +cmpFieldRow('Subtotal',fmt(Ta.ts),fmt(Tb.ts))
+    +cmpFieldRow('Grand total',fmt(Ta.grand),fmt(Tb.grand))
+    +cmpFieldRow('Margin',fmtP(Ta.margin),fmtP(Tb.margin))
+    +`</tbody></table>`;
+
+  const secIds=(oa.sections||[]).map(s=>s.id);
+  (ob.sections||[]).forEach(s=>{if(!secIds.includes(s.id))secIds.push(s.id);});
+  secIds.forEach(sid=>{
+    const sa=(oa.sections||[]).find(s=>s.id===sid);
+    const sb=(ob.sections||[]).find(s=>s.id===sid);
+    if(!sa||!sb){
+      html+=`<div style="padding:8px 0;border-top:1px dashed var(--gray-200)">
+        <div style="font-weight:700;font-size:13px;color:${sa?'#e05252':'#2ea36c'}">Section "${esc((sa||sb).name)}" — ${sa?'removed':'added'} in B</div>
+      </div>`;
+      return;
+    }
+    html+=cmpSectionHTML(sa,sb);
+  });
+  html+='</div>';
+  return html;
+}
+function cmpSectionHTML(sa,sb){
+  const ids=(sa.items||[]).map(i=>i.id);
+  (sb.items||[]).forEach(i=>{if(!ids.includes(i.id))ids.push(i.id);});
+  let rows='',sectionChanged=sa.name!==sb.name;
+  ids.forEach(id=>{
+    const ia=(sa.items||[]).find(i=>i.id===id), ib=(sb.items||[]).find(i=>i.id===id);
+    if(!ia||!ib){
+      const it=ia||ib;
+      rows+=`<tr style="background:${ia?'#fdeceb':'#e9f9ef'}"><td colspan="5" style="padding:6px 8px;font-size:12px">${ia?'− Removed:':'+ Added:'} ${esc(it.brand)} ${esc(it.model)}${it.desc?' — '+esc(it.desc):''}</td></tr>`;
+      sectionChanged=true;
+      return;
+    }
+    const fields=['brand','model','desc','qty','cost','disc','discAdd','margin'];
+    const changed=fields.some(f=>String(ia[f]??'')!==String(ib[f]??''));
+    if(changed)sectionChanged=true;
+    const cA=calcItem(ia), cB=calcItem(ib);
+    rows+=`<tr style="${changed?'background:#fff7ed':''}">
+      <td style="padding:5px 8px;font-size:12px">${esc(ia.brand)} ${esc(ia.model)}${(ia.brand!==ib.brand||ia.model!==ib.model)?' → '+esc(ib.brand)+' '+esc(ib.model):''}</td>
+      <td style="padding:5px 8px;font-size:12px">${esc(ia.desc||'')}${ia.desc!==ib.desc?' → '+esc(ib.desc||''):''}</td>
+      <td style="padding:5px 8px;font-size:12px;text-align:center">${ia.qty||1}${ia.qty!==ib.qty?' → '+(ib.qty||1):''}</td>
+      <td style="padding:5px 8px;font-size:12px;text-align:right">${fmt(cA.up)}${cA.up!==cB.up?' → '+fmt(cB.up):''}</td>
+      <td style="padding:5px 8px;font-size:12px;text-align:right">${fmt(cA.tp)}${cA.tp!==cB.tp?' → '+fmt(cB.tp):''}</td>
+    </tr>`;
+  });
+  if(!sectionChanged){
+    return `<details style="margin-top:6px"><summary style="font-size:12px;color:var(--gray-500);cursor:pointer;padding:4px 0">${esc(sa.name)} — no changes</summary>
+      <table style="width:100%;border-collapse:collapse">${rows}</table></details>`;
+  }
+  return `<div style="margin-top:10px">
+    <div style="font-weight:600;font-size:13px;margin-bottom:4px">${esc(sa.name)}${sa.name!==sb.name?' → '+esc(sb.name):''}</div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr><th style="text-align:left;font-size:11px;color:var(--gray-500);padding:4px 8px">Item</th><th style="text-align:left;font-size:11px;color:var(--gray-500);padding:4px 8px">Description</th><th style="font-size:11px;color:var(--gray-500);padding:4px 8px">Qty</th><th style="text-align:right;font-size:11px;color:var(--gray-500);padding:4px 8px">Unit</th><th style="text-align:right;font-size:11px;color:var(--gray-500);padding:4px 8px">Total</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+function cmpTermsHTML(ta,tb){
+  const max=Math.max(ta.length,tb.length);
+  let rows='';
+  for(let i=0;i<max;i++){
+    const a=ta[i],b=tb[i];
+    if(a===b)continue;
+    rows+=`<tr><td style="padding:5px 8px;font-size:12px;width:24px;color:var(--gray-500)">${i+1}.</td>
+      <td style="padding:5px 8px;font-size:12px;${a==null?'':'background:#fdeceb'}">${a==null?'<span style="color:var(--gray-400)">—</span>':esc(a)}</td>
+      <td style="padding:5px 8px;font-size:12px;${b==null?'':'background:#e9f9ef'}">${b==null?'<span style="color:var(--gray-400)">—</span>':esc(b)}</td>
+    </tr>`;
+  }
+  if(!rows)return '';
+  return `<div class="card"><div class="card-title">Terms & Conditions — changes</div>
+    <table style="width:100%;border-collapse:collapse">${rows}</table></div>`;
+}
+function cmpVendorHTML(va,vb){
+  const ids=va.map(v=>v.id);
+  vb.forEach(v=>{if(!ids.includes(v.id))ids.push(v.id);});
+  let rows='';
+  ids.forEach(id=>{
+    const a=va.find(v=>v.id===id), b=vb.find(v=>v.id===id);
+    if(!a||!b){const v=a||b;rows+=`<tr style="background:${a?'#fdeceb':'#e9f9ef'}"><td colspan="3" style="padding:5px 8px;font-size:12px">${a?'− Removed:':'+ Added:'} ${esc(v.vendor)}</td></tr>`;return;}
+    if(a.vendor===b.vendor&&a.payable===b.payable&&a.status===b.status)return;
+    rows+=`<tr style="background:#fff7ed">
+      <td style="padding:5px 8px;font-size:12px">${esc(a.vendor)}${a.vendor!==b.vendor?' → '+esc(b.vendor):''}</td>
+      <td style="padding:5px 8px;font-size:12px;text-align:right">${fmt(a.payable)}${a.payable!==b.payable?' → '+fmt(b.payable):''}</td>
+      <td style="padding:5px 8px;font-size:12px">${esc(a.status)}${a.status!==b.status?' → '+esc(b.status):''}</td>
+    </tr>`;
+  });
+  if(!rows)return '';
+  return `<div class="card"><div class="card-title">Vendors — changes</div>
+    <table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;font-size:11px;color:var(--gray-500);padding:4px 8px">Vendor</th><th style="text-align:right;font-size:11px;color:var(--gray-500);padding:4px 8px">Payable</th><th style="text-align:left;font-size:11px;color:var(--gray-500);padding:4px 8px">Status</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
 // ── Review Queue page ─────────────────────────────────────────────────────────
 function reviewQueueHTML(){
   const isAdmin=A.user?.role==='admin';
@@ -845,7 +1051,12 @@ const ACTIVITY_LABELS={
   emailed_to_customer:{icon:'✉️',label:'Emailed to customer'},
 };
 function logHTML(){
-  return `<div class="card" style="padding:0"><div id="quoteLogList"></div></div>`;
+  return `<div class="card" style="padding:0">
+    <div style="display:flex;justify-content:flex-end;padding:12px 20px;border-bottom:1px solid var(--gray-200)">
+      <button class="btn btn-sm" onclick="showCompareModal()" title="Compare any two saved versions (review submissions or customer sends)">🔍 Compare versions</button>
+    </div>
+    <div id="quoteLogList"></div>
+  </div>`;
 }
 async function loadLog(){
   const el=document.getElementById('quoteLogList');if(!el||!A.activeQuote)return;
@@ -1258,6 +1469,7 @@ function buildTopbarRight(){
     <button class="btn" onclick="reviewQuote()">🔍 AI Review</button>
     ${reviewStatusBadgeHTML()}
     <button class="btn" onclick="showVersionHistoryModal()" title="View past review submissions">📜 History</button>
+    <button class="btn" onclick="showCompareModal()" title="Compare any two saved versions (review submissions or customer sends)">🔍 Compare</button>
     ${!isQuoteLocked()?`<button class="btn" onclick="submitForReview()" title="Snapshot this quote and send it for internal approval before it goes to the customer">📤 Send to Review</button>`:''}
     <button class="btn" onclick="A.page='dashboard';draw()">← Back</button>
     ${!isQuoteLocked()?`<button class="btn btn-navy" onclick="saveQuote()">💾 Save</button>`:`<button class="btn btn-navy" onclick="unlockForEditing()">🔓 Unlock to edit</button>`}`;

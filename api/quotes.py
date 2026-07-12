@@ -444,6 +444,50 @@ def get_version(qid, vid):
     version['reviewers'] = _reviewers_by_version([vid]).get(vid, [])
     return jsonify({'version': version})
 
+# ── Customer-send snapshots (list + detail, mirrors versions above) ────────────
+@app.route('/api/quotes/<qid>/customer-sends', methods=['GET'])
+def list_customer_sends(qid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+
+    q = sb.table('quotes').select('id,created_by').eq('id', qid).eq('company_id', claims['company_id']).execute()
+    if not q.data: return jsonify({'error': 'Not found'}), 404
+    if not _can_view_quote(qid, q.data[0], claims):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    rows = sb.table('quote_emails').select(
+        'id,version_number,sent_to,sent_by,sent_at,subject'
+    ).eq('quote_id', qid).order('sent_at', desc=True).execute()
+    sends = rows.data or []
+    sender_ids = list({s['sent_by'] for s in sends if s.get('sent_by')})
+    senders_by_id = {}
+    if sender_ids:
+        sr = sb.table('users').select('id,name,email').in_('id', sender_ids).execute()
+        senders_by_id = {u['id']: u for u in (sr.data or [])}
+    for s in sends:
+        u = senders_by_id.get(s.get('sent_by'), {})
+        s['sent_by_name'] = u.get('name') or u.get('email') or 'Unknown'
+    return jsonify({'sends': sends})
+
+@app.route('/api/quotes/<qid>/customer-sends/<sid>', methods=['GET'])
+def get_customer_send(qid, sid):
+    """Full snapshot (quote_data/terms_data/vendor_data) for a single customer
+    send — kept separate from the list endpoint above so the list stays
+    light. Sends made before the snapshot migration have null content
+    columns; the frontend shows a friendly message for those instead of a
+    blank diff."""
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+
+    q = sb.table('quotes').select('id,created_by').eq('id', qid).eq('company_id', claims['company_id']).execute()
+    if not q.data: return jsonify({'error': 'Not found'}), 404
+    if not _can_view_quote(qid, q.data[0], claims):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    s = sb.table('quote_emails').select('*').eq('id', sid).eq('quote_id', qid).execute()
+    if not s.data: return jsonify({'error': 'Not found'}), 404
+    return jsonify({'send': s.data[0]})
+
 @app.route('/api/quotes/review-queue', methods=['GET'])
 def review_queue():
     """Quotes where the current user has been personally assigned as a
@@ -705,7 +749,9 @@ def email_quote(qid):
     if not PDFSHIFT_API_KEY:
         return jsonify({'error': 'PDF rendering is not configured (missing PDFSHIFT_API_KEY)'}), 500
 
-    q = sb.table('quotes').select('id,title,status,customer_version').eq('id', qid).eq('company_id', claims['company_id']).execute()
+    q = sb.table('quotes').select(
+        'id,title,customer,status,currency,exchange_rate,quote_data,terms_data,vendor_data,customer_version'
+    ).eq('id', qid).eq('company_id', claims['company_id']).execute()
     if not q.data: return jsonify({'error': 'Not found'}), 404
     quote = q.data[0]
 
@@ -790,14 +836,23 @@ def email_quote(qid):
     if r.status_code != 202:
         return jsonify({'error': f'Email send failed ({r.status_code}): {r.text[:300]}'}), 502
 
-    sb.table('quote_emails').insert({
-        'quote_id': qid, 'sent_by': claims['user_id'], 'sent_to': to_email, 'subject': subject,
-    }).execute()
-
     # First successful send to the customer bumps the quote to "sent" (unless
     # it's already past that in its lifecycle — don't clobber awarded/lost),
     # and increments the customer-facing version counter (v1 on first send).
+    # A full content snapshot is stored alongside the send record itself
+    # (mirroring quote_versions for review submissions) so this exact send
+    # stays viewable/comparable later even after the live quote keeps
+    # changing.
     next_customer_version = (quote.get('customer_version') or 0) + 1
+    sb.table('quote_emails').insert({
+        'quote_id': qid, 'sent_by': claims['user_id'], 'sent_to': to_email, 'subject': subject,
+        'version_number': next_customer_version,
+        'title': quote.get('title'), 'customer': quote.get('customer'),
+        'currency': quote.get('currency'), 'exchange_rate': quote.get('exchange_rate'),
+        'quote_data': quote.get('quote_data'), 'terms_data': quote.get('terms_data'),
+        'vendor_data': quote.get('vendor_data'),
+    }).execute()
+
     quote_update = {'customer_version': next_customer_version}
     if quote.get('status') not in ('awarded', 'lost'):
         quote_update['status'] = 'sent'
