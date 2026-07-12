@@ -192,6 +192,20 @@ def company_users():
              for u in (rows.data or []) if not u.get('is_platform_admin')]
     return jsonify({'users': users})
 
+@app.route('/api/quotes/reviewer-candidates', methods=['GET'])
+def reviewer_candidates():
+    """Users eligible to be picked as a reviewer — i.e. flagged can_review by
+    a Company Admin in Team & Settings. This is what the 'Send to Review'
+    picker uses; company-users above stays general-purpose."""
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+
+    rows = sb.table('users').select('id,name,email,is_platform_admin,can_review')\
+        .eq('company_id', claims['company_id']).order('name').execute()
+    users = [{'id': u['id'], 'name': u.get('name'), 'email': u.get('email')}
+             for u in (rows.data or []) if u.get('can_review') and not u.get('is_platform_admin')]
+    return jsonify({'users': users})
+
 def _reviewers_by_version(version_ids):
     """id -> [{user_id,name,email,status,comment,decided_at}] for the given
     version ids, in one round trip each to quote_version_reviewers/users."""
@@ -260,12 +274,13 @@ def submit_review(qid):
     if not reviewer_ids:
         return jsonify({'error': 'Select at least one reviewer'}), 400
 
-    # Only allow picking reviewers who actually belong to this company.
+    # Only allow picking reviewers who belong to this company AND are flagged
+    # can_review — enforced server-side, not just filtered in the picker UI.
     valid = sb.table('users').select('id,name,email').in_('id', reviewer_ids)\
-        .eq('company_id', claims['company_id']).execute()
+        .eq('company_id', claims['company_id']).eq('can_review', True).execute()
     reviewers = valid.data or []
     if not reviewers:
-        return jsonify({'error': 'None of the selected reviewers are valid'}), 400
+        return jsonify({'error': 'None of the selected reviewers are eligible (they need the reviewer flag — set in Team & Settings)'}), 400
 
     next_version = (quote.get('current_version') or 0) + 1
     ver = sb.table('quote_versions').insert({
@@ -338,9 +353,28 @@ def review_queue():
     """Quotes where the current user has been personally assigned as a
     reviewer and hasn't decided yet — a "waiting on me" queue. Review is
     assigned per-quote by the creator, not open to the whole company, so
-    this is scoped to the caller rather than company-wide."""
+    this is scoped to the caller rather than company-wide.
+
+    ?scope=all (Company-Admin only) instead returns every quote in the
+    company currently pending review, regardless of who's assigned — this
+    is what backs the admin-override UI (force-approve/reassign/cancel)."""
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
+
+    if request.args.get('scope') == 'all' and claims['role'] == 'admin':
+        qrows = sb.table('quotes').select('id,title,customer,total_sell,current_version,updated_at,created_by')\
+            .eq('company_id', claims['company_id']).eq('review_status', 'pending')\
+            .order('updated_at', desc=True).execute()
+        quotes = qrows.data or []
+        if quotes:
+            qids = [q['id'] for q in quotes]
+            vrows = sb.table('quote_versions').select('id,quote_id,version_number').in_('quote_id', qids).execute()
+            version_id_by_quote_and_number = {(v['quote_id'], v['version_number']): v['id'] for v in (vrows.data or [])}
+            for q in quotes:
+                vid = version_id_by_quote_and_number.get((q['id'], q.get('current_version')))
+                q['pending_version_id'] = vid
+                q['reviewers'] = _reviewers_by_version([vid]).get(vid, []) if vid else []
+        return jsonify({'quotes': quotes})
 
     mine = sb.table('quote_version_reviewers').select('version_id')\
         .eq('user_id', claims['user_id']).eq('status', 'pending').execute()
@@ -374,11 +408,20 @@ def _resolve_version(qid, vid, claims):
     if not v.data: return q.data[0], None
     return q.data[0], v.data[0]
 
+def _recompute_aggregate(vid):
+    """Any 'changes_requested' wins immediately; otherwise the version only
+    becomes 'approved' once every assigned reviewer has approved."""
+    all_rows = sb.table('quote_version_reviewers').select('status').eq('version_id', vid).execute()
+    statuses = [r['status'] for r in (all_rows.data or [])]
+    if any(s == 'changes_requested' for s in statuses):
+        return 'changes_requested'
+    if statuses and all(s == 'approved' for s in statuses):
+        return 'approved'
+    return 'pending'
+
 def _record_reviewer_decision(qid, vid, claims, status, comment):
     """Records one assigned reviewer's decision on a version, then
-    recomputes the version's aggregate status: any 'changes_requested'
-    wins immediately; otherwise it only becomes 'approved' once every
-    assigned reviewer has approved. Returns (quote, agg_status, error_response)."""
+    recomputes the version's aggregate status. Returns (quote, agg_status, error_response)."""
     quote, version = _resolve_version(qid, vid, claims)
     if not quote: return None, None, (jsonify({'error': 'Quote not found'}), 404)
     if not version: return None, None, (jsonify({'error': 'Version not found'}), 404)
@@ -392,14 +435,7 @@ def _record_reviewer_decision(qid, vid, claims, status, comment):
         'status': status, 'comment': comment or None, 'decided_at': datetime.utcnow().isoformat(),
     }).eq('version_id', vid).eq('user_id', claims['user_id']).execute()
 
-    all_rows = sb.table('quote_version_reviewers').select('status').eq('version_id', vid).execute()
-    statuses = [r['status'] for r in (all_rows.data or [])]
-    if any(s == 'changes_requested' for s in statuses):
-        agg = 'changes_requested'
-    elif statuses and all(s == 'approved' for s in statuses):
-        agg = 'approved'
-    else:
-        agg = 'pending'
+    agg = _recompute_aggregate(vid)
 
     ver_update = {'status': agg}
     if agg != 'pending':
@@ -414,6 +450,29 @@ def _record_reviewer_decision(qid, vid, claims, status, comment):
         sb.table('quotes').update({'review_status': agg}).eq('id', qid).execute()
 
     return quote, agg, None
+
+def _admin_finalize_version(qid, vid, claims, status, comment):
+    """Company-Admin override: short-circuits the assigned reviewers and
+    forces a final decision directly. Any reviewer rows still 'pending' get
+    marked as superseded so their own view doesn't show a stale pending
+    forever. Returns (quote, error_response)."""
+    quote, version = _resolve_version(qid, vid, claims)
+    if not quote: return None, (jsonify({'error': 'Quote not found'}), 404)
+    if not version: return None, (jsonify({'error': 'Version not found'}), 404)
+
+    sb.table('quote_version_reviewers').update({
+        'status': status, 'comment': 'Overridden by admin decision', 'decided_at': datetime.utcnow().isoformat(),
+    }).eq('version_id', vid).eq('status', 'pending').execute()
+
+    sb.table('quote_versions').update({
+        'status': status, 'reviewed_by': claims['user_id'], 'reviewed_at': datetime.utcnow().isoformat(),
+        'review_comment': comment or None, 'admin_override': True,
+    }).eq('id', vid).execute()
+
+    if quote.get('current_version') == version.get('version_number'):
+        sb.table('quotes').update({'review_status': status}).eq('id', qid).execute()
+
+    return quote, None
 
 @app.route('/api/quotes/<qid>/versions/<vid>/approve', methods=['POST'])
 def approve_version(qid, vid):
@@ -442,6 +501,89 @@ def request_changes(qid, vid):
 
     quote, agg, err = _record_reviewer_decision(qid, vid, claims, 'changes_requested', comment)
     if err: return err
+    return jsonify({'ok': True, 'version_status': agg})
+
+# ── Company-Admin review overrides ───────────────────────────────────────────
+# These don't require the admin to be an assigned reviewer — Admins can force
+# a decision, cancel a submission, or reassign who's reviewing, on top of the
+# normal per-reviewer flow above.
+@app.route('/api/quotes/<qid>/versions/<vid>/admin-decide', methods=['POST'])
+def admin_decide_version(qid, vid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+
+    d = request.json or {}
+    decision = (d.get('decision') or '').strip()
+    comment = (d.get('comment') or '').strip()
+    if decision not in ('approved', 'changes_requested'):
+        return jsonify({'error': "decision must be 'approved' or 'changes_requested'"}), 400
+    if decision == 'changes_requested' and not comment:
+        return jsonify({'error': 'A comment is required when requesting changes'}), 400
+
+    quote, err = _admin_finalize_version(qid, vid, claims, decision, comment)
+    if err: return err
+    return jsonify({'ok': True})
+
+@app.route('/api/quotes/<qid>/versions/<vid>/cancel-review', methods=['POST'])
+def cancel_review(qid, vid):
+    """Aborts a pending submission (e.g. wrong reviewers picked, plans
+    changed) without anyone having to formally reject it. Reuses the
+    'changes_requested' terminal status so the quote goes back to editable —
+    admin_override + the comment distinguish this from a real rejection."""
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+
+    d = request.json or {}
+    comment = (d.get('comment') or '').strip() or 'Review cancelled by admin.'
+
+    quote, err = _admin_finalize_version(qid, vid, claims, 'changes_requested', comment)
+    if err: return err
+    return jsonify({'ok': True})
+
+@app.route('/api/quotes/<qid>/versions/<vid>/reassign-reviewers', methods=['POST'])
+def reassign_reviewers(qid, vid):
+    """Replaces who's reviewing a still-pending version. Reviewers who
+    already decided are left alone (for the audit trail) even if they're
+    dropped from the new list; only undecided assignments are added/removed."""
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+
+    quote, version = _resolve_version(qid, vid, claims)
+    if not quote: return jsonify({'error': 'Quote not found'}), 404
+    if not version: return jsonify({'error': 'Version not found'}), 404
+    if version['status'] != 'pending':
+        return jsonify({'error': 'This version is already finalized — nothing to reassign'}), 400
+
+    d = request.json or {}
+    reviewer_ids = list({rid for rid in (d.get('reviewer_ids') or []) if rid})
+    if not reviewer_ids:
+        return jsonify({'error': 'Select at least one reviewer'}), 400
+
+    valid = sb.table('users').select('id').in_('id', reviewer_ids)\
+        .eq('company_id', claims['company_id']).eq('can_review', True).execute()
+    valid_ids = {u['id'] for u in (valid.data or [])}
+    if not valid_ids:
+        return jsonify({'error': 'None of the selected reviewers are eligible (must have the reviewer flag)'}), 400
+
+    existing_rows = sb.table('quote_version_reviewers').select('*').eq('version_id', vid).execute().data or []
+    existing_user_ids = {r['user_id'] for r in existing_rows}
+
+    for r in existing_rows:
+        if r['user_id'] not in valid_ids and r['status'] == 'pending':
+            sb.table('quote_version_reviewers').delete().eq('id', r['id']).execute()
+
+    new_rows = [{'version_id': vid, 'user_id': uid} for uid in valid_ids if uid not in existing_user_ids]
+    if new_rows:
+        sb.table('quote_version_reviewers').insert(new_rows).execute()
+
+    agg = _recompute_aggregate(vid)
+    sb.table('quote_versions').update({'status': agg}).eq('id', vid).execute()
+    if agg != 'pending' and quote.get('current_version') == version.get('version_number'):
+        sb.table('quotes').update({'review_status': agg}).eq('id', qid).execute()
+
     return jsonify({'ok': True, 'version_status': agg})
 
 # ── Email to customer ────────────────────────────────────────────────────────
