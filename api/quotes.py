@@ -290,8 +290,8 @@ def submit_review(qid):
         'current_version': next_version,
     }).eq('id', qid).execute()
 
-    sender = sb.table('users').select('email,name').eq('id', claims['user_id']).execute()
-    sender_email = sender.data[0]['email'] if sender.data else None
+    sender = sb.table('users').select('email,name,ms365_email').eq('id', claims['user_id']).execute()
+    sender_email = (sender.data[0].get('ms365_email') or sender.data[0]['email']) if sender.data else None
     sender_name = (sender.data[0].get('name') or sender_email) if sender.data else 'A colleague'
     if sender_email:
         note = f'{sender_name} sent you "{quote.get("title") or "a quotation"}" for review (version {next_version}). Log in to Sysconic Quote Manager and open Review Queue to take a look.'
@@ -468,15 +468,24 @@ def email_quote(qid):
     subject = (d.get('subject') or f"Quotation — {quote.get('title') or 'Sysconic'}").strip()
     message = d.get('message') or ''
     html = d.get('html') or ''
+    from_email = (d.get('from_email') or '').strip()
     if not to_email:
         return jsonify({'error': 'Recipient email is required'}), 400
     if not html:
         return jsonify({'error': 'No quote HTML provided to render'}), 400
 
-    sender = sb.table('users').select('email,name').eq('id', claims['user_id']).execute()
+    sender = sb.table('users').select('email,name,ms365_email').eq('id', claims['user_id']).execute()
     if not sender.data:
         return jsonify({'error': 'Could not look up your account'}), 500
-    sender_email = sender.data[0]['email']
+    # The app login email isn't necessarily a real mailbox in the sender's
+    # Microsoft 365 tenant (Graph's send-as-user call 404s if it isn't), so
+    # prefer the M365 mailbox the user has told us to send from. If the
+    # frontend just submitted a new one, save it for next time too.
+    if from_email:
+        sb.table('users').update({'ms365_email': from_email}).eq('id', claims['user_id']).execute()
+        sender_email = from_email
+    else:
+        sender_email = sender.data[0].get('ms365_email') or sender.data[0]['email']
     sender_name = sender.data[0].get('name') or sender_email
 
     # Render the exact same HTML the browser shows, to a PDF, via PDFShift.

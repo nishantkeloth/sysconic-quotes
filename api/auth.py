@@ -233,7 +233,7 @@ def register():
             token = make_token(user['id'], co['id'], user['role'], is_platform_admin=False)
             return jsonify({
                 'token': token,
-                'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'role': user['role'], 'is_platform_admin': False},
+                'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'role': user['role'], 'is_platform_admin': False, 'ms365_email': user.get('ms365_email')},
                 'company': {'id': co['id'], 'name': co['name'], 'slug': co['slug']}
             })
 
@@ -254,7 +254,7 @@ def register():
         token = make_token(user['id'], co['id'], 'admin', is_platform_admin=False)
         return jsonify({
             'token': token,
-            'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'role': 'admin', 'is_platform_admin': False},
+            'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'role': 'admin', 'is_platform_admin': False, 'ms365_email': user.get('ms365_email')},
             'company': {'id': co['id'], 'name': co['name'], 'slug': co['slug']}
         })
     except Exception as e:
@@ -290,7 +290,7 @@ def login():
 
         return jsonify({
             'token': token,
-            'user': {'id': user['id'], 'name': user.get('name', ''), 'email': user['email'], 'role': user['role'], 'is_platform_admin': bool(user.get('is_platform_admin'))},
+            'user': {'id': user['id'], 'name': user.get('name', ''), 'email': user['email'], 'role': user['role'], 'is_platform_admin': bool(user.get('is_platform_admin')), 'ms365_email': user.get('ms365_email')},
             'company': {'id': co['id'], 'name': co['name'], 'slug': co['slug']}
         })
     except Exception as e:
@@ -304,11 +304,30 @@ def me():
         sb = get_sb()
         claims = verify_token(request)
         if not claims: return jsonify({'error': 'Unauthorized'}), 401
-        user = sb.table('users').select('id,name,email,role,company_id,is_platform_admin').eq('id', claims['user_id']).execute().data[0]
+        user = sb.table('users').select('id,name,email,role,company_id,is_platform_admin,ms365_email').eq('id', claims['user_id']).execute().data[0]
         co   = sb.table('companies').select('*').eq('id', claims['company_id']).execute().data[0]
         if co.get('status') == 'suspended':
             return jsonify({'error': "This company's account has been suspended. Contact your administrator."}), 403
         return jsonify({'user': user, 'company': co})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# ── Self-service: set the Microsoft 365 mailbox this user sends from ───────────
+# Separate from the app login email, which may not be a real mailbox in their
+# tenant (e.g. a Gmail address used just to sign in). Any authenticated user
+# can set their own — no admin gate needed, it only touches their own row.
+@app.route('/api/auth/me/ms365-email', methods=['PUT'])
+def set_ms365_email():
+    try:
+        sb = get_sb()
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        d = request.json or {}
+        ms365_email = (d.get('ms365_email') or '').strip()
+        if not ms365_email:
+            return jsonify({'error': 'Email is required'}), 400
+        sb.table('users').update({'ms365_email': ms365_email}).eq('id', claims['user_id']).execute()
+        return jsonify({'ok': True, 'ms365_email': ms365_email})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
