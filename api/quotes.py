@@ -21,6 +21,8 @@ PDFSHIFT_API_KEY = os.environ.get('PDFSHIFT_API_KEY')
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+STATUS_LABELS_PY = {'draft': 'Draft', 'sent': 'Sent', 'awarded': 'Awarded', 'lost': 'Lost'}
+
 def get_ms_token():
     """Get a Microsoft Graph access token using client credentials."""
     url = f'https://login.microsoftonline.com/{MS_TENANT_ID}/oauth2/v2.0/token'
@@ -61,6 +63,17 @@ def _can_view_all_quotes(claims):
     u = sb.table('users').select('can_view_all_quotes').eq('id', claims['user_id']).execute()
     return bool(u.data and u.data[0].get('can_view_all_quotes'))
 
+def _log_activity(qid, actor_id, action, detail=''):
+    """Best-effort activity log entry — shown as a timeline in the quote's
+    Log tab. Never raises: a logging failure must not block the actual
+    action (quote save, review decision, email send, etc.)."""
+    try:
+        sb.table('quote_activity').insert({
+            'quote_id': qid, 'actor_id': actor_id, 'action': action, 'detail': detail or None,
+        }).execute()
+    except Exception:
+        traceback.print_exc()
+
 def _is_assigned_reviewer_on_quote(qid, user_id):
     """Whether this user is an assigned reviewer on the quote's current
     pending version — the narrow exception that lets a reviewer open a
@@ -98,6 +111,11 @@ def list_quotes():
     rows = q.order('updated_at', desc=True).range(offset, offset + limit - 1).execute()
     return jsonify({'quotes': rows.data, 'total': rows.count or 0})
 
+def _can_view_quote(qid, quote, claims):
+    if quote.get('created_by') == claims['user_id'] or _can_view_all_quotes(claims):
+        return True
+    return _is_assigned_reviewer_on_quote(qid, claims['user_id'])
+
 # ── Get single quote ───────────────────────────────────────────────────────────
 @app.route('/api/quotes/<qid>', methods=['GET'])
 def get_quote(qid):
@@ -108,11 +126,33 @@ def get_quote(qid):
     if not row.data: return jsonify({'error': 'Not found'}), 404
     quote = row.data[0]
 
-    if quote.get('created_by') != claims['user_id'] and not _can_view_all_quotes(claims):
-        if not _is_assigned_reviewer_on_quote(qid, claims['user_id']):
-            return jsonify({'error': 'Forbidden'}), 403
+    if not _can_view_quote(qid, quote, claims):
+        return jsonify({'error': 'Forbidden'}), 403
 
     return jsonify({'quote': quote})
+
+# ── Quote activity log ────────────────────────────────────────────────────────
+@app.route('/api/quotes/<qid>/activity', methods=['GET'])
+def quote_activity(qid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+
+    row = sb.table('quotes').select('id,created_by').eq('id', qid).eq('company_id', claims['company_id']).execute()
+    if not row.data: return jsonify({'error': 'Not found'}), 404
+    if not _can_view_quote(qid, row.data[0], claims):
+        return jsonify({'error': 'Forbidden'}), 403
+
+    rows = sb.table('quote_activity').select('*').eq('quote_id', qid).order('created_at', desc=True).execute()
+    entries = rows.data or []
+    actor_ids = list({e['actor_id'] for e in entries if e.get('actor_id')})
+    actors_by_id = {}
+    if actor_ids:
+        ar = sb.table('users').select('id,name,email').in_('id', actor_ids).execute()
+        actors_by_id = {u['id']: u for u in (ar.data or [])}
+    for e in entries:
+        a = actors_by_id.get(e.get('actor_id'), {})
+        e['actor_name'] = a.get('name') or a.get('email') or 'System'
+    return jsonify({'activity': entries})
 
 # ── Create quote ───────────────────────────────────────────────────────────────
 @app.route('/api/quotes', methods=['POST'])
@@ -136,16 +176,25 @@ def create_quote():
         'total_gp':      d.get('total_gp', 0),
         'margin':        d.get('margin', 0),
     }).execute()
-    return jsonify({'quote': row.data[0]}), 201
+    quote = row.data[0]
+    _log_activity(quote['id'], claims['user_id'], 'created', f"Quote \"{quote.get('title') or 'Untitled'}\" created")
+    return jsonify({'quote': quote}), 201
 
 # ── Update quote ───────────────────────────────────────────────────────────────
+# A quote is only editable while its status is 'draft'. Once it's been
+# emailed to the customer (status auto-flips to 'sent') or manually marked
+# sent/awarded/lost, its content is locked — the only way to edit it again
+# is to explicitly set the status back to 'draft' first. This keeps what a
+# reviewer/customer saw for a given version from silently drifting.
+CONTENT_FIELDS = ['title','customer','currency','exchange_rate','quote_data','vendor_data','terms_data','total_sell','total_gp','margin']
+
 @app.route('/api/quotes/<qid>', methods=['PUT'])
 def update_quote(qid):
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
 
     # Check ownership
-    existing = sb.table('quotes').select('id,created_by').eq('id', qid).eq('company_id', claims['company_id']).execute()
+    existing = sb.table('quotes').select('id,created_by,status').eq('id', qid).eq('company_id', claims['company_id']).execute()
     if not existing.data: return jsonify({'error': 'Not found'}), 404
     if claims['role'] != 'admin' and existing.data[0]['created_by'] != claims['user_id']:
         return jsonify({'error': 'Forbidden'}), 403
@@ -154,7 +203,19 @@ def update_quote(qid):
     allowed = ['title','customer','status','currency','exchange_rate','quote_data','vendor_data','terms_data','total_sell','total_gp','margin']
     update = {k: d[k] for k in allowed if k in d}
 
+    old_status = existing.data[0].get('status')
+    new_status = update.get('status', old_status)
+    is_transitioning = new_status != old_status
+    touches_content = any(f in update for f in CONTENT_FIELDS)
+
+    if old_status != 'draft' and not is_transitioning and touches_content:
+        return jsonify({'error': f'This quote is locked because its status is "{STATUS_LABELS_PY.get(old_status, old_status)}". Set the status back to Draft to edit it.'}), 423
+
     row = sb.table('quotes').update(update).eq('id', qid).execute()
+    # Log status changes specifically (not every autosave — that would flood
+    # the log with noise since quote_data saves on every edit).
+    if 'status' in update and update['status'] != old_status:
+        _log_activity(qid, claims['user_id'], 'status_changed', f"{STATUS_LABELS_PY.get(old_status, old_status)} → {STATUS_LABELS_PY.get(update['status'], update['status'])}")
     return jsonify({'quote': row.data[0]})
 
 # ── Delete quote ───────────────────────────────────────────────────────────────
@@ -345,6 +406,9 @@ def submit_review(qid):
         for r in reviewers:
             _send_review_notification(sender_email, sender_name, r.get('email'), quote.get('title'), note)
 
+    reviewer_names = ', '.join(r.get('name') or r.get('email') or '' for r in reviewers)
+    _log_activity(qid, claims['user_id'], 'submitted_for_review', f"v{next_version} sent to {reviewer_names}")
+
     return jsonify({'version': version}), 201
 
 @app.route('/api/quotes/<qid>/versions', methods=['GET'])
@@ -481,9 +545,12 @@ def _record_reviewer_decision(qid, vid, claims, status, comment):
     if agg != 'pending' and quote.get('current_version') == version.get('version_number'):
         sb.table('quotes').update({'review_status': agg}).eq('id', qid).execute()
 
+    action = 'reviewer_approved' if status == 'approved' else 'reviewer_requested_changes'
+    _log_activity(qid, claims['user_id'], action, f"v{version.get('version_number')}" + (f": {comment}" if comment else ''))
+
     return quote, agg, None
 
-def _admin_finalize_version(qid, vid, claims, status, comment):
+def _admin_finalize_version(qid, vid, claims, status, comment, log_action=None):
     """Company-Admin override: short-circuits the assigned reviewers and
     forces a final decision directly. Any reviewer rows still 'pending' get
     marked as superseded so their own view doesn't show a stale pending
@@ -503,6 +570,9 @@ def _admin_finalize_version(qid, vid, claims, status, comment):
 
     if quote.get('current_version') == version.get('version_number'):
         sb.table('quotes').update({'review_status': status}).eq('id', qid).execute()
+
+    action = log_action or ('admin_force_approved' if status == 'approved' else 'admin_force_requested_changes')
+    _log_activity(qid, claims['user_id'], action, f"v{version.get('version_number')}" + (f": {comment}" if comment else ''))
 
     return quote, None
 
@@ -570,7 +640,7 @@ def cancel_review(qid, vid):
     d = request.json or {}
     comment = (d.get('comment') or '').strip() or 'Review cancelled by admin.'
 
-    quote, err = _admin_finalize_version(qid, vid, claims, 'changes_requested', comment)
+    quote, err = _admin_finalize_version(qid, vid, claims, 'changes_requested', comment, log_action='admin_cancelled_review')
     if err: return err
     return jsonify({'ok': True})
 
@@ -616,6 +686,8 @@ def reassign_reviewers(qid, vid):
     if agg != 'pending' and quote.get('current_version') == version.get('version_number'):
         sb.table('quotes').update({'review_status': agg}).eq('id', qid).execute()
 
+    _log_activity(qid, claims['user_id'], 'admin_reassigned_reviewers', f"v{version.get('version_number')}")
+
     return jsonify({'ok': True, 'version_status': agg})
 
 # ── Email to customer ────────────────────────────────────────────────────────
@@ -633,7 +705,7 @@ def email_quote(qid):
     if not PDFSHIFT_API_KEY:
         return jsonify({'error': 'PDF rendering is not configured (missing PDFSHIFT_API_KEY)'}), 500
 
-    q = sb.table('quotes').select('id,title').eq('id', qid).eq('company_id', claims['company_id']).execute()
+    q = sb.table('quotes').select('id,title,status,customer_version').eq('id', qid).eq('company_id', claims['company_id']).execute()
     if not q.data: return jsonify({'error': 'Not found'}), 404
     quote = q.data[0]
 
@@ -722,7 +794,18 @@ def email_quote(qid):
         'quote_id': qid, 'sent_by': claims['user_id'], 'sent_to': to_email, 'subject': subject,
     }).execute()
 
-    return jsonify({'ok': True, 'sent_from': sender_email})
+    # First successful send to the customer bumps the quote to "sent" (unless
+    # it's already past that in its lifecycle — don't clobber awarded/lost),
+    # and increments the customer-facing version counter (v1 on first send).
+    next_customer_version = (quote.get('customer_version') or 0) + 1
+    quote_update = {'customer_version': next_customer_version}
+    if quote.get('status') not in ('awarded', 'lost'):
+        quote_update['status'] = 'sent'
+    sb.table('quotes').update(quote_update).eq('id', qid).execute()
+
+    _log_activity(qid, claims['user_id'], 'emailed_to_customer', f"v{next_customer_version} sent to {to_email}")
+
+    return jsonify({'ok': True, 'sent_from': sender_email, 'customer_version': next_customer_version})
 
 if __name__ == '__main__':
     app.run(debug=True)

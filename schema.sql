@@ -80,6 +80,11 @@ create table if not exists quotes (
   -- lifecycle above): 'none' | 'pending' | 'approved' | 'changes_requested'.
   review_status text default 'none' check (review_status in ('none','pending','approved','changes_requested')),
   current_version int default 0,
+  -- Separate from `current_version` above (which tracks internal review
+  -- submissions). This counts how many times the quote has actually been
+  -- emailed to the customer — first successful send is "V1", shown next to
+  -- the sent date in the activity log.
+  customer_version int default 0,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -139,6 +144,19 @@ create table if not exists quote_emails (
   sent_at timestamptz default now()
 );
 create index if not exists idx_quote_emails_quote on quote_emails(quote_id);
+
+-- ─── Quote activity log (one row per notable action on a quote — created,
+-- status changed, submitted/approved/rejected for review, admin overrides,
+-- emailed to customer — shown as a timeline in the quote's Log tab) ────────
+create table if not exists quote_activity (
+  id uuid default gen_random_uuid() primary key,
+  quote_id uuid references quotes(id) on delete cascade not null,
+  action text not null,
+  detail text,
+  actor_id uuid references users(id),
+  created_at timestamptz default now()
+);
+create index if not exists idx_quote_activity_quote on quote_activity(quote_id);
 
 -- ─── Indexes ──────────────────────────────────────────────────────────────────
 create index if not exists idx_quotes_company on quotes(company_id);
