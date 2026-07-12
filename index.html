@@ -526,8 +526,11 @@ async function openQuote(q){
   if(!A.activeQuote.customer)setTimeout(openCustModal,150);
 }
 let _st=null;
+// Returns true/false so callers that need the save to have actually landed
+// before doing something else (emailing, submitting for review) can check
+// it instead of silently proceeding on a failed save.
 async function saveQuote(){
-  if(!A.activeQuote||A.reviewMode)return; // display-only while reviewing — never save over a reviewer's session
+  if(!A.activeQuote||A.reviewMode)return false; // display-only while reviewing — never save over a reviewer's session
   setStatus('saving');
   const T=calcOpt(opt());
   const r=await api('PUT','/api/quotes/'+A.activeQuote.id,{
@@ -536,8 +539,10 @@ async function saveQuote(){
     quote_data:A.activeQuote.quote_data,terms_data:A.activeQuote.terms_data,vendor_data:A.activeQuote.vendor_data,
     total_sell:T.ts,total_gp:T.tg,margin:T.margin,
   });
-  if(r.quote){const i=A.quotes.findIndex(q=>q.id===A.activeQuote.id);if(i>=0)A.quotes[i]=r.quote;setStatus('saved');}
-  else setStatus('error');
+  if(r.quote){const i=A.quotes.findIndex(q=>q.id===A.activeQuote.id);if(i>=0)A.quotes[i]=r.quote;setStatus('saved');return true;}
+  setStatus('error');
+  A._lastSaveError=r.error||'Save failed';
+  return false;
 }
 function schedSave(){if(A.reviewMode)return;if(_st)clearTimeout(_st);_st=setTimeout(saveQuote,3000);}
 // A quote is only editable while its status is Draft — once it's Sent (or
@@ -639,9 +644,12 @@ async function confirmSubmitForReview(){
   if(!ids.length){errEl.textContent='Select at least one reviewer.';errEl.style.display='block';return;}
   // Same reason as the email send flow — the version snapshot is read
   // server-side from the DB row, so force any pending debounced autosave
-  // to land first.
+  // to land first. Check it actually succeeded rather than silently
+  // submitting a stale snapshot if the save failed (e.g. quote got locked
+  // out from under us).
   if(_st){clearTimeout(_st);_st=null;}
-  await saveQuote();
+  const saved=await saveQuote();
+  if(!saved){errEl.textContent='Could not save your latest changes ('+(A._lastSaveError||'unknown error')+') — not submitting a stale version. Please try again.';errEl.style.display='block';return;}
   const r=await api('POST','/api/quotes/'+A.activeQuote.id+'/submit-review',{reviewer_ids:ids});
   if(r.error){errEl.textContent=r.error;errEl.style.display='block';return;}
   closeSelectReviewersModal();
@@ -1148,9 +1156,12 @@ async function sendQuoteEmail(){
     // Force a save first — autosave is debounced (schedSave), so a very
     // recent edit might not be in the DB yet. The snapshot stored for this
     // send is read server-side from the DB row, not from the HTML we're
-    // about to email, so it must be current before we send.
+    // about to email, so it must be current before we send. Check it
+    // actually succeeded rather than silently emailing/snapshotting stale
+    // content if the save failed.
     if(_st){clearTimeout(_st);_st=null;}
-    await saveQuote();
+    const saved=await saveQuote();
+    if(!saved){errEl.textContent='Could not save your latest changes ('+(A._lastSaveError||'unknown error')+') — not sending with a stale version. Please try again.';errEl.style.display='block';return;}
     const html=buildExportHTML();
     const r=await api('POST','/api/quotes/'+A.activeQuote.id+'/email',{to,subject,message,html,from_email});
     if(r.error){errEl.textContent=r.error;errEl.style.display='block';return;}
