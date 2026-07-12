@@ -170,6 +170,63 @@ create table if not exists quote_activity (
 );
 create index if not exists idx_quote_activity_quote on quote_activity(quote_id);
 
+-- ─── Vendors (vendor master — was previously only created via an earlier,
+-- untracked migration; reconstructed here so this file stays a complete
+-- reference. source/external_contact_id mirror customers, populated by the
+-- Zoho/etc. sync in api/integrations.py) ────────────────────────────────────
+create table if not exists vendors (
+  id uuid default gen_random_uuid() primary key,
+  company_id uuid references companies(id) on delete cascade not null,
+  created_by uuid references users(id),
+  name text not null,
+  contact_person text,
+  email text,
+  phone text,
+  address text,
+  category text,
+  notes text,
+  source text,
+  external_contact_id text,
+  created_at timestamptz default now()
+);
+create index if not exists idx_vendors_company on vendors(company_id);
+
+-- ─── Products (catalog master used for BOM/Auto-BOM search, quote-line
+-- autofill, and the Products page — was previously only created via an
+-- earlier, untracked migration; reconstructed here with the fuller product
+-- master fields added on top. Deliberately no inventory/stock fields — this
+-- app is a quoting tool, not a stock system) ────────────────────────────────
+create table if not exists products (
+  id uuid default gen_random_uuid() primary key,
+  company_id uuid references companies(id) on delete cascade not null,
+  created_by uuid references users(id),
+  brand text,
+  model text,
+  description text,
+  default_cost numeric default 0,
+  default_margin numeric default 0.2,
+  image_url text,
+  sku text,
+  category text,
+  cost_currency text default 'AED',
+  -- Set (server-side) whenever default_cost changes, so stale pricing is
+  -- visible before it goes into a quote.
+  cost_updated_at timestamptz,
+  specs text,
+  vendor_id uuid references vendors(id) on delete set null,
+  vendor_part_number text,
+  lead_time text,
+  -- Lets an old/discontinued model stop showing up in search without
+  -- deleting it outright (deleting would orphan quotes that reference it).
+  is_active boolean default true,
+  datasheet_url text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+create index if not exists idx_products_company on products(company_id);
+create index if not exists idx_products_vendor on products(vendor_id);
+create index if not exists idx_products_category on products(category);
+
 -- ─── Indexes ──────────────────────────────────────────────────────────────────
 create index if not exists idx_quotes_company on quotes(company_id);
 create index if not exists idx_users_company on users(company_id);

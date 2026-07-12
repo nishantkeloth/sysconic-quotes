@@ -52,17 +52,33 @@ def verify_token(req):
     except:
         return None
 
+VALID_CURRENCIES = {'AED','USD','EUR','GBP','SAR','QAR'}
+
 def clean_product(d):
     """Whitelist + normalise incoming product fields."""
     out = {}
-    for k in ('brand','model','description'):
+    for k in ('brand','model','description','sku','category','vendor_part_number','lead_time','datasheet_url'):
         if k in d: out[k] = str(d.get(k) or '').strip()[:500]
+    if 'specs' in d:
+        out['specs'] = str(d.get('specs') or '').strip()[:4000]
     if 'default_cost' in d:
         try: out['default_cost'] = max(0, float(d.get('default_cost') or 0))
         except: out['default_cost'] = 0
     if 'default_margin' in d:
         try: out['default_margin'] = min(0.95, max(0, float(d.get('default_margin') or 0)))
         except: out['default_margin'] = 0.2
+    if 'cost_currency' in d:
+        cur = str(d.get('cost_currency') or 'AED').strip().upper()
+        out['cost_currency'] = cur if cur in VALID_CURRENCIES else 'AED'
+    if 'is_active' in d:
+        out['is_active'] = bool(d.get('is_active'))
+    if 'vendor_id' in d:
+        vid = (d.get('vendor_id') or '').strip()
+        out['vendor_id'] = vid or None
+    # Stale-pricing visibility: timestamp only when the cost itself changes,
+    # not on every save, so editing an unrelated field doesn't reset it.
+    if 'default_cost' in d:
+        out['cost_updated_at'] = 'now()'
     return out
 
 # ── List / search products ─────────────────────────────────────────────────────
@@ -80,7 +96,7 @@ def list_products():
     q = sb.table('products').select('*', count='exact').eq('company_id', claims['company_id'])
     if search:
         s = search.replace('%',' ').replace(',',' ')
-        q = q.or_(f'brand.ilike.%{s}%,model.ilike.%{s}%,description.ilike.%{s}%')
+        q = q.or_(f'brand.ilike.%{s}%,model.ilike.%{s}%,description.ilike.%{s}%,sku.ilike.%{s}%,category.ilike.%{s}%')
     rows = q.order('brand').order('model').range(offset, offset + limit - 1).execute()
     return jsonify({'products': rows.data, 'total': rows.count or 0})
 
