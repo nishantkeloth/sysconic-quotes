@@ -839,6 +839,18 @@ function cmpSectionHTML(sa,sb){
       <td style="padding:5px 8px;font-size:12px;text-align:right">${fmt(cA.up)}${cA.up!==cB.up?' → '+fmt(cB.up):''}</td>
       <td style="padding:5px 8px;font-size:12px;text-align:right">${fmt(cA.tp)}${cA.tp!==cB.tp?' → '+fmt(cB.tp):''}</td>
     </tr>`;
+    // Cost/discount/margin can change without necessarily moving the
+    // (rounded) unit price enough to show above — call them out explicitly
+    // so a pure pricing edit (e.g. discount %) is always visible, not just
+    // an orange row with no obvious cause.
+    const priceNotes=[];
+    if(String(ia.cost??0)!==String(ib.cost??0))priceNotes.push('Cost '+fmt(ia.cost)+' → '+fmt(ib.cost));
+    if(String(ia.disc??0)!==String(ib.disc??0))priceNotes.push('Disc '+(ia.disc||0)+'% → '+(ib.disc||0)+'%');
+    if(String(ia.discAdd??0)!==String(ib.discAdd??0))priceNotes.push('Add.Disc '+(ia.discAdd||0)+'% → '+(ib.discAdd||0)+'%');
+    if(String(ia.margin??0)!==String(ib.margin??0))priceNotes.push('Margin '+fmtP(ia.margin||0)+' → '+fmtP(ib.margin||0));
+    if(priceNotes.length){
+      rows+=`<tr style="background:#fff7ed"><td colspan="5" style="padding:0 8px 6px;font-size:11px;color:#9a5b0f">${priceNotes.map(esc).join(' · ')}</td></tr>`;
+    }
   });
   if(!sectionChanged){
     return `<details style="margin-top:6px"><summary style="font-size:12px;color:var(--gray-500);cursor:pointer;padding:4px 0">${esc(sa.name)} — no changes</summary>
