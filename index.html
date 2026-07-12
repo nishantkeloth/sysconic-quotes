@@ -250,9 +250,10 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .img-opt:hover{border-color:var(--navy);box-shadow:0 2px 8px rgba(26,60,110,.15)}
 .img-opt img{width:100%;height:92px;object-fit:contain;background:#fff}
 .img-src{font-size:10px;color:var(--gray-500);padding:4px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-top:1px solid var(--gray-100)}
-.prod-hd{display:grid;grid-template-columns:44px 110px 180px 1fr 90px 80px 110px;padding:9px 12px;background:var(--navy);border-radius:8px 8px 0 0;font-size:12px;font-weight:700;color:rgba(255,255,255,.85);text-transform:uppercase;letter-spacing:.05em}
+.prod-hd{display:grid;grid-template-columns:44px 100px 150px 100px 1fr 80px 70px 110px;padding:9px 12px;background:var(--navy);border-radius:8px 8px 0 0;font-size:12px;font-weight:700;color:rgba(255,255,255,.85);text-transform:uppercase;letter-spacing:.05em}
 .prod-hd div{padding:0 5px}
-.prod-row{display:grid;grid-template-columns:44px 110px 180px 1fr 90px 80px 110px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--gray-100);font-size:14px}
+.prod-row{display:grid;grid-template-columns:44px 100px 150px 100px 1fr 80px 70px 110px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--gray-100);font-size:14px}
+.prod-row.inactive{opacity:.5}
 .prod-row>div{padding:0 5px;overflow:hidden}
 .prod-row:hover{background:#f5f8ff}
 .bom-item{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-bottom:1px solid var(--gray-100)}
@@ -2153,12 +2154,14 @@ async function loadProducts(){
   PRODS.list=r.products||[];PRODS.total=r.total||0;
   const cnt=document.getElementById('prodCount');if(cnt)cnt.textContent=`${PRODS.total} product${PRODS.total!==1?'s':''}${PRODS.total>100?' — showing first 100, use search':''}`;
   if(!PRODS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No products yet.<br><br>Add one manually, import from Excel — or just start quoting: new models are added to the catalog automatically.</div>`;return;}
-  el.innerHTML=`<div class="prod-hd"><div></div><div>Brand</div><div>Model</div><div>Description</div><div>Cost</div><div>Margin %</div><div></div></div>`+
-    PRODS.list.map(p=>`<div class="prod-row">
+  el.innerHTML=`<div class="prod-hd"><div></div><div>Brand</div><div>Model / SKU</div><div>Category</div><div>Description</div><div>Cost</div><div>Margin %</div><div></div></div>`+
+    PRODS.list.map(p=>`<div class="prod-row${p.is_active===false?' inactive':''}">
       <div class="prod-thumb ${p.image_url?'':'empty'}" title="${p.image_url?'Change image':'Pick image'}" onclick="openCatalogImage('${p.id}')">${p.image_url?`<img src="${esc(p.image_url)}">`:'📷'}</div>
-      <div data-label="Brand">${esc(p.brand)}</div><div data-label="Model">${esc(p.model)}</div>
-      <div data-label="Description" style="color:var(--gray-500);font-size:13px">${esc((p.description||'').slice(0,90))}</div>
-      <div data-label="Cost">${(+p.default_cost||0).toFixed(2)}</div>
+      <div data-label="Brand">${esc(p.brand)}</div>
+      <div data-label="Model">${esc(p.model)}${p.sku?`<div style="color:var(--gray-500);font-size:11px">${esc(p.sku)}</div>`:''}</div>
+      <div data-label="Category" style="color:var(--gray-500);font-size:13px">${esc(p.category||'')}</div>
+      <div data-label="Description" style="color:var(--gray-500);font-size:13px">${esc((p.description||'').slice(0,90))}${p.is_active===false?' <span style="color:var(--red,#c0392b);font-weight:600">(Inactive)</span>':''}</div>
+      <div data-label="Cost">${(+p.default_cost||0).toFixed(2)} ${esc(p.cost_currency||'AED')}</div>
       <div data-label="Margin %">${((+p.default_margin||0)*100).toFixed(1)}</div>
       <div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn btn-sm" onclick="showProdModal('${p.id}')">Edit</button><button class="btn btn-sm btn-red" onclick="delProduct('${p.id}')">×</button></div>
     </div>`).join('');
@@ -2170,17 +2173,32 @@ async function delProduct(pid){
   if(r.error)alert(r.error);
   loadProducts();
 }
-function showProdModal(pid){
+const PROD_CURRENCIES=['AED','USD','EUR','GBP','SAR','QAR'];
+async function showProdModal(pid){
   const p=pid?PRODS.list.find(x=>x.id===pid):null;
+  let vendors=[];
+  try{const vr=await api('GET','/api/vendors?limit=200');vendors=vr.vendors||[];}catch(e){}
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="prodOverlay" onclick="if(event.target===this)document.getElementById('prodOverlay').remove()">
-    <div class="modal">
+    <div class="modal" style="max-width:520px;max-height:85vh;overflow-y:auto">
       <div class="modal-title">${p?'Edit product':'Add product'}</div>
       <div id="prodErr" class="auth-err" style="display:none"></div>
       <div class="fld"><label>Brand</label><input id="pfBrand" value="${esc(p?.brand||'')}" placeholder="Infiled"></div>
       <div class="fld"><label>Model</label><input id="pfModel" value="${esc(p?.model||'')}" placeholder="IL-FISS-ORMV 3.9Pro"></div>
+      <div class="fld"><label>SKU</label><input id="pfSku" value="${esc(p?.sku||'')}" placeholder="Internal stock code"></div>
+      <div class="fld"><label>Category</label><input id="pfCategory" value="${esc(p?.category||'')}" placeholder="LED display, Rigging, Audio…"></div>
       <div class="fld"><label>Description</label><input id="pfDesc" value="${esc(p?.description||'')}" placeholder="SMD1818 black frame LED…"></div>
-      <div class="fld"><label>Default cost</label><input id="pfCost" type="number" step="0.01" value="${p?(+p.default_cost||0):''}" placeholder="0.00"></div>
+      <div class="fld"><label>Specs</label><textarea id="pfSpecs" rows="3" placeholder="Pixel pitch, brightness, weight, power draw…">${esc(p?.specs||'')}</textarea></div>
+      <div style="display:flex;gap:10px">
+        <div class="fld" style="flex:1"><label>Default cost</label><input id="pfCost" type="number" step="0.01" value="${p?(+p.default_cost||0):''}" placeholder="0.00"></div>
+        <div class="fld" style="width:110px"><label>Currency</label><select id="pfCurrency">${PROD_CURRENCIES.map(c=>`<option value="${c}" ${((p?.cost_currency||'AED')===c)?'selected':''}>${c}</option>`).join('')}</select></div>
+      </div>
       <div class="fld"><label>Default margin %</label><input id="pfMargin" type="number" step="0.1" value="${p?((+p.default_margin||0)*100).toFixed(1):'20'}"></div>
+      ${p?.cost_updated_at?`<div style="font-size:12px;color:var(--gray-500);margin:-6px 0 10px">Cost last updated ${new Date(p.cost_updated_at).toLocaleDateString()}</div>`:''}
+      <div class="fld"><label>Vendor</label><select id="pfVendor"><option value="">— None —</option>${vendors.map(v=>`<option value="${v.id}" ${p?.vendor_id===v.id?'selected':''}>${esc(v.name)}</option>`).join('')}</select></div>
+      <div class="fld"><label>Vendor part number</label><input id="pfVendorPart" value="${esc(p?.vendor_part_number||'')}" placeholder="Vendor's own SKU/part #"></div>
+      <div class="fld"><label>Lead time</label><input id="pfLeadTime" value="${esc(p?.lead_time||'')}" placeholder="e.g. 4-6 weeks"></div>
+      <div class="fld"><label>Datasheet URL</label><input id="pfDatasheet" value="${esc(p?.datasheet_url||'')}" placeholder="https://…"></div>
+      <div class="fld" style="display:flex;align-items:center;gap:8px"><input id="pfActive" type="checkbox" style="width:auto" ${p&&p.is_active===false?'':'checked'}><label style="margin:0">Active (shows in search/quoting)</label></div>
       <div class="modal-actions">
         <button class="btn" onclick="document.getElementById('prodOverlay').remove()">Cancel</button>
         <button class="btn btn-navy" onclick="saveProdModal('${pid||''}')">Save</button>
@@ -2188,15 +2206,30 @@ function showProdModal(pid){
     </div></div>`);
 }
 async function saveProdModal(pid){
-  const body={brand:document.getElementById('pfBrand').value,model:document.getElementById('pfModel').value,description:document.getElementById('pfDesc').value,default_cost:+document.getElementById('pfCost').value||0,default_margin:(+document.getElementById('pfMargin').value||0)/100};
+  const body={
+    brand:document.getElementById('pfBrand').value,
+    model:document.getElementById('pfModel').value,
+    sku:document.getElementById('pfSku').value,
+    category:document.getElementById('pfCategory').value,
+    description:document.getElementById('pfDesc').value,
+    specs:document.getElementById('pfSpecs').value,
+    default_cost:+document.getElementById('pfCost').value||0,
+    cost_currency:document.getElementById('pfCurrency').value,
+    default_margin:(+document.getElementById('pfMargin').value||0)/100,
+    vendor_id:document.getElementById('pfVendor').value,
+    vendor_part_number:document.getElementById('pfVendorPart').value,
+    lead_time:document.getElementById('pfLeadTime').value,
+    datasheet_url:document.getElementById('pfDatasheet').value,
+    is_active:document.getElementById('pfActive').checked,
+  };
   const r=pid?await api('PUT','/api/products/'+pid,body):await api('POST','/api/products',body);
   if(r.error){const e=document.getElementById('prodErr');e.textContent=r.error;e.style.display='block';return;}
   document.getElementById('prodOverlay').remove();loadProducts();
 }
 function downloadProdTemplate(){
   const wb=XLSX.utils.book_new();
-  const ws=XLSX.utils.aoa_to_sheet([['BRAND','MODEL','DESCRIPTION','COST','MARGIN %'],['Infiled','IL-FISS-ORMV 3.9Pro','SMD1818 black frame LED, 1000x1000mm cabinet',6299.25,20]]);
-  ws['!cols']=[{wch:16},{wch:26},{wch:50},{wch:12},{wch:10}];
+  const ws=XLSX.utils.aoa_to_sheet([['BRAND','MODEL','SKU','CATEGORY','DESCRIPTION','COST','MARGIN %'],['Infiled','IL-FISS-ORMV 3.9Pro','INF-FISS-39','LED display','SMD1818 black frame LED, 1000x1000mm cabinet',6299.25,20]]);
+  ws['!cols']=[{wch:16},{wch:26},{wch:16},{wch:16},{wch:50},{wch:12},{wch:10}];
   XLSX.utils.book_append_sheet(wb,ws,'Products');
   XLSX.writeFile(wb,'sysconic-products-template.xlsx');
 }
@@ -2211,13 +2244,13 @@ function importProducts(event){
       for(let i=0;i<Math.min(rows.length,10);i++){const r=rows[i].map(x=>String(x).toUpperCase());if(r.some(x=>x.includes('MODEL'))){hi=i;break;}}
       if(hi===-1){alert('Could not find a MODEL column header in that file.');return;}
       const H=rows[hi].map(x=>String(x).toUpperCase().trim());
-      const col={brand:H.findIndex(h=>h.includes('BRAND')),model:H.findIndex(h=>h.includes('MODEL')),desc:H.findIndex(h=>h.includes('DESC')),cost:H.findIndex(h=>h.includes('COST')||h.includes('MSRP')),margin:H.findIndex(h=>h.includes('MARGIN'))};
+      const col={brand:H.findIndex(h=>h.includes('BRAND')),model:H.findIndex(h=>h.includes('MODEL')),sku:H.findIndex(h=>h.includes('SKU')),category:H.findIndex(h=>h.includes('CATEGORY')),desc:H.findIndex(h=>h.includes('DESC')),cost:H.findIndex(h=>h.includes('COST')||h.includes('MSRP')),margin:H.findIndex(h=>h.includes('MARGIN'))};
       const products=[];
       for(let i=hi+1;i<rows.length;i++){
         const row=rows[i];if(!row||row.every(x=>x===''||x===null))continue;
         const g=x=>x>=0?String(row[x]??'').trim():'';
         let m=parseFloat(g(col.margin))||0;if(m>1)m=m/100;
-        products.push({brand:g(col.brand),model:g(col.model),description:g(col.desc),default_cost:parseFloat(g(col.cost))||0,default_margin:m||0.2});
+        products.push({brand:g(col.brand),model:g(col.model),sku:g(col.sku),category:g(col.category),description:g(col.desc),default_cost:parseFloat(g(col.cost))||0,default_margin:m||0.2});
       }
       if(!products.length){alert('No product rows found below the header.');return;}
       if(products.length>500){alert('Maximum 500 rows per import — please split the file.');return;}
