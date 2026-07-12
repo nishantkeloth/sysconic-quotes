@@ -637,6 +637,11 @@ async function confirmSubmitForReview(){
   const ids=[...document.querySelectorAll('.revPickCb:checked')].map(cb=>cb.value);
   const errEl=document.getElementById('revPickErr');
   if(!ids.length){errEl.textContent='Select at least one reviewer.';errEl.style.display='block';return;}
+  // Same reason as the email send flow — the version snapshot is read
+  // server-side from the DB row, so force any pending debounced autosave
+  // to land first.
+  if(_st){clearTimeout(_st);_st=null;}
+  await saveQuote();
   const r=await api('POST','/api/quotes/'+A.activeQuote.id+'/submit-review',{reviewer_ids:ids});
   if(r.error){errEl.textContent=r.error;errEl.style.display='block';return;}
   closeSelectReviewersModal();
@@ -794,7 +799,7 @@ function cmpOptionHTML(label,oa,ob){
   const Ta=calcOpt(oa), Tb=calcOpt(ob);
   let html=`<div class="card"><div class="card-title">${esc(label)}</div>
     <table style="width:100%;border-collapse:collapse;margin-bottom:10px"><tbody>`
-    +cmpFieldRow('VAT',oa.vatEnabled?oa.vatRate+'%':'Off',ob.vatEnabled?ob.vatRate+'%':'Off')
+    +cmpFieldRow('VAT',oa.vatEnabled?(oa.vatRate||5)+'%':'Off',ob.vatEnabled?(ob.vatRate||5)+'%':'Off')
     +cmpFieldRow('Subtotal',fmt(Ta.ts),fmt(Tb.ts))
     +cmpFieldRow('Grand total',fmt(Ta.grand),fmt(Tb.grand))
     +cmpFieldRow('Margin',fmtP(Ta.margin),fmtP(Tb.margin))
@@ -1132,6 +1137,12 @@ async function sendQuoteEmail(){
   if(!to){errEl.textContent='Recipient email is required';errEl.style.display='block';return;}
   const btn=document.getElementById('emlSendBtn');btn.disabled=true;btn.textContent='Sending…';
   try{
+    // Force a save first — autosave is debounced (schedSave), so a very
+    // recent edit might not be in the DB yet. The snapshot stored for this
+    // send is read server-side from the DB row, not from the HTML we're
+    // about to email, so it must be current before we send.
+    if(_st){clearTimeout(_st);_st=null;}
+    await saveQuote();
     const html=buildExportHTML();
     const r=await api('POST','/api/quotes/'+A.activeQuote.id+'/email',{to,subject,message,html,from_email});
     if(r.error){errEl.textContent=r.error;errEl.style.display='block';return;}
