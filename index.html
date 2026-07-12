@@ -691,7 +691,7 @@ function closeVersionModal(){const el=document.getElementById('verOverlay');if(e
 async function showCompareModal(){
   if(!A.activeQuote)return;
   document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="cmpOverlay" onclick="if(event.target===this)closeCompareModal()">'+
-    '<div class="modal" style="max-width:960px;max-height:86vh;overflow-y:auto">'+
+    '<div class="modal" style="max-width:1160px;max-height:86vh;overflow-y:auto">'+
     '<div class="modal-title">🔍 Compare versions</div>'+
     '<div class="modal-sub">'+esc(A.activeQuote.title||'')+'</div>'+
     '<div id="cmpPickers" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin:14px 0">'+
@@ -821,6 +821,11 @@ function cmpOptionHTML(label,oa,ob){
   html+='</div>';
   return html;
 }
+function cmpPairTd(av,bv,changed,align){
+  align=align||'right';
+  const hi=changed?'background:#ffe3b3':'';
+  return `<td style="padding:4px 6px;font-size:12px;text-align:${align};border-left:1px solid var(--gray-200);${hi}">${av}</td><td style="padding:4px 6px;font-size:12px;text-align:${align};${hi}">${bv}</td>`;
+}
 function cmpSectionHTML(sa,sb){
   const ids=(sa.items||[]).map(i=>i.id);
   (sb.items||[]).forEach(i=>{if(!ids.includes(i.id))ids.push(i.id);});
@@ -829,7 +834,7 @@ function cmpSectionHTML(sa,sb){
     const ia=(sa.items||[]).find(i=>i.id===id), ib=(sb.items||[]).find(i=>i.id===id);
     if(!ia||!ib){
       const it=ia||ib;
-      rows+=`<tr style="background:${ia?'#fdeceb':'#e9f9ef'}"><td colspan="5" style="padding:6px 8px;font-size:12px">${ia?'− Removed:':'+ Added:'} ${esc(it.brand)} ${esc(it.model)}${it.desc?' — '+esc(it.desc):''}</td></tr>`;
+      rows+=`<tr style="background:${ia?'#fdeceb':'#e9f9ef'}"><td colspan="14" style="padding:6px 8px;font-size:12px">${ia?'− Removed:':'+ Added:'} ${esc(it.brand)} ${esc(it.model)}${it.desc?' — '+esc(it.desc):''}</td></tr>`;
       sectionChanged=true;
       return;
     }
@@ -837,36 +842,39 @@ function cmpSectionHTML(sa,sb){
     const changed=fields.some(f=>String(ia[f]??'')!==String(ib[f]??''));
     if(changed)sectionChanged=true;
     const cA=calcItem(ia), cB=calcItem(ib);
-    rows+=`<tr style="${changed?'background:#fff7ed':''}">
-      <td style="padding:5px 8px;font-size:12px">${esc(ia.brand)} ${esc(ia.model)}${(ia.brand!==ib.brand||ia.model!==ib.model)?' → '+esc(ib.brand)+' '+esc(ib.model):''}</td>
-      <td style="padding:5px 8px;font-size:12px">${esc(ia.desc||'')}${ia.desc!==ib.desc?' → '+esc(ib.desc||''):''}</td>
-      <td style="padding:5px 8px;font-size:12px;text-align:center">${ia.qty||1}${ia.qty!==ib.qty?' → '+(ib.qty||1):''}</td>
-      <td style="padding:5px 8px;font-size:12px;text-align:right">${fmt(cA.up)}${cA.up!==cB.up?' → '+fmt(cB.up):''}</td>
-      <td style="padding:5px 8px;font-size:12px;text-align:right">${fmt(cA.tp)}${cA.tp!==cB.tp?' → '+fmt(cB.tp):''}</td>
-    </tr>`;
-    // Cost/discount/margin can change without necessarily moving the
-    // (rounded) unit price enough to show above — call them out explicitly
-    // so a pure pricing edit (e.g. discount %) is always visible, not just
-    // an orange row with no obvious cause.
-    const priceNotes=[];
-    if(String(ia.cost??0)!==String(ib.cost??0))priceNotes.push('Cost '+fmt(ia.cost)+' → '+fmt(ib.cost));
-    if(String(ia.disc??0)!==String(ib.disc??0))priceNotes.push('Disc '+(ia.disc||0)+'% → '+(ib.disc||0)+'%');
-    if(String(ia.discAdd??0)!==String(ib.discAdd??0))priceNotes.push('Add.Disc '+(ia.discAdd||0)+'% → '+(ib.discAdd||0)+'%');
-    if(String(ia.margin??0)!==String(ib.margin??0))priceNotes.push('Margin '+fmtP(ia.margin||0)+' → '+fmtP(ib.margin||0));
-    if(priceNotes.length){
-      rows+=`<tr style="background:#fff7ed"><td colspan="5" style="padding:0 8px 6px;font-size:11px;color:#9a5b0f">${priceNotes.map(esc).join(' · ')}</td></tr>`;
-    }
+    const itemChanged=ia.brand!==ib.brand||ia.model!==ib.model;
+    const descChanged=ia.desc!==ib.desc;
+    rows+=`<tr style="${changed?'background:#fffbf2':''}">
+      <td style="padding:4px 6px;font-size:12px;${itemChanged?'background:#ffe3b3':''}">${esc(ia.brand)} ${esc(ia.model)}${itemChanged?'<div style="font-size:11px;color:#9a5b0f">→ '+esc(ib.brand)+' '+esc(ib.model)+'</div>':''}</td>
+      <td style="padding:4px 6px;font-size:12px;${descChanged?'background:#ffe3b3':''}">${esc(ia.desc||'')}${descChanged?'<div style="font-size:11px;color:#9a5b0f">→ '+esc(ib.desc||'')+'</div>':''}</td>`
+      +cmpPairTd(ia.qty||1,ib.qty||1,String(ia.qty||1)!==String(ib.qty||1),'center')
+      +cmpPairTd(fmt(ia.cost),fmt(ib.cost),String(ia.cost??0)!==String(ib.cost??0))
+      +cmpPairTd((ia.disc||0)+'%',(ib.disc||0)+'%',String(ia.disc||0)!==String(ib.disc||0),'center')
+      +cmpPairTd(fmtP(ia.margin||0),fmtP(ib.margin||0),String(ia.margin||0)!==String(ib.margin||0),'center')
+      +cmpPairTd(fmt(cA.up),fmt(cB.up),cA.up!==cB.up)
+      +cmpPairTd(fmt(cA.tp),fmt(cB.tp),cA.tp!==cB.tp)
+      +`</tr>`;
   });
+  const thead=`<thead><tr>
+    <th style="text-align:left;font-size:11px;color:var(--gray-500);padding:4px 6px">Item</th>
+    <th style="text-align:left;font-size:11px;color:var(--gray-500);padding:4px 6px">Description</th>
+    <th style="font-size:10px;color:var(--gray-500);padding:2px 6px;border-left:1px solid var(--gray-200)">Qty A</th><th style="font-size:10px;color:var(--gray-500);padding:2px 6px">Qty B</th>
+    <th style="font-size:10px;color:var(--gray-500);padding:2px 6px;border-left:1px solid var(--gray-200)">Cost A</th><th style="font-size:10px;color:var(--gray-500);padding:2px 6px">Cost B</th>
+    <th style="font-size:10px;color:var(--gray-500);padding:2px 6px;border-left:1px solid var(--gray-200)">Disc A</th><th style="font-size:10px;color:var(--gray-500);padding:2px 6px">Disc B</th>
+    <th style="font-size:10px;color:var(--gray-500);padding:2px 6px;border-left:1px solid var(--gray-200)">Margin A</th><th style="font-size:10px;color:var(--gray-500);padding:2px 6px">Margin B</th>
+    <th style="font-size:10px;color:var(--gray-500);padding:2px 6px;border-left:1px solid var(--gray-200)">Unit A</th><th style="font-size:10px;color:var(--gray-500);padding:2px 6px">Unit B</th>
+    <th style="font-size:10px;color:var(--gray-500);padding:2px 6px;border-left:1px solid var(--gray-200)">Total A</th><th style="font-size:10px;color:var(--gray-500);padding:2px 6px">Total B</th>
+  </tr></thead>`;
   if(!sectionChanged){
     return `<details style="margin-top:6px"><summary style="font-size:12px;color:var(--gray-500);cursor:pointer;padding:4px 0">${esc(sa.name)} — no changes</summary>
-      <table style="width:100%;border-collapse:collapse">${rows}</table></details>`;
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:760px">${thead}<tbody>${rows}</tbody></table></div></details>`;
   }
   return `<div style="margin-top:10px">
     <div style="font-weight:600;font-size:13px;margin-bottom:4px">${esc(sa.name)}${sa.name!==sb.name?' → '+esc(sb.name):''}</div>
-    <table style="width:100%;border-collapse:collapse">
-      <thead><tr><th style="text-align:left;font-size:11px;color:var(--gray-500);padding:4px 8px">Item</th><th style="text-align:left;font-size:11px;color:var(--gray-500);padding:4px 8px">Description</th><th style="font-size:11px;color:var(--gray-500);padding:4px 8px">Qty</th><th style="text-align:right;font-size:11px;color:var(--gray-500);padding:4px 8px">Unit</th><th style="text-align:right;font-size:11px;color:var(--gray-500);padding:4px 8px">Total</th></tr></thead>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:760px">
+      ${thead}
       <tbody>${rows}</tbody>
-    </table>
+    </table></div>
   </div>`;
 }
 function cmpTermsHTML(ta,tb){
