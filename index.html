@@ -31,6 +31,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .sb-nav{flex:1;padding:10px 0;overflow-y:auto}
 .sb-sec{font-size:11px;font-weight:700;color:rgba(255,255,255,.35);padding:14px 20px 5px;letter-spacing:.08em;text-transform:uppercase}
 .sb-item{display:flex;align-items:center;gap:10px;padding:11px 20px;cursor:pointer;color:rgba(255,255,255,.65);font-size:14px;font-weight:500;border-left:3px solid transparent;transition:all .15s}
+.sb-badge{background:#f59e0b;color:#fff;font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;margin-left:auto}
 .sb-item:hover{color:#fff;background:rgba(255,255,255,.08)}
 .sb-item.active{color:#fff;background:rgba(255,255,255,.14);border-left-color:#60a5fa;font-weight:600}
 .sb-icon{font-size:16px;width:20px;text-align:center}
@@ -506,12 +507,14 @@ async function checkAuth(){
 // ── Quotes CRUD ───────────────────────────────────────────────────────────────
 async function loadQuotes(){const r=await api('GET','/api/quotes');A.quotes=r.quotes||[];}
 async function newQuote(){
+  A.reviewMode=null;
   const title=prompt('Quote name:','New Quote');if(!title)return;
   const customer='';
   const r=await api('POST','/api/quotes',{title,customer,quote_data:[mkOption('Option 1')],terms_data:[...DEFAULT_TERMS],vendor_data:[],currency:'AED',exchange_rate:1});
   if(r.quote){A.quotes.unshift(r.quote);openQuote(r.quote);}
 }
 async function openQuote(q){
+  A.reviewMode=null;
   const r=await api('GET','/api/quotes/'+q.id);
   if(!r.quote)return;
   A.activeQuote=r.quote;
@@ -524,7 +527,7 @@ async function openQuote(q){
 }
 let _st=null;
 async function saveQuote(){
-  if(!A.activeQuote)return;
+  if(!A.activeQuote||A.reviewMode)return; // display-only while reviewing — never save over a reviewer's session
   setStatus('saving');
   const T=calcOpt(opt());
   const r=await api('PUT','/api/quotes/'+A.activeQuote.id,{
@@ -536,7 +539,7 @@ async function saveQuote(){
   if(r.quote){const i=A.quotes.findIndex(q=>q.id===A.activeQuote.id);if(i>=0)A.quotes[i]=r.quote;setStatus('saved');}
   else setStatus('error');
 }
-function schedSave(){if(_st)clearTimeout(_st);_st=setTimeout(saveQuote,3000);}
+function schedSave(){if(A.reviewMode)return;if(_st)clearTimeout(_st);_st=setTimeout(saveQuote,3000);}
 function setStatus(s){A.saveStatus=s;const el=document.getElementById('saveStatus');if(!el)return;
   const m={saving:'<span class="save-pill save-ing">⏳ Saving…</span>',saved:'<span class="save-pill save-ok">✓ Saved</span>',error:'<span class="save-pill save-err">⚠ Failed</span>'};
   el.innerHTML=m[s]||'';}
@@ -583,6 +586,208 @@ function showReviewModal(body){
 }
 function setReviewBody(html){const el=document.getElementById('revBody');if(el)el.innerHTML=html;}
 function closeReviewModal(){const el=document.getElementById('revOverlay');if(el)el.remove();}
+
+// ── Internal review workflow: Send to Review / History / Review Queue ───────
+const REVIEW_STATUS_STYLE={
+  pending:{c:'#92400e',bg:'#fef3c7',t:'Pending review'},
+  approved:{c:'#065f46',bg:'#d1fae5',t:'Approved'},
+  changes_requested:{c:'#991b1b',bg:'#fee2e2',t:'Changes requested'},
+};
+function reviewStatusBadgeHTML(){
+  const rs=A.activeQuote?.review_status;
+  const m=REVIEW_STATUS_STYLE[rs];if(!m)return'';
+  return `<span style="background:${m.bg};color:${m.c};font-size:12px;font-weight:700;padding:6px 12px;border-radius:20px;display:inline-flex;align-items:center;gap:5px">${m.t}${A.activeQuote.current_version?' · v'+A.activeQuote.current_version:''}</span>`;
+}
+async function submitForReview(){
+  if(!A.activeQuote)return;
+  await saveQuote(); // make sure the snapshot reflects the latest saved edits
+  const r=await api('GET','/api/quotes/company-users');
+  if(r.error){alert(r.error);return;}
+  showSelectReviewersModal(r.users||[]);
+}
+function showSelectReviewersModal(users){
+  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="revPickOverlay" onclick="if(event.target===this)closeSelectReviewersModal()">'+
+    '<div class="modal" style="max-width:480px;max-height:80vh;overflow-y:auto">'+
+    '<div class="modal-title">📤 Send to review</div>'+
+    '<div class="modal-sub">Pick who should review this quote before it goes to the customer.</div>'+
+    (users.length?'<div style="margin-top:10px">'+users.map(u=>
+      '<label style="display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid var(--gray-100);cursor:pointer">'+
+        '<input type="checkbox" value="'+u.id+'" class="revPickCb">'+
+        '<span><div style="font-weight:600;font-size:14px">'+esc(u.name||u.email)+'</div><div style="font-size:12px;color:var(--gray-500)">'+esc(u.email||'')+'</div></span>'+
+      '</label>'
+    ).join('')+'</div>':'<div style="color:var(--gray-500);padding:10px 0">No other team members found.</div>')+
+    '<div id="revPickErr" class="auth-err" style="display:none;margin-top:10px"></div>'+
+    '<div class="modal-actions"><button class="btn" onclick="closeSelectReviewersModal()">Cancel</button><button class="btn btn-navy" onclick="confirmSubmitForReview()">Send</button></div>'+
+    '</div></div>');
+}
+function closeSelectReviewersModal(){const el=document.getElementById('revPickOverlay');if(el)el.remove();}
+async function confirmSubmitForReview(){
+  const ids=[...document.querySelectorAll('.revPickCb:checked')].map(cb=>cb.value);
+  const errEl=document.getElementById('revPickErr');
+  if(!ids.length){errEl.textContent='Select at least one reviewer.';errEl.style.display='block';return;}
+  const r=await api('POST','/api/quotes/'+A.activeQuote.id+'/submit-review',{reviewer_ids:ids});
+  if(r.error){errEl.textContent=r.error;errEl.style.display='block';return;}
+  closeSelectReviewersModal();
+  A.activeQuote.review_status='pending';
+  A.activeQuote.current_version=r.version.version_number;
+  draw();
+}
+async function showVersionHistoryModal(){
+  if(!A.activeQuote)return;
+  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="verOverlay" onclick="if(event.target===this)closeVersionModal()">'+
+    '<div class="modal" style="max-width:600px;max-height:80vh;overflow-y:auto">'+
+    '<div class="modal-title">📜 Review history</div>'+
+    '<div class="modal-sub">'+esc(A.activeQuote.title||'')+'</div>'+
+    '<div id="verBody"><div style="text-align:center;padding:20px;color:var(--gray-500)">Loading…</div></div>'+
+    '<div class="modal-actions"><button class="btn" onclick="closeVersionModal()">Close</button></div>'+
+    '</div></div>');
+  const r=await api('GET','/api/quotes/'+A.activeQuote.id+'/versions');
+  const el=document.getElementById('verBody');if(!el)return;
+  if(r.error){el.innerHTML='<div class="auth-err">'+esc(r.error)+'</div>';return;}
+  const vers=r.versions||[];
+  if(!vers.length){el.innerHTML='<div style="color:var(--gray-500);padding:10px 0">This quote hasn\'t been submitted for review yet.</div>';return;}
+  el.innerHTML=vers.map(v=>{
+    const m=REVIEW_STATUS_STYLE[v.status]||{};
+    const reviewers=v.reviewers||[];
+    const reviewerRows=reviewers.map(rv=>{
+      const rm=REVIEW_STATUS_STYLE[rv.status]||{};
+      return `<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:3px 0">
+        <span>${esc(rv.name||rv.email||'')}</span>
+        <span style="background:${rm.bg};color:${rm.c};font-weight:700;padding:1px 8px;border-radius:10px;font-size:11px">${rm.t||rv.status}</span>
+      </div>${rv.comment?`<div style="font-size:12px;background:#f7f9fc;border-radius:6px;padding:6px 8px;margin:2px 0 4px">${esc(rv.comment)}</div>`:''}`;
+    }).join('');
+    return `<div style="padding:12px 0;border-top:1px solid var(--gray-200)">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="font-weight:700">Version ${v.version_number}</div>
+        <span style="background:${m.bg};color:${m.c};font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px">${m.t||v.status}</span>
+      </div>
+      <div style="font-size:12px;color:var(--gray-500);margin-top:3px">Submitted ${v.submitted_at?new Date(v.submitted_at).toLocaleString():''}</div>
+      ${reviewers.length?`<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--gray-200)"><div style="font-size:11px;font-weight:700;color:var(--gray-500);text-transform:uppercase;margin-bottom:4px">Reviewers</div>${reviewerRows}</div>`:''}
+    </div>`;
+  }).join('');
+}
+function closeVersionModal(){const el=document.getElementById('verOverlay');if(el)el.remove();}
+
+// ── Admin: Review Queue page ─────────────────────────────────────────────────
+function reviewQueueHTML(){
+  return `<div class="card" style="padding:0"><div id="reviewQueueList"></div></div>`;
+}
+async function loadReviewQueue(){
+  const el=document.getElementById('reviewQueueList');if(!el)return;
+  el.innerHTML='<div style="text-align:center;padding:30px;color:var(--gray-500)">Loading…</div>';
+  const r=await api('GET','/api/quotes/review-queue');
+  if(r.error){el.innerHTML='<div class="auth-err" style="margin:16px">'+esc(r.error)+'</div>';return;}
+  const list=r.quotes||[];
+  A.reviewQueueCount=list.length;
+  if(!list.length){el.innerHTML='<div style="text-align:center;padding:40px;color:var(--gray-500)">Nothing waiting on review right now.</div>';return;}
+  el.innerHTML=list.map(q=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--gray-200)">
+    <div>
+      <div style="font-weight:700">${esc(q.title||'Untitled')}</div>
+      <div style="font-size:13px;color:var(--gray-500)">${esc(q.customer||'')} · v${q.current_version} · ${q.updated_at?new Date(q.updated_at).toLocaleDateString():''}</div>
+    </div>
+    <button class="btn btn-navy" onclick="openQuoteForReview('${q.id}')">Review</button>
+  </div>`).join('');
+}
+async function openQuoteForReview(qid){
+  const r=await api('GET','/api/quotes/'+qid);
+  if(r.error){alert(r.error);return;}
+  const vr=await api('GET','/api/quotes/'+qid+'/versions');
+  const latestMeta=(vr.versions||[]).find(v=>v.status==='pending');
+  if(!latestMeta){alert('No pending version found for this quote.');return;}
+  // Pull the full submitted snapshot (quote_data/terms_data/vendor_data) so
+  // the reviewer sees exactly what was sent for review — not any live edits
+  // made since. Live quote only supplies read-only metadata (currency etc).
+  const vfull=await api('GET','/api/quotes/'+qid+'/versions/'+latestMeta.id);
+  if(vfull.error){alert(vfull.error);return;}
+  const v=vfull.version;
+  A.activeQuote={...r.quote,
+    title:v.title||r.quote.title,customer:v.customer||r.quote.customer,
+    quote_data:v.quote_data,terms_data:v.terms_data,vendor_data:v.vendor_data};
+  A.cur=A.activeQuote.currency||'AED';A.rate=A.activeQuote.exchange_rate||1;A.activeOpt=0;
+  A.reviewMode={qid,vid:v.id,vnum:v.version_number,reviewers:v.reviewers||[]};
+  A.page='print';
+  draw();
+  showReviewDecisionModal(qid,v.id,v.version_number);
+}
+function exitReviewMode(){
+  A.reviewMode=null;A.activeQuote=null;A.page='reviewQueue';draw();
+}
+function showReviewDecisionModal(qid,vid,vnum){
+  const reviewers=A.reviewMode?.reviewers||[];
+  const reviewersHTML=reviewers.length?('<div style="margin:10px 0"><div style="font-size:11px;font-weight:700;color:var(--gray-500);text-transform:uppercase;margin-bottom:4px">Reviewers on this version</div>'+
+    reviewers.map(rv=>{const rm=REVIEW_STATUS_STYLE[rv.status]||{};return '<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:2px 0">'+
+      '<span>'+esc(rv.name||rv.email||'')+(rv.user_id===A.user?.id?' (you)':'')+'</span>'+
+      '<span style="background:'+(rm.bg||'#eee')+';color:'+(rm.c||'#555')+';font-weight:700;padding:1px 8px;border-radius:10px;font-size:11px">'+(rm.t||rv.status)+'</span></div>';}).join('')+
+    '</div>'):'';
+  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="rdOverlay" onclick="if(event.target===this)closeReviewDecisionModal()">'+
+    '<div class="modal" style="max-width:520px">'+
+    '<div class="modal-title">Review version '+vnum+'</div>'+
+    '<div class="modal-sub">'+esc(A.activeQuote?.title||'')+(A.activeQuote?.customer?' · '+esc(A.activeQuote.customer):'')+'</div>'+
+    reviewersHTML+
+    '<div style="margin:14px 0"><a href="#" onclick="closeReviewDecisionModal();return false" style="font-size:13px">Close and view full print preview →</a></div>'+
+    '<label style="font-size:13px;font-weight:600;color:var(--gray-500);display:block;margin-bottom:6px">Comment (optional on approve, required if requesting changes)</label>'+
+    '<textarea id="reviewComment" class="iinput" style="width:100%;min-height:80px;border:1.5px solid var(--gray-200);border-radius:8px;padding:10px;box-sizing:border-box"></textarea>'+
+    '<div class="modal-actions">'+
+      '<button class="btn" onclick="closeReviewDecisionModal()">Cancel</button>'+
+      '<button class="btn btn-red" onclick="decideReview(\''+qid+'\',\''+vid+'\',false)">Request changes</button>'+
+      '<button class="btn btn-navy" onclick="decideReview(\''+qid+'\',\''+vid+'\',true)">Approve</button>'+
+    '</div></div></div>');
+}
+function closeReviewDecisionModal(){const el=document.getElementById('rdOverlay');if(el)el.remove();}
+async function decideReview(qid,vid,approve){
+  const comment=(document.getElementById('reviewComment')?.value||'').trim();
+  if(!approve&&!comment){alert('Please add a comment explaining what needs to change.');return;}
+  const path='/api/quotes/'+qid+'/versions/'+vid+'/'+(approve?'approve':'request-changes');
+  const r=await api('POST',path,{comment});
+  if(r.error){alert(r.error);return;}
+  closeReviewDecisionModal();
+  exitReviewMode();
+}
+
+// ── Email quote to customer ──────────────────────────────────────────────────
+function defaultEmailDraft(){
+  const o=opt();const T=o?calcOpt(o):null;
+  const lines=[
+    'Dear '+(A.activeQuote?.customer||'Sir/Madam')+',','',
+    'Please find attached our quotation "'+(A.activeQuote?.title||'')+'"'+(o?.label?' ('+o.label+')':'')+' for your review.',
+  ];
+  if(T){lines.push('');lines.push('Grand total: '+A.cur+' '+fmt(T.grand)+(T.vatEnabled?' (incl. VAT)':' (excl. VAT)'));}
+  lines.push('','Please let us know if you have any questions or would like to proceed.','','Best regards,',A.user?.name||'');
+  return lines.join('\n');
+}
+function showEmailQuoteModal(){
+  if(!A.activeQuote)return;
+  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="emlOverlay" onclick="if(event.target===this)closeEmailQuoteModal()">'+
+    '<div class="modal" style="max-width:480px">'+
+    '<div class="modal-title">✉️ Email quote to customer</div>'+
+    '<div class="modal-sub">Sends from your own mailbox ('+esc(A.user?.email||'')+') with the quote attached as a PDF. Review the draft below before sending.</div>'+
+    '<label style="font-size:13px;font-weight:600;color:var(--gray-500);display:block;margin:12px 0 6px">To</label>'+
+    '<input id="emlTo" type="email" class="iinput" style="width:100%;border:1.5px solid var(--gray-200);border-radius:8px;padding:10px;box-sizing:border-box" placeholder="customer@example.com">'+
+    '<label style="font-size:13px;font-weight:600;color:var(--gray-500);display:block;margin:12px 0 6px">Subject</label>'+
+    '<input id="emlSubject" class="iinput" style="width:100%;border:1.5px solid var(--gray-200);border-radius:8px;padding:10px;box-sizing:border-box" value="Quotation — '+esc(A.activeQuote.title||'')+'">'+
+    '<label style="font-size:13px;font-weight:600;color:var(--gray-500);display:block;margin:12px 0 6px">Message (editable draft)</label>'+
+    '<textarea id="emlMessage" class="iinput" style="width:100%;min-height:180px;border:1.5px solid var(--gray-200);border-radius:8px;padding:10px;box-sizing:border-box">'+esc(defaultEmailDraft())+'</textarea>'+
+    '<div id="emlErr" class="auth-err" style="display:none;margin-top:10px"></div>'+
+    '<div class="modal-actions"><button class="btn" onclick="closeEmailQuoteModal()">Cancel</button><button class="btn btn-navy" id="emlSendBtn" onclick="sendQuoteEmail()">Send</button></div>'+
+    '</div></div>');
+}
+function closeEmailQuoteModal(){const el=document.getElementById('emlOverlay');if(el)el.remove();}
+async function sendQuoteEmail(){
+  const to=(document.getElementById('emlTo').value||'').trim();
+  const subject=(document.getElementById('emlSubject').value||'').trim();
+  const message=(document.getElementById('emlMessage').value||'').trim();
+  const errEl=document.getElementById('emlErr');errEl.style.display='none';
+  if(!to){errEl.textContent='Recipient email is required';errEl.style.display='block';return;}
+  const btn=document.getElementById('emlSendBtn');btn.disabled=true;btn.textContent='Sending…';
+  try{
+    const html=buildExportHTML();
+    const r=await api('POST','/api/quotes/'+A.activeQuote.id+'/email',{to,subject,message,html});
+    if(r.error){errEl.textContent=r.error;errEl.style.display='block';return;}
+    closeEmailQuoteModal();
+    alert('Sent from '+r.sent_from);
+  }catch(e){errEl.textContent='Could not reach the email service.';errEl.style.display='block';}
+  finally{btn.disabled=false;btn.textContent='Send';}
+}
 
 // ── Zoho Books customer autocomplete ─────────────────────────────────────────
 let ZC={t:null,last:''};
@@ -688,6 +893,7 @@ function draw(){
   if(A.page==='products')setTimeout(loadProducts,50);
   if(A.page==='customers')setTimeout(loadCustomersPage,50);
   if(A.page==='vendorMaster')setTimeout(loadVendorsMaster,50);
+  if(A.page==='reviewQueue')setTimeout(loadReviewQueue,50);
 }
 function initTA(){document.querySelectorAll('textarea.iinput').forEach(el=>{el.style.height='auto';el.style.height=el.scrollHeight+'px';el.addEventListener('input',()=>{el.style.height='auto';el.style.height=el.scrollHeight+'px';});});}
 
@@ -833,7 +1039,7 @@ function resetPasswordHTML(){
 // ── App shell ─────────────────────────────────────────────────────────────────
 function appHTML(){
   const init=(A.user?.name||'U').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
-  const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master',integrations:'Integrations',platform:'All Companies',companyProfile:'Company Profile'};
+  const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master',integrations:'Integrations',platform:'All Companies',companyProfile:'Company Profile',reviewQueue:'Review Queue'};
   const inEditor=['editor','terms','summary','vendor','print'].includes(A.page);
 
   const nav=(page,cb)=>`A.page='${page}';${cb||''}closeSidebar();draw()`;
@@ -848,6 +1054,7 @@ function appHTML(){
       <div class="sb-item ${A.page==='products'?'active':''}" onclick="${nav('products')}"><span class="sb-icon">📦</span>Products</div>
       <div class="sb-item ${A.page==='customers'?'active':''}" onclick="${nav('customers')}"><span class="sb-icon">👤</span>Customers</div>
       <div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="${nav('vendorMaster')}"><span class="sb-icon">🏭</span>Vendors</div>
+      <div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>
       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}
       ${A.user?.role==='admin'?`<div class="sb-sec">Settings</div>
       <div class="sb-item ${A.page==='team'?'active':''}" onclick="${nav('team')}"><span class="sb-icon">👥</span>Team</div>
@@ -867,7 +1074,7 @@ function appHTML(){
   const sbOverlay=`<div class="sb-overlay${A.sbOpen?' open':''}" onclick="closeSidebar()"></div>`;
 
   const topbarRight=buildTopbarRight();
-  const cstrip=inEditor?buildCstrip():'';
+  const cstrip=(inEditor&&!A.reviewMode)?buildCstrip():'';
 
   let pageContent='';
   if(A.page==='dashboard')pageContent=dashHTML();
@@ -883,6 +1090,7 @@ function appHTML(){
   else if(A.page==='integrations')pageContent=integrationsHTML();
   else if(A.page==='platform')pageContent=platformHTML();
   else if(A.page==='companyProfile')pageContent=companyProfileHTML();
+  else if(A.page==='reviewQueue')pageContent=reviewQueueHTML();
 
   return`<div class="shell">${sidebar}${sbOverlay}<div class="main">
     <div class="topbar"><div style="display:flex;align-items:center;gap:6px;min-width:0"><button class="sb-toggle" onclick="toggleSidebar()" aria-label="Menu">☰</button><div class="topbar-title">${PAGE_TITLES[A.page]||''}</div></div><div class="topbar-right">${topbarRight}</div></div>
@@ -903,7 +1111,10 @@ function buildTopbarRight(){
     <button class="btn${imgOn()?' btn-navy':''}" onclick="toggleImgOn()" title="Toggle product images & catalog assist for this quote">🖼 Images ${imgOn()?'ON':'OFF'}</button>
     <button class="btn" onclick="openBomModal()" title="Generate a bill of materials from a project description using AI">✨ Auto-BOM</button>
     <button class="btn" onclick="openProposalModal()" title="Generate a technical/commercial proposal document from this quote using AI">📑 Generate Proposal</button>
-    <button class="btn" onclick="reviewQuote()">🔍 Review</button>
+    <button class="btn" onclick="reviewQuote()">🔍 AI Review</button>
+    ${reviewStatusBadgeHTML()}
+    <button class="btn" onclick="showVersionHistoryModal()" title="View past review submissions">📜 History</button>
+    <button class="btn" onclick="submitForReview()" title="Snapshot this quote and send it for internal approval before it goes to the customer">📤 Send to Review</button>
     <button class="btn" onclick="A.page='dashboard';draw()">← Back</button>
     <button class="btn btn-navy" onclick="saveQuote()">💾 Save</button>`;
   if(A.page==='products')return`
@@ -921,11 +1132,16 @@ function buildTopbarRight(){
     <label class="btn" style="cursor:pointer" title="Import vendors from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importVendorsMaster(event)"></label>
     <button class="btn btn-navy" onclick="showVendModal()">+ Add vendor</button>`;
   if(A.page==='print')return`
-    <button class="btn btn-navy" onclick="downloadPDF()" title="Download this quotation as a PDF file">⬇ PDF</button>
+    ${!A.reviewMode?`<button class="btn btn-navy" onclick="downloadPDF()" title="Download this quotation as a PDF file">⬇ PDF</button>`:''}
     <select id="pSel" onchange="draw()" style="padding:6px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius)">
       ${(()=>{const w=printWhich();return (A.activeQuote?.quote_data||[]).map((o,i)=>`<option value="${i}" ${w===String(i)?'selected':''}>${esc(o.label)}</option>`).join('')+`<option value="all" ${w==='all'?'selected':''}>All options</option>`;})()}
     </select>
-    <button class="btn btn-navy print-controls" onclick="window.print()">🖨️ Print / PDF</button>`;
+    ${A.reviewMode?`
+    <span style="background:#eef2ff;color:#3730a3;font-size:12px;font-weight:700;padding:6px 12px;border-radius:20px">🔍 Reviewing v${A.reviewMode.vnum} — read only</span>
+    <button class="btn btn-navy" onclick="showReviewDecisionModal('${A.reviewMode.qid}','${A.reviewMode.vid}',${A.reviewMode.vnum})">✅ Review Decision</button>
+    <button class="btn" onclick="exitReviewMode()">✕ Exit Review</button>`:`
+    <button class="btn btn-navy" onclick="showEmailQuoteModal()" title="Email this quote to the customer from your own mailbox">✉️ Email to Customer</button>
+    <button class="btn btn-navy print-controls" onclick="window.print()">🖨️ Print / PDF</button>`}`;
   if(A.page==='team')return A.user?.role==='admin'?`<button class="btn btn-navy" onclick="showInviteModal()">+ Invite member</button>`:'';
   if(A.page==='platform')return A.user?.is_platform_admin?`<button class="btn btn-navy" onclick="showAddCompanyModal()">+ Onboard company</button>`:'';
   return'';
