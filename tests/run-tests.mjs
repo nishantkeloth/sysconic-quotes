@@ -67,19 +67,24 @@ async function testTypingPersists() {
   const { run } = await freshEditor();
   run(`
     const tas = document.querySelectorAll('textarea.iinput');
-    const vals = ['BrandX','ModelY','DescZ'];
-    [0,1,2].forEach(i => { tas[i].value = vals[i]; tas[i].dispatchEvent(new Event('input',{bubbles:true})); });
+    // Column order: Vendor, Model, Brand, Description
+    const vals = ['VendorV','ModelY','BrandX','DescZ'];
+    [0,1,2,3].forEach(i => { tas[i].value = vals[i]; tas[i].dispatchEvent(new Event('input',{bubbles:true})); });
   `);
+  const vendor = run(`sec(0).items[0].vendor`);
   const brand = run(`sec(0).items[0].brand`);
   const model = run(`sec(0).items[0].model`);
   const desc  = run(`sec(0).items[0].desc`);
+  check('typing: vendor reaches data model', vendor === 'VendorV', `got "${vendor}"`);
   check('typing: brand reaches data model', brand === 'BrandX', `got "${brand}"`);
   check('typing: model reaches data model', model === 'ModelY', `got "${model}"`);
   check('typing: description reaches data model', desc === 'DescZ', `got "${desc}"`);
   run(`addItem(0)`);
   const after = run(`sec(0).items[0].brand`);
-  const domVal = run(`document.querySelector('textarea.iinput').value || document.querySelector('textarea.iinput').textContent`);
+  const domVal = run(`document.querySelectorAll('textarea.iinput')[2].value || document.querySelectorAll('textarea.iinput')[2].textContent`);
   check('typing: survives Add item redraw (regression)', after === 'BrandX' && domVal === 'BrandX');
+  const vendAfter = run(`sec(0).items[0].vendor`);
+  check('typing: vendor survives redraw and persists on item', vendAfter === 'VendorV', `got "${vendAfter}"`);
 }
 
 // ── Test 3: items / sections / options structure ──────────────────────────

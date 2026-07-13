@@ -161,12 +161,12 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 
 /* ── Column headers ── */
 .col-hd{display:grid;padding:9px 14px;background:var(--navy);border-radius:8px 8px 0 0;font-size:12px;font-weight:700;color:rgba(255,255,255,.85);text-transform:uppercase;letter-spacing:.05em}
-.col-hd.int{grid-template-columns:28px 80px 130px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 95px 92px 128px 28px;min-width:1180px;font-size:10.5px;letter-spacing:.02em}
+.col-hd.int{grid-template-columns:28px 90px 130px 80px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 95px 92px 128px 28px;min-width:1270px;font-size:10.5px;letter-spacing:.02em}
 .col-hd.int div{padding:0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-right:1px solid rgba(255,255,255,.15)}
 .col-hd.int div:last-child{border-right:none}
 .item-row.int>*{border-right:1px solid var(--gray-100)}
 .item-row.int>*:last-child{border-right:none}
-.col-hd.int.img{grid-template-columns:28px 44px 80px 130px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 95px 92px 128px 28px;min-width:1224px}
+.col-hd.int.img{grid-template-columns:28px 44px 90px 130px 80px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 95px 92px 128px 28px;min-width:1314px}
 .col-hd.cli{grid-template-columns:28px 90px 140px 1fr 60px 95px 115px 28px}
 .col-hd.cli.img{grid-template-columns:28px 44px 90px 140px 1fr 60px 95px 115px 28px}
 .col-hd div{padding:0 5px}
@@ -177,10 +177,10 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .item-row{display:grid;padding:9px 14px;align-items:start;border-bottom:1px solid var(--gray-100);transition:background .12s}
 .item-row:last-child{border-bottom:none}
 .item-row:hover{background:#f5f8ff}
-.item-row.int{grid-template-columns:28px 80px 130px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 95px 92px 128px 28px;min-width:1180px}
+.item-row.int{grid-template-columns:28px 90px 130px 80px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 95px 92px 128px 28px;min-width:1270px}
 .item-row.int input[type=number]{padding:7px 5px;font-size:13px}
 .item-row.int .icalc{font-size:13px}
-.item-row.int.img{grid-template-columns:28px 44px 80px 130px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 95px 92px 128px 28px;min-width:1224px}
+.item-row.int.img{grid-template-columns:28px 44px 90px 130px 80px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 95px 92px 128px 28px;min-width:1314px}
 .item-row.cli{grid-template-columns:28px 90px 140px 1fr 60px 95px 115px 28px}
 .item-row.cli.img{grid-template-columns:28px 44px 90px 140px 1fr 60px 95px 115px 28px}
 .item-row>*{padding:0 5px}
@@ -418,8 +418,8 @@ const fmtC=n=>A.cur+' '+fmt(n);
 const sym=()=>A.cur;
 
 // ── Data factories ───────────────────────────────────────────────────────────
-function mkItem(brand='',model='',desc='',qty=1,cost=0,disc=0,margin=0.2,discAdd=0,costUsd=0){
-  return{id:uid(),brand,model,desc,qty,cost,disc,margin,discAdd,costUsd};
+function mkItem(brand='',model='',desc='',qty=1,cost=0,disc=0,margin=0.2,discAdd=0,costUsd=0,vendor=''){
+  return{id:uid(),brand,model,desc,qty,cost,disc,margin,discAdd,costUsd,vendor};
 }
 function mkOption(label='Option 1'){
   return{id:uid(),label,customer:'',ref:'QT-2026-001',
@@ -1676,7 +1676,7 @@ function editorHTML(){
   (o.sections||[]).forEach((s,si)=>{
     let rn=1;
     const IC=IMG?['']:[];
-    const hds=isInt?['#',...IC,'Brand','Model','Description','USD Cost','Cost','Disc%','Add.Disc%','Markup%','Qty','Unit Price','VAT','Total','']:['#',...IC,'Brand','Model','Description','Qty','Unit Price','Total',''];
+    const hds=isInt?['#',...IC,'Vendor','Model','Brand','Description','USD Cost','Cost','Disc%','Add.Disc%','Markup%','Qty','Unit Price','VAT','Total','']:['#',...IC,'Brand','Model','Description','Qty','Unit Price','Total',''];
     let rows='';
     s.items.forEach((it,ii)=>{
       const c=calcItem(it);
@@ -1684,8 +1684,9 @@ function editorHTML(){
         rows+=`<div class="item-row int${IMG?' img':''}">
           <div class="inum">${rn++}</div>
           ${IMG?thumbCell(si,ii,it):''}
-          <textarea class="iinput" oninput="sec(${si}).items[${ii}].brand=this.value;schedSave()" onblur="captureProduct(${si},${ii})" placeholder="Brand">${esc(it.brand)}</textarea>
+          <textarea class="iinput" id="vdInput-${si}-${ii}" oninput="sec(${si}).items[${ii}].vendor=this.value;schedSave();vdSearchInput(${si},${ii},this.value)" onfocus="vdSearchInput(${si},${ii},this.value)" onblur="setTimeout(hideVdDrop,180)" placeholder="Vendor">${esc(it.vendor||'')}</textarea>
           <textarea class="iinput" id="pmInput-${si}-${ii}" oninput="sec(${si}).items[${ii}].model=this.value;schedSave();pmSearchInput(${si},${ii},this.value)" onfocus="pmSearchInput(${si},${ii},this.value)" onblur="setTimeout(hidePmDrop,180);captureProduct(${si},${ii})" placeholder="Model">${esc(it.model)}</textarea>
+          <textarea class="iinput" oninput="sec(${si}).items[${ii}].brand=this.value;schedSave()" onblur="captureProduct(${si},${ii})" placeholder="Brand">${esc(it.brand)}</textarea>
           <textarea class="iinput" oninput="sec(${si}).items[${ii}].desc=this.value;schedSave()" placeholder="Description">${esc(it.desc)}</textarea>
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="costusd" value="${it.costUsd||0}" oninput="liveCalc(this)" title="Cost in USD — auto-converts to Cost using Rate to AED" placeholder="0">
           <input class="iinput" type="number" id="cost-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="cost" value="${it.cost}" oninput="liveCalc(this)" placeholder="0">
@@ -2088,6 +2089,50 @@ async function captureProduct(si,ii){
     const cr=await api('POST','/api/products',{brand,model,description:it.desc||'',default_cost:+it.cost||0,default_margin:+it.margin||0.2});
     if(cr.product){it.product_id=cr.product.id;schedSave();updThumb(si,ii);}
   }catch(e){}
+}
+
+// ── Vendor-field live search (Vendor Master autocomplete; manual values allowed) ──
+// NOT gated behind the Images/catalog toggle — vendor lookup is independent of
+// catalog assist. Picking a suggestion fills the item's vendor (and vendor_id);
+// free-typed values are kept as-is and are never auto-added to the Vendor Master.
+let VDD={si:-1,ii:-1,t:null,last:'',matches:[]};
+function vdSearchInput(si,ii,val){
+  clearTimeout(VDD.t);
+  const q=(val||'').trim();
+  if(q.length<1){hideVdDrop();return;}
+  VDD.t=setTimeout(async()=>{
+    VDD.last=q;
+    let r;
+    try{r=await api('GET','/api/vendors?limit=8&search='+encodeURIComponent(q));}catch(e){return;}
+    if(VDD.last!==q)return; // stale response
+    VDD.si=si;VDD.ii=ii;VDD.matches=r.vendors||[];
+    showVdDrop(si,ii,VDD.matches);
+  },300);
+}
+function showVdDrop(si,ii,matches){
+  const inp=document.getElementById(`vdInput-${si}-${ii}`);if(!inp)return;
+  if(!matches.length){hideVdDrop();return;}
+  let el=document.getElementById('vdDrop');
+  if(!el){el=document.createElement('div');el.id='vdDrop';el.className='pm-drop';document.body.appendChild(el);}
+  const rect=inp.getBoundingClientRect();
+  el.style.left=Math.round(rect.left)+'px';
+  el.style.top=Math.round(rect.bottom+4)+'px';
+  el.style.width=Math.max(Math.round(rect.width),220)+'px';
+  el.innerHTML=matches.map((v,idx)=>`<div class="pm-opt" onmousedown="vdPick(${idx})">
+    <div class="pm-txt"><div class="pm-model">${esc(v.name||'')}</div><div class="pm-sub">${esc(v.category||'')}${v.contact_person?' · '+esc(v.contact_person):''}</div></div>
+  </div>`).join('');
+  el.style.display='block';
+}
+function hideVdDrop(){const el=document.getElementById('vdDrop');if(el)el.style.display='none';}
+function vdPick(idx){
+  const v=VDD.matches[idx];if(!v)return;
+  const it=sec(VDD.si)?.items?.[VDD.ii];if(!it)return;
+  it.vendor=v.name||'';
+  it.vendor_id=v.id;
+  hideVdDrop();
+  const inp=document.getElementById(`vdInput-${VDD.si}-${VDD.ii}`);
+  if(inp)inp.value=it.vendor; // update in place — no full redraw, keeps typing flow
+  schedSave();
 }
 
 // ── Model-field live search (Product Master first, online search fallback) ────
