@@ -72,6 +72,13 @@ def verify_token(req):
 
 VALID_CURRENCIES = {'AED','USD','EUR','GBP','SAR','QAR'}
 
+def normalize_key(s):
+    """Collapse a brand/model string to a comparison key so 'IL-FISS-ORMV 3.9Pro',
+    'IL FISS ORMV 3.9Pro', and 'ILFISSORMV3.9Pro' are all recognized as the same
+    product. Strips spaces, hyphens, underscores, and case — but NOT digits or
+    dots, so genuinely different models (e.g. 3.9Pro vs 39Pro) still stay distinct."""
+    return re.sub(r'[\s\-_]+', '', (s or '').strip().lower())
+
 def clean_product(d):
     """Whitelist + normalise incoming product fields."""
     out = {}
@@ -119,6 +126,14 @@ def list_products():
     return jsonify({'products': rows.data, 'total': rows.count or 0})
 
 # ── Create product ─────────────────────────────────────────────────────────────
+# De-duplication: model numbers typed by hand (or picked up from a web search)
+# routinely differ only in spacing/hyphenation — "IL-FISS-ORMV 3.9Pro" vs
+# "IL FISS ORMV 3.9Pro" vs "ILFISSORMV3.9Pro". Comparing normalize_key() output
+# (case/space/hyphen/underscore-insensitive) catches these as the same product
+# before creating a new row. A matching database index (see migration) also
+# rejects any duplicate that slips past this check under concurrent requests —
+# on that rare race, we catch the conflict and return the existing row instead
+# of a 500 error.
 @app.route('/api/products', methods=['POST'])
 def create_product():
     claims = verify_token(request)
@@ -127,9 +142,46 @@ def create_product():
     d = clean_product(request.json or {})
     if not d.get('model') and not d.get('brand'):
         return jsonify({'error': 'Brand or model is required'}), 400
+
+    model_key = normalize_key(d.get('model'))
+    brand_key = normalize_key(d.get('brand'))
+
+    if model_key:
+        existing = sb.table('products').select('*') \
+            .eq('company_id', claims['company_id']) \
+            .eq('model_key', model_key).eq('brand_key', brand_key).execute()
+        if existing.data:
+            hit = existing.data[0]
+            # Fill in any details this call has that the existing record lacks,
+            # so the catalog keeps improving instead of silently discarding
+            # newer info — but never overwrite fields it already has.
+            fill = {}
+            for k in ('description', 'sku', 'category', 'vendor_part_number', 'lead_time', 'datasheet_url'):
+                if d.get(k) and not hit.get(k): fill[k] = d[k]
+            if d.get('default_cost') and not hit.get('default_cost'): fill['default_cost'] = d['default_cost']
+            if fill:
+                fill['updated_at'] = 'now()'
+                row = sb.table('products').update(fill).eq('id', hit['id']).execute()
+                hit = row.data[0]
+            return jsonify({'product': hit, 'deduped': True}), 200
+
     d['company_id'] = claims['company_id']
     d['created_by'] = claims['user_id']
-    row = sb.table('products').insert(d).execute()
+    d['model_key'] = model_key
+    d['brand_key'] = brand_key
+    try:
+        row = sb.table('products').insert(d).execute()
+    except Exception as e:
+        # Unique-index race: another request created the same product between
+        # our check above and this insert. Fetch and return that one instead
+        # of surfacing a raw database error.
+        if '23505' in str(e) or 'duplicate key' in str(e).lower():
+            existing = sb.table('products').select('*') \
+                .eq('company_id', claims['company_id']) \
+                .eq('model_key', model_key).eq('brand_key', brand_key).execute()
+            if existing.data:
+                return jsonify({'product': existing.data[0], 'deduped': True}), 200
+        raise
     return jsonify({'product': row.data[0]}), 201
 
 # ── Update product ─────────────────────────────────────────────────────────────
@@ -142,6 +194,8 @@ def update_product(pid):
     if not existing.data: return jsonify({'error': 'Not found'}), 404
 
     d = clean_product(request.json or {})
+    if 'model' in d: d['model_key'] = normalize_key(d['model'])
+    if 'brand' in d: d['brand_key'] = normalize_key(d['brand'])
     d['updated_at'] = 'now()'
     row = sb.table('products').update(d).eq('id', pid).execute()
     return jsonify({'product': row.data[0]})
