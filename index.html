@@ -106,6 +106,21 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .mcard-val.amber{color:var(--amber)}
 .mcard-sub{font-size:12px;color:var(--gray-500);margin-top:4px}
 .filter-bar{display:flex;gap:10px;margin-bottom:20px}
+.view-toggle{display:flex;border:1px solid var(--gray-200);border-radius:var(--radius);overflow:hidden;flex-shrink:0}
+.view-toggle button{background:#fff;border:none;padding:0 14px;font-size:15px;color:var(--gray-400);cursor:pointer;transition:background .15s,color .15s}
+.view-toggle button:first-child{border-right:1px solid var(--gray-200)}
+.view-toggle button.active{background:var(--navy,#1e3a5f);color:#fff}
+.view-toggle button:not(.active):hover{background:var(--gray-50,#f8fafc)}
+.quote-list{border:1px solid var(--gray-200);border-radius:var(--radius);overflow:hidden;background:#fff}
+.qlist-hd,.qlist-row{display:grid;grid-template-columns:2fr 1.4fr 90px 100px 80px 130px 130px 130px;gap:10px;padding:11px 14px;align-items:center}
+.qlist-hd{background:var(--navy,#1e3a5f);color:#fff;font-size:10.5px;font-weight:600;letter-spacing:.03em;text-transform:uppercase}
+.qlist-row{border-top:1px solid var(--gray-100);cursor:pointer;font-size:13px;color:var(--gray-700,#334155)}
+.qlist-row:hover{background:var(--gray-50,#f8fafc)}
+.qlist-title{font-weight:600;color:var(--navy,#1e3a5f)}
+.qlist-cust{color:var(--gray-500)}
+.qlist-total{font-weight:600}
+.qlist-gp{font-weight:600;color:var(--green)}
+.qlist-actions{display:flex;gap:6px}
 .search-inp{flex:1;padding:10px 14px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit;background:var(--white)}
 .search-inp:focus{outline:none;border-color:var(--navy)}
 .filter-sel{padding:9px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit;background:var(--white)}
@@ -1696,9 +1711,34 @@ function dashHTML(){
       <option value="all">All status</option>
       ${['draft','sent','awarded','lost'].map(s=>`<option value="${s}" ${A.filterStatus===s?'selected':''}>${STATUS_LABELS[s]}</option>`).join('')}
     </select>
+    <div class="view-toggle">
+      <button class="${(A.dashView||'grid')==='grid'?'active':''}" title="Grid view" onclick="A.dashView='grid';draw()">▦</button>
+      <button class="${A.dashView==='list'?'active':''}" title="List view" onclick="A.dashView='list';draw()">☰</button>
+    </div>
   </div>`;
   if(!filtered.length){
     html+=`<div class="empty-state"><div class="empty-icon">📄</div><div class="empty-title">${qs.length?'No matches':'No quotes yet'}</div><div class="empty-sub">${qs.length?'Try adjusting filters':'Create your first quote'}</div>${!qs.length?`<button class="btn btn-navy" onclick="newQuote()">+ New quote</button>`:''}</div>`;
+  } else if(A.dashView==='list'){
+    html+=`<div class="quote-list">
+      <div class="qlist-hd"><div>Title</div><div>Customer</div><div>Status</div><div>Date</div><div>Currency</div><div>Total value</div><div>Gross profit</div><div>Actions</div></div>`;
+    filtered.forEach(q=>{
+      const date=new Date(q.updated_at).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+      html+=`<div class="qlist-row" onclick="openQuote({id:'${q.id}'})">
+        <div class="qlist-title">${esc(q.title)}</div>
+        <div class="qlist-cust">${esc(q.customer||'No customer')}</div>
+        <div><span class="sbadge s-${q.status}">${STATUS_LABELS[q.status]}</span></div>
+        <div>${date}</div>
+        <div>${q.currency||'AED'}</div>
+        <div class="qlist-total">${q.currency||'AED'} ${fmt(q.total_sell||0)}</div>
+        <div class="qlist-gp">${q.currency||'AED'} ${fmt(q.total_gp||0)}</div>
+        <div class="qlist-actions" onclick="event.stopPropagation()">
+          <button class="btn btn-sm" onclick="openQuote({id:'${q.id}'})">✏️</button>
+          <button class="btn btn-sm" onclick="duplicateQuote('${q.id}',event)">⧉</button>
+          ${A.user?.role==='admin'?`<button class="btn btn-sm btn-red" onclick="deleteQuote('${q.id}',event)">🗑</button>`:''}
+        </div>
+      </div>`;
+    });
+    html+=`</div>`;
   } else {
     html+=`<div class="quote-grid">`;
     filtered.forEach(q=>{
