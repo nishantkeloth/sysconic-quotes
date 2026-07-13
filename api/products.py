@@ -204,6 +204,97 @@ def image_search():
         })
     return jsonify({'images': images})
 
+# ── Online product lookup (manual entry: model not found in Product Master) ───
+# Used by the quote-item "Search Online" flow: when a typed model number has no
+# match in the company's own catalog, this does a plain web + image search via
+# the same Google CSE credentials already used above, and guesses a brand by
+# checking the company's own existing catalog brand names against the top
+# result's title (no LLM call — keeps this fast/cheap and avoids a second
+# provider dependency). The frontend always shows these as an editable,
+# user-confirmed draft before anything is saved.
+@app.route('/api/products/online-search', methods=['GET'])
+def online_search():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not GOOGLE_CSE_ID or not GOOGLE_CSE_KEY:
+        return jsonify({'error': 'Online search is not configured (missing Google CSE keys)'}), 500
+
+    q = (request.args.get('q') or '').strip()
+    if not q: return jsonify({'error': 'No search query'}), 400
+    q = q[:200]
+
+    # Plain web results (title/snippet/link) — no searchType param means text search.
+    web_params = urllib.parse.urlencode({
+        'key': GOOGLE_CSE_KEY, 'cx': GOOGLE_CSE_ID, 'q': q,
+        'num': 5, 'safe': 'active',
+    })
+    results = []
+    web_err = None
+    try:
+        with urllib.request.urlopen('https://www.googleapis.com/customsearch/v1?' + web_params, timeout=20) as resp:
+            wdata = json.loads(resp.read().decode('utf-8'))
+        for it in wdata.get('items', [])[:5]:
+            results.append({
+                'title': (it.get('title') or '')[:150],
+                'snippet': (it.get('snippet') or '')[:400],
+                'link': it.get('link'),
+            })
+    except urllib.error.HTTPError as e:
+        web_err = f'HTTP {e.code}: {e.read().decode("utf-8","ignore")[:300]}'
+    except Exception as e:
+        web_err = f'{type(e).__name__}: {e}'
+
+    # Image results, same shape as /image-search.
+    img_params = urllib.parse.urlencode({
+        'key': GOOGLE_CSE_KEY, 'cx': GOOGLE_CSE_ID, 'q': q,
+        'searchType': 'image', 'num': 8, 'safe': 'active',
+    })
+    images = []
+    img_err = None
+    try:
+        with urllib.request.urlopen('https://www.googleapis.com/customsearch/v1?' + img_params, timeout=20) as resp:
+            idata = json.loads(resp.read().decode('utf-8'))
+        for it in idata.get('items', [])[:8]:
+            img = it.get('image') or {}
+            images.append({
+                'url': it.get('link'),
+                'thumb': img.get('thumbnailLink') or it.get('link'),
+                'source': img.get('contextLink') or '',
+            })
+    except urllib.error.HTTPError as e:
+        img_err = f'HTTP {e.code}: {e.read().decode("utf-8","ignore")[:300]}'
+    except Exception as e:
+        img_err = f'{type(e).__name__}: {e}'
+
+    if not results and not images:
+        # Surface the real cause when both calls actually failed (bad CSE config,
+        # quota, auth, etc.) rather than always claiming "no results" — a
+        # genuinely empty query still gets the plain not-found message.
+        if web_err or img_err:
+            return jsonify({'error': f'Online search failed. Web: {web_err or "ok"} | Image: {img_err or "ok"}'}), 502
+        return jsonify({'error': f'No online results found for "{q}". Enter the details manually below.'}), 200
+
+    # Brand guess: does any brand already in this company's catalog appear in
+    # the top result's title? Cheap and grounded in real data they already use.
+    guessed_brand = ''
+    if results:
+        title_l = (results[0].get('title') or '').lower()
+        try:
+            brand_rows = sb.table('products').select('brand').eq('company_id', claims['company_id']) \
+                .not_.is_('brand', 'null').limit(200).execute()
+            seen = set()
+            for r in (brand_rows.data or []):
+                b = (r.get('brand') or '').strip()
+                if b and b.lower() not in seen:
+                    seen.add(b.lower())
+                    if b.lower() in title_l:
+                        guessed_brand = b
+                        break
+        except Exception:
+            pass
+
+    return jsonify({'query': q, 'results': results, 'images': images, 'guessed_brand': guessed_brand})
+
 # ── Set product image (from web URL or base64 upload) ─────────────────────────
 @app.route('/api/products/<pid>/image', methods=['POST'])
 def set_image(pid):
