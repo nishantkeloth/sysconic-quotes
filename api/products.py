@@ -18,8 +18,7 @@ def handle_exception(e):
 SUPABASE_URL   = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY   = os.environ.get('SUPABASE_SERVICE_KEY')
 JWT_SECRET     = os.environ.get('JWT_SECRET')
-GOOGLE_CSE_ID  = os.environ.get('GOOGLE_CSE_ID')
-GOOGLE_CSE_KEY = os.environ.get('GOOGLE_CSE_KEY')
+BRAVE_API_KEY  = os.environ.get('BRAVE_API_KEY')  # Brave Search API (replaced Google CSE — closed to new customers in 2026)
 
 BUCKET = 'product-images'
 MAX_IMAGE_BYTES = 4 * 1024 * 1024  # 4 MB
@@ -43,6 +42,25 @@ def is_safe_public_url(url):
         return True
     except Exception:
         return False
+
+def brave_search(endpoint, q, count):
+    """Call Brave Search API ('web' or 'images'). Returns (data, err_str).
+    Free tier: ~1 req/sec, 2000 queries/month — comfortably covers low daily volume."""
+    params = urllib.parse.urlencode({'q': q, 'count': count, 'safesearch': 'strict'})
+    req = urllib.request.Request(
+        f'https://api.search.brave.com/res/v1/{endpoint}/search?' + params,
+        headers={'Accept': 'application/json', 'X-Subscription-Token': BRAVE_API_KEY or ''})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode('utf-8')), None
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            return None, 'Search rate limit reached. Wait a moment and try again.'
+        if e.code in (401, 403):
+            return None, f'Search API key rejected (HTTP {e.code}). Check BRAVE_API_KEY.'
+        return None, f'HTTP {e.code}: {e.read().decode("utf-8","ignore")[:300]}'
+    except Exception as e:
+        return None, f'{type(e).__name__}: {e}'
 
 def verify_token(req):
     auth = req.headers.get('Authorization','')
@@ -168,106 +186,79 @@ def bulk_import():
     sb.table('products').insert(rows).execute()
     return jsonify({'imported': len(rows), 'skipped': skipped})
 
-# ── Image search (Google Custom Search) ───────────────────────────────────────
+# ── Image search (Brave Search API) ────────────────────────────────────────────
 @app.route('/api/products/image-search', methods=['GET'])
 def image_search():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    if not GOOGLE_CSE_ID or not GOOGLE_CSE_KEY:
-        return jsonify({'error': 'Image search is not configured (missing Google CSE keys)'}), 500
+    if not BRAVE_API_KEY:
+        return jsonify({'error': 'Image search is not configured (missing BRAVE_API_KEY)'}), 500
 
     q = (request.args.get('q') or '').strip()
     if not q: return jsonify({'error': 'No search query'}), 400
 
-    params = urllib.parse.urlencode({
-        'key': GOOGLE_CSE_KEY, 'cx': GOOGLE_CSE_ID, 'q': q,
-        'searchType': 'image', 'num': 8, 'safe': 'active',
-    })
-    try:
-        with urllib.request.urlopen('https://www.googleapis.com/customsearch/v1?' + params, timeout=20) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-    except urllib.error.HTTPError as e:
-        if e.code == 429:
-            return jsonify({'error': 'Daily image search limit reached. Try again tomorrow or upload manually.'}), 502
-        return jsonify({'error': f'Image search failed ({e.code})'}), 502
-    except Exception:
-        return jsonify({'error': 'Image search service unreachable'}), 502
+    data, err = brave_search('images', q, 8)
+    if err:
+        return jsonify({'error': f'Image search failed. {err}'}), 502
 
     images = []
-    for it in data.get('items', [])[:8]:
-        img = it.get('image') or {}
+    for it in (data.get('results') or [])[:8]:
+        props = it.get('properties') or {}
         images.append({
-            'url': it.get('link'),
-            'thumb': img.get('thumbnailLink') or it.get('link'),
-            'source': img.get('contextLink') or '',
+            'url': props.get('url') or it.get('url'),
+            'thumb': (it.get('thumbnail') or {}).get('src') or props.get('url') or it.get('url'),
+            'source': it.get('source') or '',
             'title': (it.get('title') or '')[:100],
         })
     return jsonify({'images': images})
 
 # ── Online product lookup (manual entry: model not found in Product Master) ───
 # Used by the quote-item "Search Online" flow: when a typed model number has no
-# match in the company's own catalog, this does a plain web + image search via
-# the same Google CSE credentials already used above, and guesses a brand by
-# checking the company's own existing catalog brand names against the top
+# match in the company's own catalog, this does a live web + image search via
+# Brave Search (grounded — not the model's own knowledge), and guesses a brand
+# by checking the company's own existing catalog brand names against the top
 # result's title (no LLM call — keeps this fast/cheap and avoids a second
-# provider dependency). The frontend always shows these as an editable,
-# user-confirmed draft before anything is saved.
+# provider dependency). The frontend always shows this as an editable,
+# user-confirmed draft before anything is saved — never auto-added.
 @app.route('/api/products/online-search', methods=['GET'])
 def online_search():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    if not GOOGLE_CSE_ID or not GOOGLE_CSE_KEY:
-        return jsonify({'error': 'Online search is not configured (missing Google CSE keys)'}), 500
+    if not BRAVE_API_KEY:
+        return jsonify({'error': 'Online search is not configured (missing BRAVE_API_KEY)'}), 500
 
     q = (request.args.get('q') or '').strip()
     if not q: return jsonify({'error': 'No search query'}), 400
     q = q[:200]
 
-    # Plain web results (title/snippet/link) — no searchType param means text search.
-    web_params = urllib.parse.urlencode({
-        'key': GOOGLE_CSE_KEY, 'cx': GOOGLE_CSE_ID, 'q': q,
-        'num': 5, 'safe': 'active',
-    })
+    # Plain web results (title/snippet/link) — the entered model number is used
+    # verbatim as the primary search reference, per spec, rather than being
+    # rewritten or expanded.
+    web_data, web_err = brave_search('web', q, 5)
     results = []
-    web_err = None
-    try:
-        with urllib.request.urlopen('https://www.googleapis.com/customsearch/v1?' + web_params, timeout=20) as resp:
-            wdata = json.loads(resp.read().decode('utf-8'))
-        for it in wdata.get('items', [])[:5]:
+    if web_data:
+        for it in ((web_data.get('web') or {}).get('results') or [])[:5]:
             results.append({
                 'title': (it.get('title') or '')[:150],
-                'snippet': (it.get('snippet') or '')[:400],
-                'link': it.get('link'),
+                'snippet': (it.get('description') or '')[:400],
+                'link': it.get('url'),
             })
-    except urllib.error.HTTPError as e:
-        web_err = f'HTTP {e.code}: {e.read().decode("utf-8","ignore")[:300]}'
-    except Exception as e:
-        web_err = f'{type(e).__name__}: {e}'
 
-    # Image results, same shape as /image-search.
-    img_params = urllib.parse.urlencode({
-        'key': GOOGLE_CSE_KEY, 'cx': GOOGLE_CSE_ID, 'q': q,
-        'searchType': 'image', 'num': 8, 'safe': 'active',
-    })
+    # Image results, same shape as /image-search — real photos from the web,
+    # never AI-generated.
+    img_data, img_err = brave_search('images', q, 8)
     images = []
-    img_err = None
-    try:
-        with urllib.request.urlopen('https://www.googleapis.com/customsearch/v1?' + img_params, timeout=20) as resp:
-            idata = json.loads(resp.read().decode('utf-8'))
-        for it in idata.get('items', [])[:8]:
-            img = it.get('image') or {}
+    if img_data:
+        for it in (img_data.get('results') or [])[:8]:
+            props = it.get('properties') or {}
             images.append({
-                'url': it.get('link'),
-                'thumb': img.get('thumbnailLink') or it.get('link'),
-                'source': img.get('contextLink') or '',
+                'url': props.get('url') or it.get('url'),
+                'thumb': (it.get('thumbnail') or {}).get('src') or props.get('url') or it.get('url'),
+                'source': it.get('source') or '',
             })
-    except urllib.error.HTTPError as e:
-        img_err = f'HTTP {e.code}: {e.read().decode("utf-8","ignore")[:300]}'
-    except Exception as e:
-        img_err = f'{type(e).__name__}: {e}'
 
     if not results and not images:
-        # Surface the real cause when both calls actually failed (bad CSE config,
+        # Surface the real cause when both calls actually failed (bad key,
         # quota, auth, etc.) rather than always claiming "no results" — a
         # genuinely empty query still gets the plain not-found message.
         if web_err or img_err:
