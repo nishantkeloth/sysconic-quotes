@@ -2214,7 +2214,7 @@ async function showPmOnlineModal(si,ii,query){
   catch(e){r={error:'Search failed. Check your connection and try again.'};}
   const body=document.getElementById('pmOnlineBody');if(!body)return;
   if(r.error){
-    body.innerHTML=`<div class="auth-err">${esc(r.error)}</div><div style="font-size:13px;color:var(--gray-500);margin:10px 0">You can still add this item manually — it will be saved to your Product Master.</div>${pmManualFormHTML(query,'','')}<div class="modal-actions"><button class="btn" onclick="closePmOnlineModal()">Cancel</button><button class="btn btn-navy" onclick="pmOnlineConfirm(${si},${ii})">Add to quote</button></div>`;
+    body.innerHTML=`<div class="auth-err">${esc(r.error)}</div><div style="font-size:13px;color:var(--gray-500);margin:10px 0">You can still add this item manually — it will be saved to your Product Master.</div>${pmManualFormHTML(query,'','')}<div class="modal-actions"><button class="btn" onclick="closePmOnlineModal()">Cancel</button><button class="btn" onclick="showPmOnlineModal(${si},${ii},document.getElementById('pmoModel')?.value||'${esc(query)}')">Search again</button><button class="btn btn-navy" onclick="pmOnlineConfirm(${si},${ii})">Confirm &amp; Add</button></div>`;
     return;
   }
   const top=(r.results||[])[0];
@@ -2225,7 +2225,8 @@ async function showPmOnlineModal(si,ii,query){
     <div class="fld"><label>Image</label>${(r.images||[]).length?`<div class="img-grid">${r.images.map((im,idx)=>`<div class="img-opt" id="pmImgOpt-${idx}" onclick="pmSelectImg(${idx})"><img src="${esc(im.thumb)}" loading="lazy" onerror="this.parentNode.style.display='none'"><div class="img-src">${esc((im.source||'').replace(/^https?:\/\/(www\.)?/,'').split('/')[0])}</div></div>`).join('')}</div><div style="font-size:11px;color:var(--gray-500);margin-top:4px">Click an image to select it (optional).</div>`:`<div style="font-size:12.5px;color:var(--gray-500)">No images found — you can add one later from the Products page.</div>`}</div>
     <div class="modal-actions">
       <button class="btn" onclick="closePmOnlineModal()">Cancel</button>
-      <button class="btn btn-navy" onclick="pmOnlineConfirm(${si},${ii})">Add to quote</button>
+      <button class="btn" onclick="showPmOnlineModal(${si},${ii},document.getElementById('pmoModel')?.value||'${esc(query)}')">Search again</button>
+      <button class="btn btn-navy" onclick="pmOnlineConfirm(${si},${ii})">Confirm &amp; Add</button>
     </div>`;
 }
 function pmSelectImg(idx){
