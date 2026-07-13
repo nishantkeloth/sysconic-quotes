@@ -179,6 +179,7 @@ def create_quote():
         'status':        d.get('status', 'draft'),
         'currency':      d.get('currency', 'AED'),
         'exchange_rate': d.get('exchange_rate', 1),
+        'pricing_type':  d.get('pricing_type', 'markup'),
         'quote_data':    d.get('quote_data', []),
         'vendor_data':   d.get('vendor_data', []),
         'terms_data':    d.get('terms_data', []),
@@ -196,7 +197,7 @@ def create_quote():
 # sent/awarded/lost, its content is locked — the only way to edit it again
 # is to explicitly set the status back to 'draft' first. This keeps what a
 # reviewer/customer saw for a given version from silently drifting.
-CONTENT_FIELDS = ['title','customer','currency','exchange_rate','quote_data','vendor_data','terms_data','total_sell','total_gp','margin']
+CONTENT_FIELDS = ['title','customer','currency','exchange_rate','pricing_type','quote_data','vendor_data','terms_data','total_sell','total_gp','margin']
 
 @app.route('/api/quotes/<qid>', methods=['PUT'])
 def update_quote(qid):
@@ -210,7 +211,7 @@ def update_quote(qid):
         return jsonify({'error': 'Forbidden'}), 403
 
     d = request.json or {}
-    allowed = ['title','customer','status','currency','exchange_rate','quote_data','vendor_data','terms_data','total_sell','total_gp','margin']
+    allowed = ['title','customer','status','currency','exchange_rate','pricing_type','quote_data','vendor_data','terms_data','total_sell','total_gp','margin']
     update = {k: d[k] for k in allowed if k in d}
 
     old_status = existing.data[0].get('status')
@@ -262,6 +263,7 @@ def duplicate_quote(qid):
         'status':        'draft',
         'currency':      o['currency'],
         'exchange_rate': o['exchange_rate'],
+        'pricing_type':  o.get('pricing_type', 'markup'),
         'quote_data':    o['quote_data'],
         'vendor_data':   o['vendor_data'],
         'terms_data':    o['terms_data'],
