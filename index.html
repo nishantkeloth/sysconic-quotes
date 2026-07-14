@@ -211,6 +211,10 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .item-row>*{padding:0 5px}
 .inum{font-size:12px;color:var(--gray-300);font-weight:700;text-align:center;padding-top:10px}
 .iinput{width:100%;padding:7px 8px;font-size:14px;border:1.5px solid transparent;border-radius:6px;font-family:inherit;color:var(--gray-900);background:transparent;transition:all .15s;resize:none;overflow:hidden;min-height:36px;line-height:1.4}
+.pm-field-wrap{position:relative;width:100%}
+.pm-field-wrap .pm-field-input{padding-right:26px}
+.pm-search-btn{position:absolute;right:2px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:13px;padding:4px;line-height:1;opacity:.55;transition:opacity .15s}
+.pm-search-btn:hover{opacity:1}
 .iinput:hover{border-color:var(--gray-200);background:var(--white)}
 .iinput:focus{outline:none;border-color:var(--navy);background:var(--white);box-shadow:0 0 0 3px rgba(26,60,110,.08)}
 .iinput.editable-calc{background:var(--navy-light);color:var(--navy);font-weight:600;border-color:var(--navy-mid)}
@@ -1403,6 +1407,23 @@ const terms=()=>A.activeQuote.terms_data||(A.activeQuote.terms_data=[]);
 const vendors=()=>A.activeQuote.vendor_data||(A.activeQuote.vendor_data=[]);
 
 // ── Draw ──────────────────────────────────────────────────────────────────────
+// The item grid can be wider than the screen (Vendor/Model/Brand/pricing
+// columns), scrollable via the native horizontal scrollbar — but on many
+// Windows laptops, a plain mouse wheel or trackpad only produces vertical
+// scroll deltas with no easy horizontal gesture, so the table can look
+// "stuck" even though the scrollbar works fine with a direct drag. This
+// redirects ordinary vertical scroll input into horizontal movement while
+// hovering the table, and steps out of the way at either edge so normal
+// page scrolling still works once the table can't scroll further that way.
+function gridWheelScroll(e,el){
+  if(el.scrollWidth<=el.clientWidth)return;
+  const goingRight=e.deltaY>0;
+  const atRightEdge=el.scrollLeft+el.clientWidth>=el.scrollWidth-1;
+  const atLeftEdge=el.scrollLeft<=0;
+  if((goingRight&&atRightEdge)||(!goingRight&&atLeftEdge))return;
+  e.preventDefault();
+  el.scrollLeft+=e.deltaY;
+}
 function draw(){
   document.getElementById('app').innerHTML='';
   if(A.screen==='login'||A.screen==='register'){document.getElementById('app').innerHTML=authHTML();return;}
@@ -1847,7 +1868,10 @@ function editorHTML(){
           <div class="inum">${rn++}</div>
           ${IMG?thumbCell(si,ii,it):''}
           <textarea class="iinput" id="vdInput-${si}-${ii}" oninput="sec(${si}).items[${ii}].vendor=this.value;schedSave();vdSearchInput(${si},${ii},this.value)" onfocus="vdSearchInput(${si},${ii},this.value)" onblur="setTimeout(hideVdDrop,180)" placeholder="Vendor">${esc(it.vendor||'')}</textarea>
-          <textarea class="iinput" id="pmInput-${si}-${ii}" oninput="sec(${si}).items[${ii}].model=this.value;schedSave();pmSearchInput(${si},${ii},this.value)" onfocus="pmSearchInput(${si},${ii},this.value)" onblur="setTimeout(hidePmDrop,180);captureProduct(${si},${ii})" placeholder="Model">${esc(it.model)}</textarea>
+          <div class="pm-field-wrap">
+            <textarea class="iinput pm-field-input" id="pmInput-${si}-${ii}" oninput="sec(${si}).items[${ii}].model=this.value;schedSave();pmSearchInput(${si},${ii},this.value)" onfocus="pmSearchInput(${si},${ii},this.value)" onblur="setTimeout(hidePmDrop,180);captureProduct(${si},${ii})" placeholder="Model">${esc(it.model)}</textarea>
+            <button type="button" class="pm-search-btn" title="${imgOn()?'Search Product Master':'Turn on 🖼 Images (top toolbar) to search the Product Master'}" onmousedown="event.preventDefault();pmSearchIconClick(${si},${ii})">🔍</button>
+          </div>
           <textarea class="iinput" oninput="sec(${si}).items[${ii}].brand=this.value;schedSave()" onblur="captureProduct(${si},${ii})" placeholder="Brand">${esc(it.brand)}</textarea>
           <textarea class="iinput" oninput="sec(${si}).items[${ii}].desc=this.value;schedSave()" placeholder="Description">${esc(it.desc)}</textarea>
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="costusd" value="${it.costUsd||0}" oninput="liveCalc(this)" title="Cost in USD — auto-converts to Cost using Rate to AED" placeholder="0">
@@ -1888,7 +1912,7 @@ function editorHTML(){
           <button class="btn btn-sm btn-red" onclick="delSec(${si})">Remove</button>
         </div>
       </div>
-      <div class="grid-scroll">
+      <div class="grid-scroll" onwheel="gridWheelScroll(event,this)">
         <div class="col-hd ${isInt?'int':'cli'}${IMG?' img':''}">${hds.map(h=>`<div>${h}</div>`).join('')}</div>
         <div class="items-wrap">${rows||`<div style="padding:20px;text-align:center;color:var(--gray-500);font-size:14px">No items yet — <button class="btn btn-sm" onclick="addItem(${si})">+ Add item</button></div>`}</div>
       </div>
@@ -2315,6 +2339,33 @@ function pmSearchInput(si,ii,val){
     PMD.si=si;PMD.ii=ii;PMD.matches=matches;
     showPmDrop(si,ii,q,matches);
   },300);
+}
+// Manual trigger for the 🔍 icon next to the Model field: skips the 300ms
+// typing debounce so a click searches immediately, and — unlike the silent
+// no-op that typing produces — explains itself when Images/catalog assist is
+// off for this quote, since that's the most common reason search "does
+// nothing" and it isn't obvious from the Model field alone.
+function pmSearchIconClick(si,ii){
+  if(!imgOn()){
+    alert('Product search is off for this quote.\n\nTurn on "🖼 Images" in the toolbar above to search the Product Master and enable AI Model Lookup.');
+    return;
+  }
+  const inp=document.getElementById(`pmInput-${si}-${ii}`);
+  if(!inp)return;
+  inp.focus();
+  const q=(inp.value||'').trim();
+  if(q.length<2){
+    alert('Type at least 2 characters in the Model field, then click search.');
+    return;
+  }
+  clearTimeout(PMD.t);
+  PMD.last=q;
+  api('GET','/api/products?limit=8&search='+encodeURIComponent(q)).then(r=>{
+    if(PMD.last!==q)return;
+    const matches=(r.products||[]).filter(p=>p.is_active!==false);
+    PMD.si=si;PMD.ii=ii;PMD.matches=matches;
+    showPmDrop(si,ii,q,matches);
+  }).catch(()=>{});
 }
 function showPmDrop(si,ii,query,matches){
   const inp=document.getElementById(`pmInput-${si}-${ii}`);if(!inp)return;
