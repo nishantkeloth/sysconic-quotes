@@ -2477,17 +2477,28 @@ function showImagePicker(pid,query,si,ii){
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="imgOverlay" onclick="if(event.target===this)closeImgPicker()">
     <div class="modal" style="max-width:640px;max-height:85vh;overflow-y:auto">
       <div class="modal-title">🖼 Product image</div>
-      <div class="modal-sub">${esc(query)}</div>
-      <div id="imgBody"><div style="text-align:center;padding:26px;color:var(--gray-500)">Searching your vendor sites…</div></div>
+      <div style="display:flex;gap:8px;margin:10px 0 14px">
+        <input class="iinput" id="imgQ" type="text" placeholder="Model, brand or keywords" value="${esc(query)}" style="flex:1" onkeydown="if(event.key==='Enter')runImgSearch('${pid}',${si},${ii})">
+        <button class="btn btn-navy" onclick="runImgSearch('${pid}',${si},${ii})">🔍 Search</button>
+      </div>
+      <div id="imgBody"><div style="text-align:center;padding:26px;color:var(--gray-500)">Type a search term above, or search runs automatically if a model was entered.</div></div>
       <div class="modal-actions" style="justify-content:space-between">
         <label class="btn" style="cursor:pointer">📤 Upload image<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none" onchange="uploadProdImage(event,'${pid}',${si},${ii})"></label>
         <button class="btn" onclick="closeImgPicker()">Cancel</button>
       </div>
     </div></div>`);
-  api('GET','/api/products/image-search?q='+encodeURIComponent(query)).then(r=>{
+  if((query||'').trim())runImgSearch(pid,si,ii);
+}
+
+function runImgSearch(pid,si,ii){
+  const q=(document.getElementById('imgQ')?.value||'').trim();
+  if(!q)return;
+  const el=document.getElementById('imgBody');
+  if(el)el.innerHTML=`<div style="text-align:center;padding:26px;color:var(--gray-500)">Searching your vendor sites…</div>`;
+  api('GET','/api/products/image-search?q='+encodeURIComponent(q)).then(r=>{
     const el=document.getElementById('imgBody');if(!el)return;
     if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div><div style="font-size:13px;color:var(--gray-500);margin-top:8px">You can still upload an image manually below.</div>`;return;}
-    if(!(r.images||[]).length){el.innerHTML=`<div style="color:var(--gray-500);padding:14px">No images found on your vendor sites for this model — upload one manually below.</div>`;return;}
+    if(!(r.images||[]).length){el.innerHTML=`<div style="color:var(--gray-500);padding:14px">No images found for this search — try different keywords or upload one manually below.</div>`;return;}
     el.innerHTML=`<div class="img-grid">${r.images.map(im=>{
       const u=encodeURIComponent(im.url).replace(/'/g,'%27');
       const src=(im.source||'').replace(/^https?:\/\/(www\.)?/,'').split('/')[0];
@@ -2495,8 +2506,6 @@ function showImagePicker(pid,query,si,ii){
     }).join('')}</div><div style="font-size:12px;color:var(--gray-500)">Click the correct image — it will be saved to your catalog.</div>`;
   });
 }
-function closeImgPicker(){const el=document.getElementById('imgOverlay');if(el)el.remove();}
-
 async function pickProdImage(pid,encUrl,si,ii){
   const el=document.getElementById('imgBody');if(el)el.innerHTML='<div style="text-align:center;padding:26px;color:var(--gray-500)">Saving image…</div>';
   const r=await api('POST','/api/products/'+pid+'/image',{url:decodeURIComponent(encUrl)});
