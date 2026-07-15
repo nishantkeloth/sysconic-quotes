@@ -825,6 +825,21 @@ class _ZohoSync:
             })
         return out
 
+    def fetch_project(self, creds, zoho_project_id):
+        """Fetch a single project by Zoho ID -- used for targeted test syncs
+        where the caller names specific project IDs that may not have been
+        pulled in by the full fetch_all_projects list yet."""
+        data = self._get(creds, f'/projects/{zoho_project_id}', {})
+        r = data.get('project') or {}
+        if not r.get('project_id'):
+            return None
+        return {
+            'zoho_project_id': str(r['project_id']),
+            'project_name': (r.get('project_name') or 'Untitled Zoho Project')[:500],
+            'customer_name': (r.get('customer_name') or '')[:500],
+            'status': r.get('status'),
+        }
+
 ZOHO = _ZohoSync()
 
 def _get_zoho_creds(company_id):
@@ -977,6 +992,36 @@ def _import_zoho_projects(company_id):
             errors.append(f"{zp['zoho_project_id']}: {e}")
     return {'imported': imported, 'total_in_zoho': len(zoho_projects), 'errors': errors}
 
+# ── Targeted import for a caller-specified list of Zoho Project IDs -- used
+# by the "Sync Selected" testing flow so you don't have to pull every
+# project in the org just to check one or two while testing.
+def _import_specific_zoho_projects(company_id, zoho_ids):
+    creds = _get_zoho_creds(company_id)
+    if not creds or not ZOHO.is_configured(creds):
+        return {'imported': 0, 'total_in_zoho': len(zoho_ids), 'errors': ['Zoho Books is not connected for this company']}
+
+    existing = sb.table('projects').select('zoho_project_id').eq('company_id', company_id)\
+        .in_('zoho_project_id', zoho_ids).execute().data or []
+    known_ids = {r['zoho_project_id'] for r in existing}
+
+    imported, errors = 0, []
+    for zid in zoho_ids:
+        if zid in known_ids:
+            continue
+        try:
+            zp = ZOHO.fetch_project(creds, zid)
+            if not zp:
+                errors.append(f'{zid}: not found in Zoho')
+                continue
+            sb.table('projects').insert({
+                'company_id': company_id, 'name': zp['project_name'], 'customer': zp['customer_name'],
+                'status': 'active', 'zoho_project_id': zp['zoho_project_id'], 'source': 'zoho_import',
+            }).execute()
+            imported += 1
+        except Exception as e:
+            errors.append(f'{zid}: {e}')
+    return {'imported': imported, 'total_in_zoho': len(zoho_ids), 'errors': errors}
+
 # ── Manual "Sync Now" — a single project, or the whole portfolio.
 # Portfolio-wide runs (no project_id) import any new Zoho projects first
 # (skippable via skip_import, so a polling loop doesn't re-hit that endpoint
@@ -992,6 +1037,7 @@ def pp_run_sync():
     d = request.json or {}
     company_id = claims['company_id']
     pid = d.get('project_id')
+    zoho_ids_filter = [str(z).strip() for z in (d.get('zoho_project_ids') or []) if str(z).strip()]
 
     import_result = None
     is_portfolio_wide = not pid
@@ -1002,6 +1048,12 @@ def pp_run_sync():
         allowed = can_manage(claims) or claims['user_id'] in (project.get('project_manager_id'), project.get('salesperson_id'))
         if not allowed: return jsonify({'error': 'Forbidden'}), 403
         projects = [project]
+    elif zoho_ids_filter:
+        # Targeted test sync -- only the named Zoho Project IDs, so testing
+        # doesn't have to pull the whole org's project list every time.
+        if not can_manage(claims): return jsonify({'error': 'Admin only — ask a company admin to sync.'}), 403
+        import_result = _import_specific_zoho_projects(company_id, zoho_ids_filter)
+        projects = sb.table('projects').select('*').eq('company_id', company_id).in_('zoho_project_id', zoho_ids_filter).execute().data or []
     else:
         if not can_manage(claims): return jsonify({'error': 'Admin only — ask a company admin to sync the whole portfolio.'}), 403
         if not d.get('skip_import'):
