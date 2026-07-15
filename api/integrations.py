@@ -557,13 +557,24 @@ def zoho_create_project():
     if not match.data or not match.data[0].get('external_contact_id'):
         return jsonify({'error': f'Customer "{customer_name}" not found in the synced Zoho customer list. Sync customers or check the exact name.'}), 400
     zoho_proj = adapter.create_project(creds, proj['name'], match.data[0]['external_contact_id'])
-    sb.table('projects').update({'zoho_project_id': zoho_proj['project_id']}).eq('id', pid).eq('company_id', claims['company_id']).execute()
+    # zoho_project_id is Zoho's internal id (required for every subsequent
+    # Zoho API call -- POs/bills/expenses/invoices are all fetched by it).
+    # zoho_project_no is the human-readable number staff actually use,
+    # stored in Zoho as the cf_project_no custom field. It may not be set
+    # yet at creation time (it's often filled in inside Zoho afterward) --
+    # that's fine, a later sync/import picks it up once it exists.
+    zoho_project_no = zoho_proj.get('cf_project_no') or None
+    sb.table('projects').update({
+        'zoho_project_id': zoho_proj['project_id'], 'zoho_project_no': zoho_project_no,
+    }).eq('id', pid).eq('company_id', claims['company_id']).execute()
     # Mirror the link onto the originating quote too (if this project came
-    # from an awarded quote) so the Zoho project ID is visible right on the
-    # quote itself, not only via the linked project.
+    # from an awarded quote) so the Zoho project number is visible right on
+    # the quote itself, not only via the linked project.
     if proj.get('quotation_id'):
-        sb.table('quotes').update({'zoho_project_id': zoho_proj['project_id']}).eq('id', proj['quotation_id']).eq('company_id', claims['company_id']).execute()
-    return jsonify({'ok': True, 'zoho_project_id': zoho_proj['project_id']})
+        sb.table('quotes').update({
+            'zoho_project_id': zoho_proj['project_id'], 'zoho_project_no': zoho_project_no,
+        }).eq('id', proj['quotation_id']).eq('company_id', claims['company_id']).execute()
+    return jsonify({'ok': True, 'zoho_project_id': zoho_proj['project_id'], 'zoho_project_no': zoho_project_no})
 
 # Note: a live "/api/integrations/search-customers" route used to live here,
 # searching the connected provider (e.g. Zoho) directly on every keystroke.

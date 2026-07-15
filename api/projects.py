@@ -351,7 +351,7 @@ PP_LIST_FIELDS = ('id,name,customer,status,project_manager_id,salesperson_id,pro
                    'revenue_forecast,original_gp_pct,forecast_gp_pct,margin_erosion_pct,actual_cost,'
                    'po_based_actual_cost,non_po_based_actual_cost,'
                    'committed_cost,estimate_at_completion,invoiced_value,collected_value,net_cash_position,'
-                   'health_score,health_status,completion_pct,zoho_project_id,quote_ref,created_at')
+                   'health_score,health_status,completion_pct,zoho_project_id,zoho_project_no,quote_ref,created_at')
 
 @app.route('/api/project-performance', methods=['GET'])
 def pp_portfolio():
@@ -819,6 +819,7 @@ class _ZohoSync:
             if not pid: continue
             out.append({
                 'zoho_project_id': str(pid),
+                'zoho_project_no': (str(r.get('cf_project_no')) if r.get('cf_project_no') else None),
                 'project_name': (r.get('project_name') or 'Untitled Zoho Project')[:500],
                 'customer_name': (r.get('customer_name') or '')[:500],
                 'status': r.get('status'),
@@ -835,6 +836,7 @@ class _ZohoSync:
             return None
         return {
             'zoho_project_id': str(r['project_id']),
+            'zoho_project_no': (str(r.get('cf_project_no')) if r.get('cf_project_no') else None),
             'project_name': (r.get('project_name') or 'Untitled Zoho Project')[:500],
             'customer_name': (r.get('customer_name') or '')[:500],
             'status': r.get('status'),
@@ -960,6 +962,20 @@ def _sync_project_actuals(company_id, project):
 # they get no commercial baseline (original_selling_price/cost/gp stay 0) --
 # they're actuals-tracked only until/unless a baseline is added by hand.
 # Called from both the manual portfolio-wide "Sync Now" and the daily cron.
+def _upsert_zoho_project(company_id, zp):
+    """Create the local `projects` row for a Zoho project not seen before.
+    Shared by the full portfolio import and the targeted Sync Selected
+    lookup so both stay in sync on which fields get carried over."""
+    sb.table('projects').insert({
+        'company_id': company_id,
+        'name': zp['project_name'],
+        'customer': zp['customer_name'],
+        'status': 'active',
+        'zoho_project_id': zp['zoho_project_id'],
+        'zoho_project_no': zp.get('zoho_project_no'),
+        'source': 'zoho_import',
+    }).execute()
+
 def _import_zoho_projects(company_id):
     creds = _get_zoho_creds(company_id)
     if not creds or not ZOHO.is_configured(creds):
@@ -979,14 +995,7 @@ def _import_zoho_projects(company_id):
         if zp['zoho_project_id'] in known_ids:
             continue
         try:
-            sb.table('projects').insert({
-                'company_id': company_id,
-                'name': zp['project_name'],
-                'customer': zp['customer_name'],
-                'status': 'active',
-                'zoho_project_id': zp['zoho_project_id'],
-                'source': 'zoho_import',
-            }).execute()
+            _upsert_zoho_project(company_id, zp)
             imported += 1
         except Exception as e:
             errors.append(f"{zp['zoho_project_id']}: {e}")
@@ -995,32 +1004,57 @@ def _import_zoho_projects(company_id):
 # ── Targeted import for a caller-specified list of Zoho Project IDs -- used
 # by the "Sync Selected" testing flow so you don't have to pull every
 # project in the org just to check one or two while testing.
-def _import_specific_zoho_projects(company_id, zoho_ids):
+def _import_specific_zoho_projects(company_id, values):
+    """Resolve a caller-given list that may be internal Zoho project IDs
+    OR human-readable Project Nos (cf_project_no) -- whichever the user
+    pasted into the Sync Selected box -- and import any that aren't already
+    a local project. Tries the cheap per-ID lookup first (works when the
+    value is an internal ID); anything left over is resolved by scanning
+    the full Zoho project list once and matching on Project No."""
     creds = _get_zoho_creds(company_id)
     if not creds or not ZOHO.is_configured(creds):
-        return {'imported': 0, 'total_in_zoho': len(zoho_ids), 'errors': ['Zoho Books is not connected for this company']}
+        return {'imported': 0, 'total_in_zoho': len(values), 'errors': ['Zoho Books is not connected for this company']}
 
-    existing = sb.table('projects').select('zoho_project_id').eq('company_id', company_id)\
-        .in_('zoho_project_id', zoho_ids).execute().data or []
-    known_ids = {r['zoho_project_id'] for r in existing}
+    existing = sb.table('projects').select('zoho_project_id,zoho_project_no').eq('company_id', company_id).execute().data or []
+    known = {r['zoho_project_id'] for r in existing if r.get('zoho_project_id')} \
+        | {r['zoho_project_no'] for r in existing if r.get('zoho_project_no')}
 
+    to_resolve = [v for v in values if v not in known]
     imported, errors = 0, []
-    for zid in zoho_ids:
-        if zid in known_ids:
-            continue
+    still_unresolved = []
+    for v in to_resolve:
         try:
-            zp = ZOHO.fetch_project(creds, zid)
-            if not zp:
-                errors.append(f'{zid}: not found in Zoho')
-                continue
-            sb.table('projects').insert({
-                'company_id': company_id, 'name': zp['project_name'], 'customer': zp['customer_name'],
-                'status': 'active', 'zoho_project_id': zp['zoho_project_id'], 'source': 'zoho_import',
-            }).execute()
-            imported += 1
+            zp = ZOHO.fetch_project(creds, v)
+        except Exception:
+            zp = None
+        if zp:
+            try:
+                _upsert_zoho_project(company_id, zp)
+                imported += 1
+            except Exception as e:
+                errors.append(f'{v}: {e}')
+        else:
+            still_unresolved.append(v)
+
+    if still_unresolved:
+        try:
+            all_zp = ZOHO.fetch_all_projects(creds)
         except Exception as e:
-            errors.append(f'{zid}: {e}')
-    return {'imported': imported, 'total_in_zoho': len(zoho_ids), 'errors': errors}
+            all_zp = []
+            errors.append(f'Project No lookup failed: {e}')
+        by_no = {zp['zoho_project_no']: zp for zp in all_zp if zp.get('zoho_project_no')}
+        for v in still_unresolved:
+            zp = by_no.get(v)
+            if not zp:
+                errors.append(f'{v}: not found in Zoho (tried as Project ID and Project No)')
+                continue
+            try:
+                _upsert_zoho_project(company_id, zp)
+                imported += 1
+            except Exception as e:
+                errors.append(f'{v}: {e}')
+
+    return {'imported': imported, 'total_in_zoho': len(values), 'errors': errors}
 
 # ── Manual "Sync Now" — a single project, or the whole portfolio.
 # Portfolio-wide runs (no project_id) import any new Zoho projects first
@@ -1053,7 +1087,10 @@ def pp_run_sync():
         # doesn't have to pull the whole org's project list every time.
         if not can_manage(claims): return jsonify({'error': 'Admin only — ask a company admin to sync.'}), 403
         import_result = _import_specific_zoho_projects(company_id, zoho_ids_filter)
-        projects = sb.table('projects').select('*').eq('company_id', company_id).in_('zoho_project_id', zoho_ids_filter).execute().data or []
+        # Match on either field -- the pasted values might be internal Zoho
+        # IDs or human-readable Project Nos.
+        ors = ','.join([f'zoho_project_id.in.({",".join(zoho_ids_filter)})', f'zoho_project_no.in.({",".join(zoho_ids_filter)})'])
+        projects = sb.table('projects').select('*').eq('company_id', company_id).or_(ors).execute().data or []
     else:
         if not can_manage(claims): return jsonify({'error': 'Admin only — ask a company admin to sync the whole portfolio.'}), 403
         if not d.get('skip_import'):

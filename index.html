@@ -450,6 +450,11 @@ const A={screen:'login',token:localStorage.getItem('sq_token')||null,user:null,c
 function toggleSidebar(){A.sbOpen=!A.sbOpen;draw();}
 function parseJwt(t){try{return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));}catch(e){return {};}}
 function hasFeature(f){return !!(A.token&&(parseJwt(A.token).features||{})[f]);}
+// Zoho's internal project_id isn't the human-readable number staff use --
+// that's the cf_project_no custom field, stored separately as
+// zoho_project_no. Display should always prefer it, falling back to the
+// internal id only if the custom field hasn't been set in Zoho yet.
+function zohoNo(o){return (o&&(o.zoho_project_no||o.zoho_project_id))||'';}
 function projectsHTML(){
   const list=A.projects||null;
   const rows=(list||[]).map(p=>`<tr style="border-bottom:1px solid var(--gray-100)">
@@ -588,7 +593,7 @@ function portfolioHTML(){
   const kpiHtml=kpiCards.map(([label,val,cls])=>`<div class="mcard"><div class="mcard-label">${label}</div><div class="mcard-val ${cls}">${val}</div></div>`).join('');
 
   const rowsHtml=rows.map(p=>`<tr style="border-bottom:1px solid var(--gray-100);cursor:pointer" onclick="openProjectPerformance('${p.id}')">
-    <td style="padding:8px"><div style="font-weight:600">${esc(p.name)}</div>${p.zoho_project_id?`<div style="font-size:11px;color:var(--gray-500)">Zoho #${esc(p.zoho_project_id)}</div>`:''}</td>
+    <td style="padding:8px"><div style="font-weight:600">${esc(p.name)}</div>${zohoNo(p)?`<div style="font-size:11px;color:var(--gray-500)">Zoho #${esc(zohoNo(p))}</div>`:''}</td>
     <td style="padding:8px">${esc(p.customer||'')}</td>
     <td style="padding:8px">AED ${fmt(p.revenue_forecast||0)}</td>
     <td style="padding:8px">${fmtPct100(p.original_gp_pct||0)}</td>
@@ -696,7 +701,7 @@ function projectPerformanceDetailHTML(){
       <div>
         <button class="btn" style="margin-bottom:8px" onclick="A.page='projectPerformance';A.ppDetail=null;draw();loadPortfolioPage()">← Back to Portfolio</button>
         <h2 style="margin:4px 0 4px">${esc(p.name)} ${healthBadge(p.health_status)}</h2>
-        <div style="color:var(--gray-500);font-size:13.5px">${esc(p.customer||'')}${p.quote_ref?' · Quote '+esc(p.quote_ref):''}${p.zoho_project_id?' · Zoho Project '+esc(p.zoho_project_id):' · Not linked to Zoho yet'}</div>
+        <div style="color:var(--gray-500);font-size:13.5px">${esc(p.customer||'')}${p.quote_ref?' · Quote '+esc(p.quote_ref):''}${zohoNo(p)?' · Zoho Project '+esc(zohoNo(p)):(p.zoho_project_id?' · Zoho-linked (no Project No set yet)':' · Not linked to Zoho yet')}</div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn" onclick="ppQuickCompletion()">Update Completion %</button>
@@ -1048,7 +1053,9 @@ async function ppCreateProjectFromQuote(wonOptionIndex){
     if(zr.error)console.warn('Zoho project auto-link failed:',zr.error);
     else if(zr.zoho_project_id){
       A.activeQuote.zoho_project_id=zr.zoho_project_id;
-      const qi=A.quotes.findIndex(qq=>qq.id===A.activeQuote.id);if(qi>=0)A.quotes[qi].zoho_project_id=zr.zoho_project_id;
+      A.activeQuote.zoho_project_no=zr.zoho_project_no||null;
+      const qi=A.quotes.findIndex(qq=>qq.id===A.activeQuote.id);
+      if(qi>=0){A.quotes[qi].zoho_project_id=zr.zoho_project_id;A.quotes[qi].zoho_project_no=zr.zoho_project_no||null;}
     }
   }
   draw();
@@ -2298,7 +2305,7 @@ function editorHTML(){
       <div class="fld2"><label>Date</label><input type="date" value="${o.date||''}" oninput="opts()[A.activeOpt].date=this.value;schedSave()"></div>
       <div class="fld2"><label>Prepared by</label><input value="${esc(o.by||'')}" oninput="opts()[A.activeOpt].by=this.value;schedSave()"></div>
       <div class="fld2"><label>Title / Role</label><input value="${esc(o.title||'')}" oninput="opts()[A.activeOpt].title=this.value;schedSave()"></div>
-      <div class="fld2">${q.zoho_project_id?`<label>Zoho Project ID</label><input value="${esc(q.zoho_project_id)}" readonly title="Linked Zoho Books project">`:''}</div>
+      <div class="fld2">${zohoNo(q)?`<label>Zoho Project No</label><input value="${esc(zohoNo(q))}" readonly title="Linked Zoho Books project">`:''}</div>
     </div>
   </div>`;
 
@@ -2394,7 +2401,7 @@ function editorHTML(){
     </div>
     <div class="gs-sep"></div>
     <div class="gs-item"><div class="gs-label">Grand Total</div><div class="gs-val big grand-val" id="gsGrand">${fmtC(T.grand)}</div></div>
-    ${q.zoho_project_id?`<div class="gs-sep"></div><div class="gs-item"><div class="gs-label">Zoho Project</div><div class="gs-val" style="font-size:13px" title="Linked Zoho Books project ID">${esc(q.zoho_project_id)}</div></div>`:''}
+    ${zohoNo(q)?`<div class="gs-sep"></div><div class="gs-item"><div class="gs-label">Zoho Project No</div><div class="gs-val" style="font-size:13px" title="Linked Zoho Books project number">${esc(zohoNo(q))}</div></div>`:''}
   </div>`;
   return html;
 }
