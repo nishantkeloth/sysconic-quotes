@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -444,6 +444,64 @@ const A={screen:'login',token:localStorage.getItem('sq_token')||null,user:null,c
   page:'dashboard',quotes:[],activeQuote:null,view:'internal',cur:'AED',rate:1,
   activeOpt:0,saveStatus:'',searchQ:'',filterStatus:'all',sbOpen:false};
 function toggleSidebar(){A.sbOpen=!A.sbOpen;draw();}
+function parseJwt(t){try{return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));}catch(e){return {};}}
+function hasFeature(f){return !!(A.token&&(parseJwt(A.token).features||{})[f]);}
+function projectsHTML(){
+  const list=A.projects||null;
+  const rows=(list||[]).map(p=>`<tr style="border-bottom:1px solid var(--gray-100)">
+    <td style="padding:8px;font-weight:600">${esc(p.name)}</td>
+    <td style="padding:8px">${esc(p.customer||'')}</td>
+    <td style="padding:8px">${esc(p.site_location||'')}</td>
+    <td style="padding:8px"><select class="iinput" onchange="updateProjectStatus('${p.id}',this.value)">
+      ${['active','on_hold','completed','cancelled'].map(s=>`<option value="${s}" ${p.status===s?'selected':''}>${s.replace('_',' ')}</option>`).join('')}
+    </select></td>
+    <td style="padding:8px">${esc(p.po_number||'')}</td>
+    <td style="padding:8px;text-align:right"><button class="idel" onclick="deleteProject('${p.id}')" title="Delete project">✕</button></td>
+  </tr>`).join('');
+  return `<div style="padding:24px">
+    <h2 style="margin:0 0 16px">Projects</h2>
+    <div style="background:#fff;border-radius:10px;padding:16px;margin-bottom:18px;box-shadow:0 1px 3px rgba(0,0,0,.06)">
+      <div style="display:grid;grid-template-columns:2fr 2fr 2fr 1fr auto;gap:10px">
+        <input class="iinput" id="prjName" placeholder="Project name *">
+        <input class="iinput" id="prjCustomer" placeholder="Customer">
+        <input class="iinput" id="prjSite" placeholder="Site / location">
+        <input class="iinput" id="prjPo" placeholder="PO number">
+        <button class="btn btn-navy" onclick="saveNewProject()">+ Add project</button>
+      </div>
+    </div>
+    <div style="background:#fff;border-radius:10px;overflow:auto;box-shadow:0 1px 3px rgba(0,0,0,.06)">
+      ${list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
+      :!list.length?`<div style="padding:22px;color:var(--gray-500)">No projects yet — add your first one above.</div>`
+      :`<table style="width:100%;border-collapse:collapse;font-size:14px">
+        <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200)">
+          <th style="padding:8px">Name</th><th style="padding:8px">Customer</th><th style="padding:8px">Site</th><th style="padding:8px">Status</th><th style="padding:8px">PO</th><th></th>
+        </tr></thead><tbody>${rows}</tbody></table>`}
+    </div>
+  </div>`;
+}
+async function loadProjectsPage(){
+  const r=await api('GET','/api/projects');
+  if(r.error){A.projects=[];alert(r.error);}else{A.projects=r.projects||[];}
+  draw();
+}
+async function saveNewProject(){
+  const name=(document.getElementById('prjName')?.value||'').trim();
+  if(!name){alert('Project name is required');return;}
+  const body={name,customer:(document.getElementById('prjCustomer')?.value||'').trim(),site_location:(document.getElementById('prjSite')?.value||'').trim(),po_number:(document.getElementById('prjPo')?.value||'').trim()};
+  const r=await api('POST','/api/projects',body);
+  if(r.error){alert(r.error);return;}
+  A.projects=null;draw();loadProjectsPage();
+}
+async function updateProjectStatus(id,status){
+  const r=await api('PUT','/api/projects/'+id,{status});
+  if(r.error)alert(r.error);
+}
+async function deleteProject(id){
+  if(!confirm('Delete this project? Linked quotes are kept but unlinked.'))return;
+  const r=await api('DELETE','/api/projects/'+id);
+  if(r.error){alert(r.error);return;}
+  A.projects=null;draw();loadProjectsPage();
+}
 function closeSidebar(){if(A.sbOpen){A.sbOpen=false;draw();}}
 let INV={token:null,loading:true,error:'',email:'',role:'',company_name:'',busy:false};
 let RST={token:null,busy:false,done:false,error:''};
@@ -1439,6 +1497,7 @@ function draw(){
   if(A.page==='print'){ensurePrintCompany();}
   if(A.page==='products')setTimeout(loadProducts,50);
   if(A.page==='customers')setTimeout(loadCustomersPage,50);
+  if(A.page==='projects'&&A.projects==null)setTimeout(loadProjectsPage,50);
   if(A.page==='vendorMaster')setTimeout(loadVendorsMaster,50);
   if(A.page==='reviewQueue')setTimeout(loadReviewQueue,50);
   if(A.page==='log')setTimeout(loadLog,50);
@@ -1603,6 +1662,7 @@ function appHTML(){
       <div class="sb-item ${A.page==='products'?'active':''}" onclick="${nav('products')}"><span class="sb-icon">📦</span>Products</div>
       <div class="sb-item ${A.page==='customers'?'active':''}" onclick="${nav('customers')}"><span class="sb-icon">👤</span>Customers</div>
       <div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="${nav('vendorMaster')}"><span class="sb-icon">🏭</span>Vendors</div>
+      ${hasFeature('projects')?`<div class="sb-item ${A.page==='projects'?'active':''}" onclick="${nav('projects')}"><span class="sb-icon">📁</span>Projects</div>`:''}
       <div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>
       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}
       ${A.user?.role==='admin'?`<div class="sb-sec">Settings</div>
@@ -1636,6 +1696,7 @@ function appHTML(){
   else if(A.page==='log')pageContent=logHTML();
   else if(A.page==='products')pageContent=productsHTML();
   else if(A.page==='customers')pageContent=customersHTML();
+  else if(A.page==='projects')pageContent=projectsHTML();
   else if(A.page==='vendorMaster')pageContent=vendorsMasterHTML();
   else if(A.page==='team')pageContent=teamHTML();
   else if(A.page==='integrations')pageContent=integrationsHTML();
