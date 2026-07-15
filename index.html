@@ -593,8 +593,9 @@ function portfolioHTML(){
   const kpiHtml=kpiCards.map(([label,val,cls])=>`<div class="mcard"><div class="mcard-label">${label}</div><div class="mcard-val ${cls}">${val}</div></div>`).join('');
 
   const rowsHtml=rows.map(p=>`<tr style="border-bottom:1px solid var(--gray-100);cursor:pointer" onclick="openProjectPerformance('${p.id}')">
-    <td style="padding:8px"><div style="font-weight:600">${esc(p.name)}</div>${zohoNo(p)?`<div style="font-size:11px;color:var(--gray-500)">Zoho #${esc(zohoNo(p))}</div>`:''}</td>
+    <td style="padding:8px;font-weight:600">${esc(p.name)}</td>
     <td style="padding:8px">${esc(p.customer||'')}</td>
+    <td style="padding:8px">${zohoNo(p)?esc(zohoNo(p)):'—'}</td>
     <td style="padding:8px">AED ${fmt(p.revenue_forecast||0)}</td>
     <td style="padding:8px">${fmtPct100(p.original_gp_pct||0)}</td>
     <td style="padding:8px">${fmtPct100(p.forecast_gp_pct||0)}</td>
@@ -629,7 +630,7 @@ function portfolioHTML(){
       :!rows.length?`<div style="padding:22px;color:var(--gray-500)">No projects yet — a project appears here automatically once a quote is marked Awarded.</div>`
       :`<table style="width:100%;border-collapse:collapse;font-size:13.5px">
         <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200);background:var(--navy);color:#fff">
-          <th style="padding:8px">Project</th><th style="padding:8px">Customer</th><th style="padding:8px">Value</th>
+          <th style="padding:8px">Project</th><th style="padding:8px">Customer</th><th style="padding:8px">Project No</th><th style="padding:8px">Value</th>
           <th style="padding:8px">Original GP%</th><th style="padding:8px">Forecast GP%</th><th style="padding:8px">Erosion</th>
           <th style="padding:8px">PO Expense</th><th style="padding:8px">Non-PO Expense</th>
           <th style="padding:8px">EAC</th><th style="padding:8px">Invoice%</th><th style="padding:8px">Cash</th>
