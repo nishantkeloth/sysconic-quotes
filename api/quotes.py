@@ -191,6 +191,129 @@ def create_quote():
     _log_activity(quote['id'], claims['user_id'], 'created', f"Quote \"{quote.get('title') or 'Untitled'}\" created")
     return jsonify({'quote': quote}), 201
 
+# ── Project Performance: on-award hook ──────────────────────────────────────
+# Duplicated calc logic (see calc_item/calc_opt in api/pdf.py, api/proposal.py
+# and index.html) — Vercel Python functions can't share sibling modules, so
+# every file that needs quote-line math carries its own copy. Keep in sync by
+# hand if the pricing formula ever changes.
+def _has_feature(claims, feature):
+    return bool((claims.get('features') or {}).get(feature))
+
+def _numf(v, d=0.0):
+    try:
+        return float(v) if v not in (None, '') else d
+    except (TypeError, ValueError):
+        return d
+
+def _calc_item_pp(it, pricing_type):
+    cad = _numf(it.get('cost')) * (1 - _numf(it.get('disc')) / 100.0) * (1 - _numf(it.get('discAdd')) / 100.0)
+    pct = _numf(it.get('margin'), 0.2)
+    if pricing_type == 'margin':
+        pct = min(0.95, max(0, pct))
+        up = round(cad / (1 - pct)) if pct < 1 else 0
+    else:
+        up = round(cad * (1 + pct))
+    qty = _numf(it.get('qty'), 1)
+    return {'unit_cost': cad, 'unit_price': up, 'total_price': up * qty, 'total_cost': cad * qty}
+
+def _freeze_commercial_baseline(company_id, user_id, project_id, quote, option):
+    """Called once, the instant a quote transitions to 'awarded'. Freezes the
+    winning option's commercial position permanently -- per the Project
+    Performance design, this snapshot must never be edited again even if
+    product master costs are updated later. Safe to call more than once
+    defensively (e.g. retry after a partial failure) -- it always inserts a
+    fresh baseline rather than updating one in place, since a baseline is
+    meant to be immutable history, not a live record."""
+    pricing_type = quote.get('pricing_type') or 'markup'
+    total_sell, total_cost = 0.0, 0.0
+    section_payloads = []
+    for s in (option.get('sections') or []):
+        s_sell, s_cost, line_payloads = 0.0, 0.0, []
+        for it in (s.get('items') or []):
+            c = _calc_item_pp(it, pricing_type)
+            s_sell += c['total_price']; s_cost += c['total_cost']
+            line_payloads.append({
+                'brand': (it.get('brand') or '')[:200] or None,
+                'model': (it.get('model') or '')[:200] or None,
+                'description': (it.get('desc') or '')[:1000] or None,
+                'quantity': _numf(it.get('qty'), 1),
+                'estimated_unit_cost': c['unit_cost'],
+                'estimated_total_cost': c['total_cost'],
+                'estimated_unit_price': c['unit_price'],
+                'estimated_total_price': c['total_price'],
+            })
+        section_payloads.append({
+            'section_name': (s.get('name') or s.get('title') or 'Section')[:200],
+            'section_revenue': s_sell, 'section_estimated_cost': s_cost,
+            'lines': line_payloads,
+        })
+        total_sell += s_sell; total_cost += s_cost
+
+    gp = total_sell - total_cost
+    gp_pct = (gp / total_sell * 100.0) if total_sell else 0.0
+
+    baseline = sb.table('project_commercial_baselines').insert({
+        'company_id': company_id, 'project_id': project_id, 'quote_id': quote['id'],
+        'quote_ref': quote.get('quote_ref'), 'quote_revision': quote.get('current_version') or 0,
+        'contract_value': total_sell, 'total_estimated_cost': total_cost,
+        'expected_gp': gp, 'expected_gp_pct': gp_pct, 'created_by': user_id,
+    }).execute().data[0]
+
+    for s in section_payloads:
+        srow = sb.table('project_baseline_sections').insert({
+            'company_id': company_id, 'baseline_id': baseline['id'],
+            'section_name': s['section_name'], 'section_revenue': s['section_revenue'],
+            'section_estimated_cost': s['section_estimated_cost'],
+        }).execute().data[0]
+        if s['lines']:
+            rows = [{**l, 'company_id': company_id, 'baseline_id': baseline['id'], 'section_id': srow['id']} for l in s['lines']]
+            sb.table('project_baseline_lines').insert(rows).execute()
+
+    sb.table('projects').update({
+        'original_selling_price': total_sell, 'original_estimated_cost': total_cost,
+        'original_gp': gp, 'original_gp_pct': gp_pct,
+        'revenue_forecast': total_sell,
+    }).eq('id', project_id).eq('company_id', company_id).execute()
+    return baseline
+
+def _activate_project_performance(claims, quote, won_option_index):
+    """Find-or-create the local `projects` row for a newly-awarded quote and
+    freeze its commercial baseline. Deliberately does not call Zoho here --
+    ZohoAdapter lives in api/integrations.py and Vercel's Python builder
+    won't bundle sibling modules across route files, so the actual Zoho
+    project creation is triggered by the frontend immediately after this
+    call succeeds (POST /api/integrations/zoho/create-project, the same
+    endpoint the manual \"+ Zoho\" button already uses). Returns the project
+    row plus whether it still needs that Zoho link."""
+    company_id, user_id = claims['company_id'], claims['user_id']
+    project_id = quote.get('project_id')
+    if project_id:
+        proj = sb.table('projects').select('*').eq('id', project_id).eq('company_id', company_id).execute()
+        project = proj.data[0] if proj.data else None
+    else:
+        project = None
+
+    if not project:
+        row = sb.table('projects').insert({
+            'company_id': company_id, 'created_by': user_id,
+            'name': quote.get('title') or 'Untitled Project',
+            'customer': quote.get('customer') or '',
+            'status': 'active',
+        }).execute()
+        project = row.data[0]
+        sb.table('quotes').update({'project_id': project['id']}).eq('id', quote['id']).eq('company_id', company_id).execute()
+
+    sb.table('projects').update({
+        'quotation_id': quote['id'], 'quote_ref': quote.get('quote_ref'),
+        'won_option_index': won_option_index,
+    }).eq('id', project['id']).eq('company_id', company_id).execute()
+
+    options = quote.get('quote_data') or []
+    option = options[won_option_index] if won_option_index < len(options) else (options[0] if options else {})
+    _freeze_commercial_baseline(company_id, user_id, project['id'], quote, option)
+
+    return {'project_id': project['id'], 'needs_zoho_link': not bool(project.get('zoho_project_id'))}
+
 # ── Update quote ───────────────────────────────────────────────────────────────
 # A quote is only editable while its status is 'draft'. Once it's been
 # emailed to the customer (status auto-flips to 'sent') or manually marked
@@ -205,7 +328,7 @@ def update_quote(qid):
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
 
     # Check ownership
-    existing = sb.table('quotes').select('id,created_by,status').eq('id', qid).eq('company_id', claims['company_id']).execute()
+    existing = sb.table('quotes').select('id,created_by,status,quote_data,pricing_type,current_version,project_id,quote_ref,title,customer').eq('id', qid).eq('company_id', claims['company_id']).execute()
     if not existing.data: return jsonify({'error': 'Not found'}), 404
     if not _can_edit_quote(existing.data[0], claims):
         return jsonify({'error': 'Forbidden'}), 403
@@ -222,12 +345,57 @@ def update_quote(qid):
     if old_status != 'draft' and not is_transitioning and touches_content:
         return jsonify({'error': f'This quote is locked because its status is "{STATUS_LABELS_PY.get(old_status, old_status)}". Set the status back to Draft to edit it.'}), 423
 
+    # Won -> project performance activation. Checked *before* writing the
+    # status change so a quote never gets stuck half-awarded: if the quote
+    # carries more than one live pricing option and the caller hasn't said
+    # which one actually won, this returns 409 without touching the row at
+    # all, and the frontend is expected to ask the user, then resubmit this
+    # same PUT with won_option_index set.
+    pp_activation = None
+    if is_transitioning and new_status == 'awarded' and old_status != 'awarded' and _has_feature(claims, 'project_performance'):
+        options = update.get('quote_data') if 'quote_data' in update else existing.data[0].get('quote_data')
+        options = options or []
+        won_idx = d.get('won_option_index')
+        if won_idx is None:
+            won_idx = 0 if len(options) <= 1 else None
+        if won_idx is None:
+            return jsonify({
+                'error': 'This quote has more than one pricing option — pick which one was awarded.',
+                'needs_won_option_index': True,
+                'options': [{'index': i, 'label': o.get('label') or f'Option {i+1}'} for i, o in enumerate(options)],
+            }), 409
+        try:
+            won_idx = int(won_idx)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'won_option_index must be a number'}), 400
+        if won_idx < 0 or (options and won_idx >= len(options)):
+            return jsonify({'error': 'won_option_index is out of range for this quote'}), 400
+        update['won_option_index'] = won_idx
+
     row = sb.table('quotes').update(update).eq('id', qid).execute()
+    updated_quote = row.data[0]
     # Log status changes specifically (not every autosave — that would flood
     # the log with noise since quote_data saves on every edit).
     if 'status' in update and update['status'] != old_status:
         _log_activity(qid, claims['user_id'], 'status_changed', f"{STATUS_LABELS_PY.get(old_status, old_status)} → {STATUS_LABELS_PY.get(update['status'], update['status'])}")
-    return jsonify({'quote': row.data[0]})
+
+    # Best-effort -- a failure here must not undo or block the status change
+    # that already landed. Surfaced back to the frontend as a warning so the
+    # user isn't left thinking baseline creation succeeded when it didn't;
+    # the manual "+ Zoho" / a retry path can pick this back up.
+    if 'won_option_index' in update:
+        try:
+            pp_activation = _activate_project_performance(claims, updated_quote, update['won_option_index'])
+            _log_activity(qid, claims['user_id'], 'project_performance_activated',
+                          f"Commercial baseline frozen, project {pp_activation['project_id']}")
+        except Exception as e:
+            traceback.print_exc()
+            pp_activation = {'error': f'Quote was marked Awarded, but Project Performance activation failed: {str(e)[:250]}'}
+
+    resp = {'quote': updated_quote}
+    if pp_activation is not None:
+        resp['project_performance'] = pp_activation
+    return jsonify(resp)
 
 # ── Delete quote ───────────────────────────────────────────────────────────────
 @app.route('/api/quotes/<qid>', methods=['DELETE'])

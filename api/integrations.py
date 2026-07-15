@@ -115,6 +115,151 @@ class ZohoAdapter:
             raise RuntimeError('Zoho did not return a project id: ' + json.dumps(r)[:200])
         return proj
 
+    # ── Project Performance actuals fetch ───────────────────────────────────
+    # Everything below is scoped to one Zoho Books project at a time (via the
+    # zoho_project_id already stored on the local `projects` row) rather than
+    # pulling the whole organisation and matching after the fact -- matches
+    # what api/pp_sync.py needs per-project, and avoids pagination blowing up
+    # on companies with a large multi-year transaction history.
+    #
+    # Field names below follow Zoho Books API v3's documented shape
+    # (purchaseorder_id / bill_id / invoice_id / expense_id /
+    # customerpayment_id are the standard v3 identifiers). This has not yet
+    # been run against a live Zoho org from this environment -- no Zoho
+    # credentials are available here, and this is production business data
+    # that shouldn't be touched without Nish present. Treat the exact field
+    # mapping as provisional until the first real "Sync Now" run in Phase 1
+    # testing; _get()/_post() already surface the raw Zoho error body if a
+    # field or endpoint doesn't match what's returned, so a bad assumption
+    # here fails loudly rather than silently miscalculating cost.
+    def _fetch_paginated(self, creds, path, params, list_key, max_pages=25):
+        out, page = [], 1
+        while page <= max_pages:  # safety cap: 25 pages x 200 = 5000 records per resource per project
+            p = dict(params or {})
+            p.update({'per_page': 200, 'page': page})
+            data = self._get(creds, path, p)
+            out.extend(data.get(list_key, []) or [])
+            if not (data.get('page_context') or {}).get('has_more_page'):
+                break
+            page += 1
+        return out
+
+    def fetch_purchase_orders(self, creds, zoho_project_id):
+        """Returns (po_dicts, line_dicts) -- line items aren't included on the
+        list endpoint in Zoho Books v3, so each PO is re-fetched individually
+        for its line_items. Committed-cost calculation needs both."""
+        rows = self._fetch_paginated(creds, '/purchaseorders', {'project_id': zoho_project_id}, 'purchaseorders')
+        pos, lines = [], []
+        for r in rows:
+            po_id = r.get('purchaseorder_id')
+            if not po_id: continue
+            pos.append({
+                'zoho_purchase_order_id': po_id,
+                'zoho_project_id': zoho_project_id,
+                'po_number': r.get('purchaseorder_number'),
+                'po_date': r.get('date'),
+                'vendor_name': r.get('vendor_name'),
+                'status': r.get('status'),
+                'total': r.get('total') or 0,
+                'billed_total': r.get('total_invoiced_amount') or r.get('billed_amount') or 0,
+                'raw': r,
+            })
+            try:
+                detail = self._get(creds, f'/purchaseorders/{po_id}', {})
+                for li in (detail.get('purchaseorder') or {}).get('line_items') or []:
+                    lines.append({
+                        'zoho_purchase_order_id': po_id,
+                        'zoho_purchase_order_line_id': li.get('line_item_id'),
+                        'zoho_item_id': li.get('item_id'),
+                        'item_name': li.get('name') or li.get('description'),
+                        'quantity': li.get('quantity') or 0,
+                        'rate': li.get('rate') or 0,
+                        'total': li.get('item_total') or 0,
+                        'raw': li,
+                    })
+            except Exception:
+                pass  # line-item detail fetch is best-effort; the PO header row is still synced
+        return pos, lines
+
+    def fetch_bills(self, creds, zoho_project_id):
+        rows = self._fetch_paginated(creds, '/bills', {'project_id': zoho_project_id}, 'bills')
+        bills, lines = [], []
+        for r in rows:
+            bill_id = r.get('bill_id')
+            if not bill_id: continue
+            bills.append({
+                'zoho_bill_id': bill_id,
+                'zoho_purchase_order_id': r.get('purchaseorder_id') or r.get('purchase_order_id'),
+                'bill_number': r.get('bill_number'),
+                'bill_date': r.get('date'),
+                'vendor_name': r.get('vendor_name'),
+                'status': r.get('status'),
+                'total': r.get('total') or 0,
+                'raw': r,
+            })
+            try:
+                detail = self._get(creds, f'/bills/{bill_id}', {})
+                for li in (detail.get('bill') or {}).get('line_items') or []:
+                    lines.append({
+                        'zoho_bill_id': bill_id,
+                        'zoho_bill_line_id': li.get('line_item_id'),
+                        'zoho_item_id': li.get('item_id'),
+                        'item_name': li.get('name') or li.get('description'),
+                        'quantity': li.get('quantity') or 0,
+                        'rate': li.get('rate') or 0,
+                        'total': li.get('item_total') or 0,
+                        'raw': li,
+                    })
+            except Exception:
+                pass
+        return bills, lines
+
+    def fetch_expenses(self, creds, zoho_project_id):
+        rows = self._fetch_paginated(creds, '/expenses', {'project_id': zoho_project_id}, 'expenses')
+        return [{
+            'zoho_expense_id': r.get('expense_id'),
+            'expense_account': r.get('account_name'),
+            'vendor_name': r.get('vendor_name') or r.get('paid_through_account_name'),
+            'expense_date': r.get('date'),
+            'amount': r.get('total') or r.get('amount') or 0,
+            'description': r.get('description'),
+            'raw': r,
+        } for r in rows if r.get('expense_id')]
+
+    def fetch_invoices(self, creds, zoho_project_id):
+        rows = self._fetch_paginated(creds, '/invoices', {'project_id': zoho_project_id}, 'invoices')
+        return [{
+            'zoho_invoice_id': r.get('invoice_id'),
+            'invoice_number': r.get('invoice_number'),
+            'invoice_date': r.get('date'),
+            'due_date': r.get('due_date'),
+            'status': r.get('status'),
+            'total': r.get('total') or 0,
+            'balance': r.get('balance') or 0,
+            'raw': r,
+        } for r in rows if r.get('invoice_id')]
+
+    def fetch_payments(self, creds, invoice_ids):
+        """Zoho Books payments aren't project-scoped directly -- they're
+        applied to invoices. Called with the invoice IDs already synced for
+        this project (fetch_invoices output) and fetches each invoice's
+        applied-payments list."""
+        out = []
+        for inv_id in (invoice_ids or []):
+            try:
+                data = self._get(creds, f'/invoices/{inv_id}/payments', {})
+            except Exception:
+                continue
+            for p in data.get('payments', []) or []:
+                out.append({
+                    'zoho_payment_id': p.get('payment_id'),
+                    'zoho_invoice_id': inv_id,
+                    'payment_date': p.get('date'),
+                    'amount': p.get('amount_applied') or p.get('amount') or 0,
+                    'raw': p,
+                })
+        return out
+
 # ── Adapter registry ────────────────────────────────────────────────────────────
 # Each entry provides fetch_customers(creds), fetch_vendors(creds), and
 # is_configured(creds)/test_connection(creds). Adding a new provider (e.g.

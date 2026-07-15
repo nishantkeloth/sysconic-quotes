@@ -13,6 +13,8 @@
     { "src": "api/platform.py", "use": "@vercel/python" },
     { "src": "api/proposal.py", "use": "@vercel/python" },
     { "src": "api/projects.py", "use": "@vercel/python" },
+    { "src": "api/project_performance.py", "use": "@vercel/python" },
+    { "src": "api/pp_sync.py", "use": "@vercel/python" },
     { "src": "index.html",    "use": "@vercel/static" }
   ],
   "routes": [
@@ -36,9 +38,14 @@
     { "src": "/api/proposal",      "dest": "api/proposal.py" },
     { "src": "/api/projects/(.*)", "dest": "api/projects.py" },
     { "src": "/api/projects",      "dest": "api/projects.py" },
+    { "src": "/api/project-performance/(.*)", "dest": "api/project_performance.py" },
+    { "src": "/api/project-performance",      "dest": "api/project_performance.py" },
+    { "src": "/api/pp-sync/(.*)", "dest": "api/pp_sync.py" },
+    { "src": "/api/pp-sync",      "dest": "api/pp_sync.py" },
     { "src": "/(.*)",            "dest": "index.html" }
   ],
   "crons": [
-    { "path": "/api/integrations/run-auto-sync", "schedule": "0 3 * * *" }
+    { "path": "/api/integrations/run-auto-sync", "schedule": "0 3 * * *" },
+    { "path": "/api/pp-sync/run-auto-sync", "schedule": "0 4 * * *" }
   ]
 }
