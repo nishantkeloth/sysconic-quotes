@@ -460,7 +460,7 @@ function projectsHTML(){
       ${['active','on_hold','completed','cancelled'].map(s=>`<option value="${s}" ${p.status===s?'selected':''}>${s.replace('_',' ')}</option>`).join('')}
     </select></td>
     <td style="padding:8px">${esc(p.po_number||'')}</td>
-    <td style="padding:8px">${p.zoho_project_id?`<span style="color:#16a34a;font-weight:600" title="Linked to Zoho Books">&#10003; Zoho</span>`:`<button class="btn" style="font-size:12px;padding:4px 10px" onclick="createZohoProject('${p.id}')">+ Zoho</button>`}</td>
+    <td style="padding:8px">${p.zoho_project_id?`<span style="color:#16a34a;font-weight:600" title="Linked to Zoho Books">&#10003; Zoho</span>`:`<span style="color:var(--gray-500)">—</span>`}</td>
     <td style="padding:8px;text-align:right"><button class="idel" onclick="deleteProject('${p.id}')" title="Delete project">✕</button></td>
   </tr>`).join('');
   return `<div style="padding:24px">
@@ -479,7 +479,7 @@ function projectsHTML(){
       :!list.length?`<div style="padding:22px;color:var(--gray-500)">No projects yet — add your first one above.</div>`
       :`<table style="width:100%;border-collapse:collapse;font-size:14px">
         <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200)">
-          <th style="padding:8px">Name</th><th style="padding:8px">Customer</th><th style="padding:8px">Site</th><th style="padding:8px">Status</th><th style="padding:8px">PO</th><th style="padding:8px">Zoho</th><th></th>
+          <th style="padding:8px">Name</th><th style="padding:8px">Customer</th><th style="padding:8px">Site</th><th style="padding:8px">Status</th><th style="padding:8px">PO</th><th style="padding:8px">Zoho</th><th style="padding:8px"></th>
         </tr></thead><tbody>${rows}</tbody></table>`}
     </div>
   </div>`;
@@ -979,50 +979,41 @@ async function saveQuote(){
   if(!A.activeQuote||A.reviewMode)return false; // display-only while reviewing — never save over a reviewer's session
   setStatus('saving');
   const T=calcOpt(opt());
-  const body={
+  const r=await api('PUT','/api/quotes/'+A.activeQuote.id,{
     title:A.activeQuote.title,customer:A.activeQuote.customer,status:A.activeQuote.status,
     currency:A.cur,exchange_rate:A.rate,pricing_type:A.activeQuote.pricing_type||'markup',
     quote_data:A.activeQuote.quote_data,terms_data:A.activeQuote.terms_data,vendor_data:A.activeQuote.vendor_data,
     total_sell:T.ts,total_gp:T.tg,margin:T.margin,
-  };
-  // Set only after the user picks which option won (see the 409 branch
-  // below) — Project Performance's on-award hook needs this whenever a
-  // quote with more than one live pricing option is marked Awarded.
-  if(A.activeQuote._wonOptionIndex!=null)body.won_option_index=A.activeQuote._wonOptionIndex;
-  const r=await api('PUT','/api/quotes/'+A.activeQuote.id,body);
-  if(r.needs_won_option_index){
-    // Quote has >1 pricing option and the backend doesn't know which one
-    // was actually awarded — ask, then retry the same save with the answer.
-    const labels=(r.options||[]).map(o=>`${o.index+1}. ${o.label}`).join('\n');
-    const pick=prompt(`This quote has more than one pricing option. Which one was awarded?\n${labels}\n\nEnter the option number:`);
-    const idx=parseInt(pick,10)-1;
-    if(pick!==null&&!isNaN(idx)&&idx>=0){A.activeQuote._wonOptionIndex=idx;return saveQuote();}
-    // Cancelled — status flip didn't actually save, so don't leave the UI
-    // showing Awarded when the backend still has the old status.
-    const prior=A.quotes.find(q=>q.id===A.activeQuote.id);
-    A.activeQuote.status=prior?prior.status:'draft';
-    setStatus('error');draw();
-    return false;
-  }
-  if(r.quote){
-    const i=A.quotes.findIndex(q=>q.id===A.activeQuote.id);if(i>=0)A.quotes[i]=r.quote;
-    A.activeQuote._wonOptionIndex=null;
-    setStatus('saved');
-    if(r.project_performance){
-      if(r.project_performance.error){
-        alert(r.project_performance.error);
-      }else if(r.project_performance.needs_zoho_link){
-        // Best-effort, same endpoint the manual "+ Zoho" button on the
-        // Projects page already uses — failure here doesn't undo the award.
-        api('POST','/api/integrations/zoho/create-project',{project_id:r.project_performance.project_id})
-          .then(zr=>{if(zr.error)console.warn('Zoho project auto-link failed:',zr.error);});
-      }
-    }
-    return true;
-  }
+  });
+  if(r.quote){const i=A.quotes.findIndex(q=>q.id===A.activeQuote.id);if(i>=0)A.quotes[i]=r.quote;A.activeQuote.project_id=r.quote.project_id;setStatus('saved');if(r.quote.status==='awarded')draw();return true;}
   setStatus('error');
   A._lastSaveError=r.error||'Save failed';
   return false;
+}
+// ── Project Performance: explicit "Create Project" action from the quote
+// editor (appears once the quote is Awarded — see buildCstrip()). Freezes
+// the commercial baseline, then best-effort auto-links Zoho the same way
+// the old Projects-page "+ Zoho" button did.
+async function ppCreateProjectFromQuote(wonOptionIndex){
+  if(!A.activeQuote)return;
+  const body={};
+  if(wonOptionIndex!=null)body.won_option_index=wonOptionIndex;
+  const r=await api('POST','/api/quotes/'+A.activeQuote.id+'/create-project',body);
+  if(r.needs_won_option_index){
+    const labels=(r.options||[]).map(o=>`${o.index+1}. ${o.label}`).join('\n');
+    const pick=prompt(`This quote has more than one pricing option. Which one was awarded?\n${labels}\n\nEnter the option number:`);
+    const idx=parseInt(pick,10)-1;
+    if(pick!==null&&!isNaN(idx)&&idx>=0)return ppCreateProjectFromQuote(idx);
+    return;
+  }
+  if(r.error){alert(r.error);return;}
+  if(r.quote){A.activeQuote.project_id=r.quote.project_id;const i=A.quotes.findIndex(q=>q.id===A.activeQuote.id);if(i>=0)A.quotes[i]=r.quote;}
+  if(r.project_performance&&r.project_performance.needs_zoho_link){
+    const zr=await api('POST','/api/integrations/zoho/create-project',{project_id:r.project_performance.project_id});
+    if(zr.error)console.warn('Zoho project auto-link failed:',zr.error);
+  }
+  draw();
+  if(r.project_performance&&r.project_performance.project_id)openProjectPerformance(r.project_performance.project_id);
 }
 function schedSave(){if(A.reviewMode)return;if(_st)clearTimeout(_st);_st=setTimeout(saveQuote,3000);}
 // A quote is only editable while its status is Draft — once it's Sent (or
@@ -2153,6 +2144,9 @@ function buildCstrip(){
     <select onchange="A.activeQuote.status=this.value;schedSave()">
       ${['draft','sent','awarded','lost'].map(s=>`<option value="${s}" ${A.activeQuote.status===s?'selected':''}>${STATUS_LABELS[s]}</option>`).join('')}
     </select>
+    ${hasFeature('project_performance')&&A.activeQuote.status==='awarded'?(A.activeQuote.project_id
+      ?`<button class="btn btn-navy" style="font-size:12px;padding:4px 10px" onclick="openProjectPerformance('${A.activeQuote.project_id}')">View Project</button>`
+      :`<button class="btn btn-green" style="font-size:12px;padding:4px 10px;font-weight:700" onclick="ppCreateProjectFromQuote()">Create Project</button>`):''}
     <span style="color:var(--gray-300)">|</span>
     <span class="cstrip-label" title="How each item's percentage is applied. Markup = Cost × (1+%). Margin = Cost ÷ (1-%), i.e. % of the selling price. Changing this recalculates every item's price immediately using its existing % — the % values themselves are not changed.">Pricing</span>
     <select ${locked?'disabled title="Locked — unlock the quote to change"':''} onchange="A.activeQuote.pricing_type=this.value;schedSave();draw()">
