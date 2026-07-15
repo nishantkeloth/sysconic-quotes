@@ -979,27 +979,45 @@ def _upsert_zoho_project(company_id, zp):
 def _import_zoho_projects(company_id):
     creds = _get_zoho_creds(company_id)
     if not creds or not ZOHO.is_configured(creds):
-        return {'imported': 0, 'total_in_zoho': 0, 'errors': ['Zoho Books is not connected for this company']}
+        return {'imported': 0, 'updated': 0, 'total_in_zoho': 0, 'errors': ['Zoho Books is not connected for this company']}
 
     try:
         zoho_projects = ZOHO.fetch_all_projects(creds)
     except Exception as e:
-        return {'imported': 0, 'total_in_zoho': 0, 'errors': [str(e)]}
+        return {'imported': 0, 'updated': 0, 'total_in_zoho': 0, 'errors': [str(e)]}
 
-    existing = sb.table('projects').select('zoho_project_id').eq('company_id', company_id)\
+    existing = sb.table('projects').select('id,zoho_project_id,zoho_project_no,name,customer').eq('company_id', company_id)\
         .not_.is_('zoho_project_id', 'null').execute().data or []
-    known_ids = {r['zoho_project_id'] for r in existing}
+    existing_by_id = {r['zoho_project_id']: r for r in existing}
 
-    imported, errors = 0, []
+    imported, updated, errors = 0, 0, []
     for zp in zoho_projects:
-        if zp['zoho_project_id'] in known_ids:
+        row = existing_by_id.get(zp['zoho_project_id'])
+        if row:
+            # Already imported before -- but if Zoho now has a Project No
+            # (cf_project_no) that we didn't capture back when this row was
+            # first created, or the name/customer changed in Zoho since,
+            # backfill it rather than leaving the row stale forever.
+            patch = {}
+            if zp.get('zoho_project_no') and row.get('zoho_project_no') != zp['zoho_project_no']:
+                patch['zoho_project_no'] = zp['zoho_project_no']
+            if zp.get('project_name') and row.get('name') != zp['project_name']:
+                patch['name'] = zp['project_name']
+            if zp.get('customer_name') and row.get('customer') != zp['customer_name']:
+                patch['customer'] = zp['customer_name']
+            if patch:
+                try:
+                    sb.table('projects').update(patch).eq('id', row['id']).execute()
+                    updated += 1
+                except Exception as e:
+                    errors.append(f"{zp['zoho_project_id']}: {e}")
             continue
         try:
             _upsert_zoho_project(company_id, zp)
             imported += 1
         except Exception as e:
             errors.append(f"{zp['zoho_project_id']}: {e}")
-    return {'imported': imported, 'total_in_zoho': len(zoho_projects), 'errors': errors}
+    return {'imported': imported, 'updated': updated, 'total_in_zoho': len(zoho_projects), 'errors': errors}
 
 # ── Targeted import for a caller-specified list of Zoho Project IDs -- used
 # by the "Sync Selected" testing flow so you don't have to pull every
@@ -1013,14 +1031,31 @@ def _import_specific_zoho_projects(company_id, values):
     the full Zoho project list once and matching on Project No."""
     creds = _get_zoho_creds(company_id)
     if not creds or not ZOHO.is_configured(creds):
-        return {'imported': 0, 'total_in_zoho': len(values), 'errors': ['Zoho Books is not connected for this company']}
+        return {'imported': 0, 'updated': 0, 'total_in_zoho': len(values), 'errors': ['Zoho Books is not connected for this company']}
 
-    existing = sb.table('projects').select('zoho_project_id,zoho_project_no').eq('company_id', company_id).execute().data or []
-    known = {r['zoho_project_id'] for r in existing if r.get('zoho_project_id')} \
-        | {r['zoho_project_no'] for r in existing if r.get('zoho_project_no')}
+    existing = sb.table('projects').select('id,zoho_project_id,zoho_project_no').eq('company_id', company_id).execute().data or []
+    by_id = {r['zoho_project_id']: r for r in existing if r.get('zoho_project_id')}
+    by_no = {r['zoho_project_no']: r for r in existing if r.get('zoho_project_no')}
 
-    to_resolve = [v for v in values if v not in known]
-    imported, errors = 0, []
+    imported, updated, errors = 0, 0, []
+    to_resolve = []
+    for v in values:
+        row = by_id.get(v) or by_no.get(v)
+        if not row:
+            to_resolve.append(v)
+            continue
+        # Already local -- but backfill zoho_project_no if we're missing it
+        # (e.g. this row was imported before the cf_project_no field was
+        # being captured at all).
+        if not row.get('zoho_project_no') and row.get('zoho_project_id'):
+            try:
+                zp = ZOHO.fetch_project(creds, row['zoho_project_id'])
+                if zp and zp.get('zoho_project_no'):
+                    sb.table('projects').update({'zoho_project_no': zp['zoho_project_no']}).eq('id', row['id']).execute()
+                    updated += 1
+            except Exception as e:
+                errors.append(f'{v}: {e}')
+
     still_unresolved = []
     for v in to_resolve:
         try:
@@ -1042,9 +1077,9 @@ def _import_specific_zoho_projects(company_id, values):
         except Exception as e:
             all_zp = []
             errors.append(f'Project No lookup failed: {e}')
-        by_no = {zp['zoho_project_no']: zp for zp in all_zp if zp.get('zoho_project_no')}
+        by_no_zoho = {zp['zoho_project_no']: zp for zp in all_zp if zp.get('zoho_project_no')}
         for v in still_unresolved:
-            zp = by_no.get(v)
+            zp = by_no_zoho.get(v)
             if not zp:
                 errors.append(f'{v}: not found in Zoho (tried as Project ID and Project No)')
                 continue
@@ -1054,7 +1089,7 @@ def _import_specific_zoho_projects(company_id, values):
             except Exception as e:
                 errors.append(f'{v}: {e}')
 
-    return {'imported': imported, 'total_in_zoho': len(values), 'errors': errors}
+    return {'imported': imported, 'updated': updated, 'total_in_zoho': len(values), 'errors': errors}
 
 # ── Manual "Sync Now" — a single project, or the whole portfolio.
 # Portfolio-wide runs (no project_id) import any new Zoho projects first
