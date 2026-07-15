@@ -976,7 +976,10 @@ def _upsert_zoho_project(company_id, zp):
         'source': 'zoho_import',
     }).execute()
 
-def _import_zoho_projects(company_id):
+def _import_zoho_projects(company_id, project_filter=None):
+    """project_filter, if given, is a predicate over the fetch_all_projects
+    dicts -- used by the Project No range sync so it only imports/backfills
+    projects inside the requested range instead of the whole org."""
     creds = _get_zoho_creds(company_id)
     if not creds or not ZOHO.is_configured(creds):
         return {'imported': 0, 'updated': 0, 'total_in_zoho': 0, 'errors': ['Zoho Books is not connected for this company']}
@@ -985,6 +988,9 @@ def _import_zoho_projects(company_id):
         zoho_projects = ZOHO.fetch_all_projects(creds)
     except Exception as e:
         return {'imported': 0, 'updated': 0, 'total_in_zoho': 0, 'errors': [str(e)]}
+
+    if project_filter:
+        zoho_projects = [zp for zp in zoho_projects if project_filter(zp)]
 
     existing = sb.table('projects').select('id,zoho_project_id,zoho_project_no,name,customer').eq('company_id', company_id)\
         .not_.is_('zoho_project_id', 'null').execute().data or []
@@ -1107,6 +1113,8 @@ def pp_run_sync():
     company_id = claims['company_id']
     pid = d.get('project_id')
     zoho_ids_filter = [str(z).strip() for z in (d.get('zoho_project_ids') or []) if str(z).strip()]
+    no_from = (d.get('zoho_project_no_from') or '').strip() or None
+    no_to = (d.get('zoho_project_no_to') or '').strip() or None
 
     import_result = None
     is_portfolio_wide = not pid
@@ -1126,6 +1134,20 @@ def pp_run_sync():
         # IDs or human-readable Project Nos.
         ors = ','.join([f'zoho_project_id.in.({",".join(zoho_ids_filter)})', f'zoho_project_no.in.({",".join(zoho_ids_filter)})'])
         projects = sb.table('projects').select('*').eq('company_id', company_id).or_(ors).execute().data or []
+    elif no_from or no_to:
+        # Testing by range: e.g. PRJ100000 to PRJ100010. Project Nos are
+        # fixed-width zero-padded (PRJ + digits), so plain string comparison
+        # sorts the same as numeric comparison would -- no need to parse out
+        # the numeric part.
+        if not can_manage(claims): return jsonify({'error': 'Admin only — ask a company admin to sync.'}), 403
+        in_range = lambda zp: zp.get('zoho_project_no') \
+            and (not no_from or zp['zoho_project_no'] >= no_from) \
+            and (not no_to or zp['zoho_project_no'] <= no_to)
+        import_result = _import_zoho_projects(company_id, project_filter=in_range)
+        q = sb.table('projects').select('*').eq('company_id', company_id).not_.is_('zoho_project_no', 'null')
+        if no_from: q = q.gte('zoho_project_no', no_from)
+        if no_to: q = q.lte('zoho_project_no', no_to)
+        projects = q.execute().data or []
     else:
         if not can_manage(claims): return jsonify({'error': 'Admin only — ask a company admin to sync the whole portfolio.'}), 403
         if not d.get('skip_import'):

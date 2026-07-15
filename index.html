@@ -549,9 +549,16 @@ async function ppSyncAll(){
 }
 async function ppSyncSelected(){
   const raw=(document.getElementById('ppZohoIdsInp')?.value||'').trim();
-  if(!raw){alert('Enter one or more Zoho Project IDs, comma-separated (e.g. from the "Zoho #" shown under each project name)');return;}
+  if(!raw){alert('Enter one or more Zoho Project IDs, comma-separated (e.g. from the Project No column)');return;}
   const ids=raw.split(/[,\n]/).map(s=>s.trim()).filter(Boolean);
   const r=await ppRunSyncLoop({zoho_project_ids:ids});
+  if(r&&r.zoho_import&&(r.zoho_import.errors||[]).length)console.warn('Zoho import issues:',r.zoho_import.errors);
+}
+async function ppSyncRange(){
+  const from=(document.getElementById('ppZohoNoFrom')?.value||'').trim();
+  const to=(document.getElementById('ppZohoNoTo')?.value||'').trim();
+  if(!from&&!to){alert('Enter a Project No to sync from and/or to (e.g. PRJ100000 to PRJ100010)');return;}
+  const r=await ppRunSyncLoop({zoho_project_no_from:from||null,zoho_project_no_to:to||null});
   if(r&&r.zoho_import&&(r.zoho_import.errors||[]).length)console.warn('Zoho import issues:',r.zoho_import.errors);
 }
 async function ppRunSyncLoop(baseBody){
@@ -621,21 +628,24 @@ function portfolioHTML(){
       <select class="iinput" style="max-width:160px" onchange="ppSetFilter('status',this.value)">
         <option value="">All statuses</option><option value="active">Active</option><option value="on_hold">On Hold</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option>
       </select>
-      <input class="iinput" id="ppZohoIdsInp" placeholder="Zoho Project ID(s), comma-separated" style="max-width:260px;margin-left:auto" title="For testing: sync only these specific Zoho projects instead of the whole portfolio">
+      <input class="iinput" id="ppZohoIdsInp" placeholder="Zoho Project ID(s), comma-separated" style="max-width:230px;margin-left:auto" title="For testing: sync only these specific Zoho projects instead of the whole portfolio">
       <button class="btn" onclick="ppSyncSelected()">Sync Selected</button>
+      <input class="iinput" id="ppZohoNoFrom" placeholder="Project No from" style="max-width:130px" title="e.g. PRJ100000">
+      <input class="iinput" id="ppZohoNoTo" placeholder="Project No to" style="max-width:130px" title="e.g. PRJ100010">
+      <button class="btn" onclick="ppSyncRange()">Sync Range</button>
       <button class="btn btn-navy" id="ppSyncBtn" onclick="ppSyncAll()">🔄 Sync Now</button>
     </div>
-    <div style="background:#fff;border-radius:10px;overflow:auto;box-shadow:0 1px 3px rgba(0,0,0,.06)">
+    <div style="background:#fff;border-radius:10px;overflow:auto;box-shadow:0 1px 3px rgba(0,0,0,.06);max-height:calc(100vh - 320px)">
       ${d===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
       :!rows.length?`<div style="padding:22px;color:var(--gray-500)">No projects yet — a project appears here automatically once a quote is marked Awarded.</div>`
-      :`<table style="width:100%;border-collapse:collapse;font-size:13.5px">
-        <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200);background:var(--navy);color:#fff">
-          <th style="padding:8px">Project</th><th style="padding:8px">Customer</th><th style="padding:8px">Project No</th><th style="padding:8px">Value</th>
-          <th style="padding:8px">Original GP%</th><th style="padding:8px">Forecast GP%</th><th style="padding:8px">Erosion</th>
-          <th style="padding:8px">PO Expense</th><th style="padding:8px">Non-PO Expense</th>
-          <th style="padding:8px">EAC</th><th style="padding:8px">Invoice%</th><th style="padding:8px">Cash</th>
-          <th style="padding:8px">Score</th><th style="padding:8px">Status</th>
-        </tr></thead><tbody>${rowsHtml}</tbody></table>`}
+      :(()=>{const th=(l)=>`<th style="padding:8px;position:sticky;top:0;background:var(--navy);color:#fff;z-index:1;text-align:left;border-bottom:1px solid var(--gray-200)">${l}</th>`;return `<table style="width:100%;border-collapse:collapse;font-size:13.5px">
+        <thead><tr>
+          ${th('Project')}${th('Customer')}${th('Project No')}${th('Value')}
+          ${th('Original GP%')}${th('Forecast GP%')}${th('Erosion')}
+          ${th('PO Expense')}${th('Non-PO Expense')}
+          ${th('EAC')}${th('Invoice%')}${th('Cash')}
+          ${th('Score')}${th('Status')}
+        </tr></thead><tbody>${rowsHtml}</tbody></table>`;})()}
     </div>
   </div>`;
 }
