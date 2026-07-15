@@ -15,6 +15,18 @@ JWT_SECRET   = os.environ.get('JWT_SECRET')
 CRON_SECRET  = os.environ.get('CRON_SECRET')
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Syncing every linked project's full Zoho actuals (POs + per-PO line items,
+# bills + per-bill line items, expenses, invoices, payments) in one HTTP
+# request doesn't scale past a handful of projects -- on a portfolio of 20+
+# it was blowing past Vercel's function time limit and dropping the
+# connection ("Server disconnected" in the browser) before anything got
+# written. Both sync entry points below are time-boxed instead: they process
+# as many projects as fit in the budget, oldest-synced-first, and report how
+# many are left so the caller (manual Sync Now, or tomorrow's cron run) can
+# pick up where this call stopped.
+MANUAL_SYNC_TIME_BUDGET_SECONDS = 8
+CRON_SYNC_TIME_BUDGET_SECONDS = 45
+
 @app.errorhandler(Exception)
 def handle_exception(e):
     if isinstance(e, HTTPException):
@@ -965,8 +977,12 @@ def _import_zoho_projects(company_id):
             errors.append(f"{zp['zoho_project_id']}: {e}")
     return {'imported': imported, 'total_in_zoho': len(zoho_projects), 'errors': errors}
 
-# ── Manual "Sync Now" — per project, or every linked project in the company.
-# Portfolio-wide runs (no project_id) also import any new Zoho projects first.
+# ── Manual "Sync Now" — a single project, or the whole portfolio.
+# Portfolio-wide runs (no project_id) import any new Zoho projects first
+# (skippable via skip_import, so a polling loop doesn't re-hit that endpoint
+# every batch), then sync least-recently-synced projects first within a time
+# budget. Response includes has_more/remaining so the frontend can call this
+# again immediately to keep going -- see ppSyncAll() in index.html.
 @app.route('/api/pp-sync/run', methods=['POST'])
 def pp_run_sync():
     claims = verify_token(request)
@@ -978,6 +994,7 @@ def pp_run_sync():
     pid = d.get('project_id')
 
     import_result = None
+    is_portfolio_wide = not pid
     if pid:
         proj = sb.table('projects').select('*').eq('id', pid).eq('company_id', company_id).execute()
         if not proj.data: return jsonify({'error': 'Project not found'}), 404
@@ -987,13 +1004,19 @@ def pp_run_sync():
         projects = [project]
     else:
         if not can_manage(claims): return jsonify({'error': 'Admin only — ask a company admin to sync the whole portfolio.'}), 403
-        import_result = _import_zoho_projects(company_id)
+        if not d.get('skip_import'):
+            import_result = _import_zoho_projects(company_id)
         projects = sb.table('projects').select('*').eq('company_id', company_id).not_.is_('zoho_project_id', 'null').execute().data or []
+        projects.sort(key=lambda p: p.get('last_synced_at') or '')
 
     summary = []
+    processed_ids = set()
+    deadline = time.time() + MANUAL_SYNC_TIME_BUDGET_SECONDS
     for project in projects:
         if not project.get('zoho_project_id'):
             continue
+        if is_portfolio_wide and time.time() > deadline:
+            break
         sync_results = _sync_project_actuals(company_id, project)
         calc = None
         try:
@@ -1001,8 +1024,14 @@ def pp_run_sync():
         except Exception:
             traceback.print_exc()
         summary.append({'project_id': project['id'], 'name': project.get('name'), 'sync': sync_results, 'recalculated': bool(calc)})
+        processed_ids.add(project['id'])
 
-    return jsonify({'ok': True, 'projects_synced': len(summary), 'results': summary, 'zoho_import': import_result})
+    remaining = len([p for p in projects if p.get('zoho_project_id') and p['id'] not in processed_ids]) if is_portfolio_wide else 0
+
+    return jsonify({
+        'ok': True, 'projects_synced': len(summary), 'results': summary, 'zoho_import': import_result,
+        'remaining': remaining, 'has_more': remaining > 0,
+    })
 
 # ── Cron: run once daily via Vercel's Cron Jobs, same pattern as the
 # existing customer/vendor auto-sync in api/integrations.py ────────────────
@@ -1016,13 +1045,22 @@ def pp_run_auto_sync():
 
     companies = sb.table('companies').select('id,features').execute().data or []
     results = []
+    deadline = time.time() + CRON_SYNC_TIME_BUDGET_SECONDS
     for co in companies:
         if not (co.get('features') or {}).get('project_performance'):
             continue
+        if time.time() > deadline:
+            break
         company_id = co['id']
         _import_zoho_projects(company_id)
         projects = sb.table('projects').select('*').eq('company_id', company_id).not_.is_('zoho_project_id', 'null').execute().data or []
+        # Least-recently-synced first, so if this run can't get through the
+        # whole portfolio before the deadline, whatever's left is exactly
+        # what tomorrow's run will pick up first -- nothing starves.
+        projects.sort(key=lambda p: p.get('last_synced_at') or '')
         for project in projects:
+            if time.time() > deadline:
+                break
             sync_results = _sync_project_actuals(company_id, project)
             try:
                 recalculate_project(company_id, project['id'])

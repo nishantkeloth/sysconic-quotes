@@ -537,8 +537,23 @@ async function loadPortfolioPage(){
 function ppSetFilter(key,val){A.ppFilters=A.ppFilters||{};A.ppFilters[key]=val;A.portfolio=null;draw();loadPortfolioPage();}
 function ppSearch(){const v=document.getElementById('ppSearchInp')?.value||'';ppSetFilter('search',v);}
 async function ppSyncAll(){
-  const r=await api('POST','/api/pp-sync/run',{});
-  if(r.error)alert(r.error);
+  // A big portfolio can't be synced in one request without risking a
+  // timeout (see api/projects.py) -- the backend processes a time-boxed
+  // batch per call and reports has_more, so keep calling until it's done.
+  const btn=document.getElementById('ppSyncBtn');
+  const origLabel=btn?btn.textContent:'';
+  if(btn)btn.disabled=true;
+  let more=true, first=true, done=0, loops=0;
+  while(more&&loops<50){
+    loops++;
+    const r=await api('POST','/api/pp-sync/run', first?{}:{skip_import:true});
+    if(r.error){alert(r.error);break;}
+    done+=(r.projects_synced||0);
+    more=!!r.has_more;
+    if(btn)btn.textContent=more?`🔄 Syncing… (${done} done, ${r.remaining} left)`:'🔄 Sync Now';
+    first=false;
+  }
+  if(btn){btn.disabled=false;btn.textContent=origLabel;}
   A.portfolio=null;draw();loadPortfolioPage();
 }
 function openProjectPerformance(id){A.ppDetailId=id;A.ppDetail=null;A.ppDetailTab='overview';A.page='projectPerformanceDetail';draw();}
@@ -587,7 +602,7 @@ function portfolioHTML(){
       <select class="iinput" style="max-width:160px" onchange="ppSetFilter('status',this.value)">
         <option value="">All statuses</option><option value="active">Active</option><option value="on_hold">On Hold</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option>
       </select>
-      <button class="btn btn-navy" style="margin-left:auto" onclick="ppSyncAll()">🔄 Sync Now</button>
+      <button class="btn btn-navy" id="ppSyncBtn" style="margin-left:auto" onclick="ppSyncAll()">🔄 Sync Now</button>
     </div>
     <div style="background:#fff;border-radius:10px;overflow:auto;box-shadow:0 1px 3px rgba(0,0,0,.06)">
       ${d===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
