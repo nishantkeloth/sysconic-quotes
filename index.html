@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -444,6 +444,70 @@ const A={screen:'login',token:localStorage.getItem('sq_token')||null,user:null,c
   page:'dashboard',quotes:[],activeQuote:null,view:'internal',cur:'AED',rate:1,
   activeOpt:0,saveStatus:'',searchQ:'',filterStatus:'all',sbOpen:false};
 function toggleSidebar(){A.sbOpen=!A.sbOpen;draw();}
+function parseJwt(t){try{return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));}catch(e){return {};}}
+function hasFeature(f){return !!(A.token&&(parseJwt(A.token).features||{})[f]);}
+function projectsHTML(){
+  const list=A.projects||null;
+  const rows=(list||[]).map(p=>`<tr style="border-bottom:1px solid var(--gray-100)">
+    <td style="padding:8px;font-weight:600">${esc(p.name)}</td>
+    <td style="padding:8px">${esc(p.customer||'')}</td>
+    <td style="padding:8px">${esc(p.site_location||'')}</td>
+    <td style="padding:8px"><select class="iinput" onchange="updateProjectStatus('${p.id}',this.value)">
+      ${['active','on_hold','completed','cancelled'].map(s=>`<option value="${s}" ${p.status===s?'selected':''}>${s.replace('_',' ')}</option>`).join('')}
+    </select></td>
+    <td style="padding:8px">${esc(p.po_number||'')}</td>
+    <td style="padding:8px">${p.zoho_project_id?`<span style="color:#16a34a;font-weight:600" title="Linked to Zoho Books">&#10003; Zoho</span>`:`<button class="btn" style="font-size:12px;padding:4px 10px" onclick="createZohoProject('${p.id}')">+ Zoho</button>`}</td>
+    <td style="padding:8px;text-align:right"><button class="idel" onclick="deleteProject('${p.id}')" title="Delete project">✕</button></td>
+  </tr>`).join('');
+  return `<div style="padding:24px">
+    <h2 style="margin:0 0 16px">Projects</h2>
+    <div style="background:#fff;border-radius:10px;padding:16px;margin-bottom:18px;box-shadow:0 1px 3px rgba(0,0,0,.06)">
+      <div style="display:grid;grid-template-columns:2fr 2fr 2fr 1fr auto;gap:10px">
+        <input class="iinput" id="prjName" placeholder="Project name *">
+        <input class="iinput" id="prjCustomer" placeholder="Customer">
+        <input class="iinput" id="prjSite" placeholder="Site / location">
+        <input class="iinput" id="prjPo" placeholder="PO number">
+        <button class="btn btn-navy" onclick="saveNewProject()">+ Add project</button>
+      </div>
+    </div>
+    <div style="background:#fff;border-radius:10px;overflow:auto;box-shadow:0 1px 3px rgba(0,0,0,.06)">
+      ${list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
+      :!list.length?`<div style="padding:22px;color:var(--gray-500)">No projects yet — add your first one above.</div>`
+      :`<table style="width:100%;border-collapse:collapse;font-size:14px">
+        <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200)">
+          <th style="padding:8px">Name</th><th style="padding:8px">Customer</th><th style="padding:8px">Site</th><th style="padding:8px">Status</th><th style="padding:8px">PO</th><th style="padding:8px">Zoho</th><th></th>
+        </tr></thead><tbody>${rows}</tbody></table>`}
+    </div>
+  </div>`;
+}
+async function loadProjectsPage(){
+  const r=await api('GET','/api/projects');
+  if(r.error){A.projects=[];alert(r.error);}else{A.projects=r.projects||[];}
+  draw();
+}
+async function saveNewProject(){
+  const name=(document.getElementById('prjName')?.value||'').trim();
+  if(!name){alert('Project name is required');return;}
+  const body={name,customer:(document.getElementById('prjCustomer')?.value||'').trim(),site_location:(document.getElementById('prjSite')?.value||'').trim(),po_number:(document.getElementById('prjPo')?.value||'').trim()};
+  const r=await api('POST','/api/projects',body);
+  if(r.error){alert(r.error);return;}
+  A.projects=null;draw();loadProjectsPage();
+}
+async function updateProjectStatus(id,status){
+  const r=await api('PUT','/api/projects/'+id,{status});
+  if(r.error)alert(r.error);
+}
+async function createZohoProject(id){
+  const r=await api('POST','/api/integrations/zoho/create-project',{project_id:id});
+  if(r.error){alert(r.error);return;}
+  A.projects=null;draw();loadProjectsPage();
+}
+async function deleteProject(id){
+  if(!confirm('Delete this project? Linked quotes are kept but unlinked.'))return;
+  const r=await api('DELETE','/api/projects/'+id);
+  if(r.error){alert(r.error);return;}
+  A.projects=null;draw();loadProjectsPage();
+}
 function closeSidebar(){if(A.sbOpen){A.sbOpen=false;draw();}}
 let INV={token:null,loading:true,error:'',email:'',role:'',company_name:'',busy:false};
 let RST={token:null,busy:false,done:false,error:''};
@@ -1439,6 +1503,7 @@ function draw(){
   if(A.page==='print'){ensurePrintCompany();}
   if(A.page==='products')setTimeout(loadProducts,50);
   if(A.page==='customers')setTimeout(loadCustomersPage,50);
+  if(A.page==='projects'&&A.projects==null)setTimeout(loadProjectsPage,50);
   if(A.page==='vendorMaster')setTimeout(loadVendorsMaster,50);
   if(A.page==='reviewQueue')setTimeout(loadReviewQueue,50);
   if(A.page==='log')setTimeout(loadLog,50);
@@ -1599,10 +1664,11 @@ function appHTML(){
     </div>
     <nav class="sb-nav">
       <div class="sb-sec">Workspace</div>
-      <div class="sb-item ${A.page==='dashboard'?'active':''}" onclick="${nav('dashboard')}"><span class="sb-icon">🏠</span>Dashboard</div>
+      <div class="sb-item ${A.page==='dashboard'?'active':''}" onclick="${nav('dashboard')}"><span class="sb-icon">🏠</span>Quotes</div>
       <div class="sb-item ${A.page==='products'?'active':''}" onclick="${nav('products')}"><span class="sb-icon">📦</span>Products</div>
       <div class="sb-item ${A.page==='customers'?'active':''}" onclick="${nav('customers')}"><span class="sb-icon">👤</span>Customers</div>
       <div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="${nav('vendorMaster')}"><span class="sb-icon">🏭</span>Vendors</div>
+      ${hasFeature('projects')?`<div class="sb-item ${A.page==='projects'?'active':''}" onclick="${nav('projects')}"><span class="sb-icon">📁</span>Projects</div>`:''}
       <div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>
       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}
       ${A.user?.role==='admin'?`<div class="sb-sec">Settings</div>
@@ -1636,6 +1702,7 @@ function appHTML(){
   else if(A.page==='log')pageContent=logHTML();
   else if(A.page==='products')pageContent=productsHTML();
   else if(A.page==='customers')pageContent=customersHTML();
+  else if(A.page==='projects')pageContent=projectsHTML();
   else if(A.page==='vendorMaster')pageContent=vendorsMasterHTML();
   else if(A.page==='team')pageContent=teamHTML();
   else if(A.page==='integrations')pageContent=integrationsHTML();
@@ -2352,20 +2419,12 @@ function pmSearchIconClick(si,ii){
   }
   const inp=document.getElementById(`pmInput-${si}-${ii}`);
   if(!inp)return;
-  inp.focus();
   const q=(inp.value||'').trim();
-  if(q.length<2){
-    alert('Type at least 2 characters in the Model field, then click search.');
-    return;
-  }
+  const it=sec(si)?.items?.[ii];
+  const q2=q||(it?.brand||'').trim()||(it?.desc||'').trim();
   clearTimeout(PMD.t);
-  PMD.last=q;
-  api('GET','/api/products?limit=8&search='+encodeURIComponent(q)).then(r=>{
-    if(PMD.last!==q)return;
-    const matches=(r.products||[]).filter(p=>p.is_active!==false);
-    PMD.si=si;PMD.ii=ii;PMD.matches=matches;
-    showPmDrop(si,ii,q,matches);
-  }).catch(()=>{});
+  hidePmDrop();
+  showImagePicker(it?.product_id||'',q2,si,ii);
 }
 function showPmDrop(si,ii,query,matches){
   const inp=document.getElementById(`pmInput-${si}-${ii}`);if(!inp)return;
@@ -2485,17 +2544,28 @@ function showImagePicker(pid,query,si,ii){
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="imgOverlay" onclick="if(event.target===this)closeImgPicker()">
     <div class="modal" style="max-width:640px;max-height:85vh;overflow-y:auto">
       <div class="modal-title">🖼 Product image</div>
-      <div class="modal-sub">${esc(query)}</div>
-      <div id="imgBody"><div style="text-align:center;padding:26px;color:var(--gray-500)">Searching your vendor sites…</div></div>
+      <div style="display:flex;gap:8px;margin:10px 0 14px">
+        <input class="iinput" id="imgQ" type="text" placeholder="Model, brand or keywords" value="${esc(query)}" style="flex:1" onkeydown="if(event.key==='Enter')runImgSearch('${pid}',${si},${ii})">
+        <button class="btn btn-navy" onclick="runImgSearch('${pid}',${si},${ii})">🔍 Search</button>
+      </div>
+      <div id="imgBody"><div style="text-align:center;padding:26px;color:var(--gray-500)">Type a search term above, or search runs automatically if a model was entered.</div></div>
       <div class="modal-actions" style="justify-content:space-between">
         <label class="btn" style="cursor:pointer">📤 Upload image<input type="file" accept="image/png,image/jpeg,image/webp,image/gif" style="display:none" onchange="uploadProdImage(event,'${pid}',${si},${ii})"></label>
         <button class="btn" onclick="closeImgPicker()">Cancel</button>
       </div>
     </div></div>`);
-  api('GET','/api/products/image-search?q='+encodeURIComponent(query)).then(r=>{
+  if((query||'').trim())runImgSearch(pid,si,ii);
+}
+
+function runImgSearch(pid,si,ii){
+  const q=(document.getElementById('imgQ')?.value||'').trim();
+  if(!q)return;
+  const el=document.getElementById('imgBody');
+  if(el)el.innerHTML=`<div style="text-align:center;padding:26px;color:var(--gray-500)">Searching your vendor sites…</div>`;
+  api('GET','/api/products/image-search?q='+encodeURIComponent(q)).then(r=>{
     const el=document.getElementById('imgBody');if(!el)return;
     if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div><div style="font-size:13px;color:var(--gray-500);margin-top:8px">You can still upload an image manually below.</div>`;return;}
-    if(!(r.images||[]).length){el.innerHTML=`<div style="color:var(--gray-500);padding:14px">No images found on your vendor sites for this model — upload one manually below.</div>`;return;}
+    if(!(r.images||[]).length){el.innerHTML=`<div style="color:var(--gray-500);padding:14px">No images found for this search — try different keywords or upload one manually below.</div>`;return;}
     el.innerHTML=`<div class="img-grid">${r.images.map(im=>{
       const u=encodeURIComponent(im.url).replace(/'/g,'%27');
       const src=(im.source||'').replace(/^https?:\/\/(www\.)?/,'').split('/')[0];
@@ -2504,7 +2574,6 @@ function showImagePicker(pid,query,si,ii){
   });
 }
 function closeImgPicker(){const el=document.getElementById('imgOverlay');if(el)el.remove();}
-
 async function pickProdImage(pid,encUrl,si,ii){
   const el=document.getElementById('imgBody');if(el)el.innerHTML='<div style="text-align:center;padding:26px;color:var(--gray-500)">Saving image…</div>';
   const r=await api('POST','/api/products/'+pid+'/image',{url:decodeURIComponent(encUrl)});

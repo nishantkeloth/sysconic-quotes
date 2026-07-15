@@ -12,6 +12,7 @@
     { "src": "api/integrations.py", "use": "@vercel/python" },
     { "src": "api/platform.py", "use": "@vercel/python" },
     { "src": "api/proposal.py", "use": "@vercel/python" },
+    { "src": "api/projects.py", "use": "@vercel/python" },
     { "src": "index.html",    "use": "@vercel/static" }
   ],
   "routes": [
@@ -33,6 +34,8 @@
     { "src": "/api/platform",      "dest": "api/platform.py" },
     { "src": "/api/proposal/(.*)", "dest": "api/proposal.py" },
     { "src": "/api/proposal",      "dest": "api/proposal.py" },
+    { "src": "/api/projects/(.*)", "dest": "api/projects.py" },
+    { "src": "/api/projects",      "dest": "api/projects.py" },
     { "src": "/(.*)",            "dest": "index.html" }
   ],
   "crons": [
