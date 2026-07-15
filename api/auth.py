@@ -30,12 +30,13 @@ def get_app_url():
 def get_sb():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def make_token(user_id, company_id, role, is_platform_admin=False):
+def make_token(user_id, company_id, role, is_platform_admin=False, features=None):
     return jwt.encode({
         'user_id': str(user_id),
         'company_id': str(company_id),
         'role': role,
         'is_platform_admin': bool(is_platform_admin),
+        'features': features or {},
         'exp': datetime.utcnow() + timedelta(days=30)
     }, JWT_SECRET, algorithm='HS256')
 
@@ -232,7 +233,7 @@ def register():
                 'password_hash': pw_hash, 'invited_by': invite['invited_by']
             }).execute().data[0]
             sb.table('invites').update({'accepted': True}).eq('token', invite['token']).execute()
-            token = make_token(user['id'], co['id'], user['role'], is_platform_admin=False)
+            token = make_token(user['id'], co['id'], user['role'], is_platform_admin=False, features=co.get('features') or {})
             return jsonify({
                 'token': token,
                 'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'role': user['role'], 'is_platform_admin': False, 'ms365_email': user.get('ms365_email')},
@@ -253,7 +254,7 @@ def register():
         # Self-service signups are never platform admins — that flag can only be
         # set directly by an existing platform admin (or, for the very first one,
         # directly in the database).
-        token = make_token(user['id'], co['id'], 'admin', is_platform_admin=False)
+        token = make_token(user['id'], co['id'], 'admin', is_platform_admin=False, features=co.get('features') or {})
         return jsonify({
             'token': token,
             'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'role': 'admin', 'is_platform_admin': False, 'ms365_email': user.get('ms365_email')},
@@ -288,7 +289,7 @@ def login():
         if co.get('status') == 'suspended':
             return jsonify({'error': "This company's account has been suspended. Contact your administrator."}), 403
 
-        token = make_token(user['id'], co['id'], user['role'], user.get('is_platform_admin', False))
+        token = make_token(user['id'], co['id'], user['role'], user.get('is_platform_admin', False), features=co.get('features') or {})
 
         return jsonify({
             'token': token,
@@ -410,7 +411,7 @@ def accept_invite():
 
         sb.table('invites').update({'accepted': True}).eq('token', token).execute()
         co  = sb.table('companies').select('*').eq('id', invite['company_id']).execute().data[0]
-        tok = make_token(user['id'], co['id'], user['role'], is_platform_admin=False)
+        tok = make_token(user['id'], co['id'], user['role'], is_platform_admin=False, features=co.get('features') or {})
 
         return jsonify({
             'token': tok,
