@@ -2506,6 +2506,7 @@ function runImgSearch(pid,si,ii){
     }).join('')}</div><div style="font-size:12px;color:var(--gray-500)">Click the correct image — it will be saved to your catalog.</div>`;
   });
 }
+function closeImgPicker(){const el=document.getElementById('imgOverlay');if(el)el.remove();}
 async function pickProdImage(pid,encUrl,si,ii){
   const el=document.getElementById('imgBody');if(el)el.innerHTML='<div style="text-align:center;padding:26px;color:var(--gray-500)">Saving image…</div>';
   const r=await api('POST','/api/products/'+pid+'/image',{url:decodeURIComponent(encUrl)});
