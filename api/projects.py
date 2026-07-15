@@ -205,9 +205,16 @@ def recalculate_project(company_id, project_id):
     original_gp_pct = _num(p.get('original_gp_pct'))
     revenue_forecast = _num(p.get('revenue_forecast')) or original_sell
 
-    bills = sb.table('zoho_bills').select('total,status').eq('project_id', project_id).execute().data or []
+    bills = sb.table('zoho_bills').select('total,status,zoho_purchase_order_id').eq('project_id', project_id).execute().data or []
     expenses = sb.table('zoho_expenses').select('amount').eq('project_id', project_id).execute().data or []
-    actual_cost = sum(_num(b.get('total')) for b in bills) + sum(_num(e.get('amount')) for e in expenses)
+    # Split actual cost by whether it traces back to a Purchase Order or was
+    # entered directly (a non-PO bill, or a project expense) -- both feed
+    # into Zoho Books Projects and both count toward actual cost, but PMs
+    # want to see the split since PO-based spend went through approval.
+    po_based_cost = sum(_num(b.get('total')) for b in bills if b.get('zoho_purchase_order_id'))
+    non_po_based_cost = sum(_num(b.get('total')) for b in bills if not b.get('zoho_purchase_order_id')) \
+        + sum(_num(e.get('amount')) for e in expenses)
+    actual_cost = po_based_cost + non_po_based_cost
 
     pos = sb.table('zoho_purchase_orders').select('total,billed_total,status').eq('project_id', project_id).execute().data or []
     committed_cost = sum(max(0.0, _num(po.get('total')) - _num(po.get('billed_total'))) for po in pos
@@ -280,7 +287,8 @@ def recalculate_project(company_id, project_id):
     status = 'healthy' if overall >= healthy_min else ('at_risk' if overall >= at_risk_min else 'critical')
 
     update = {
-        'actual_cost': actual_cost, 'committed_cost': committed_cost, 'forecast_remaining_cost': forecast_remaining,
+        'actual_cost': actual_cost, 'po_based_actual_cost': po_based_cost, 'non_po_based_actual_cost': non_po_based_cost,
+        'committed_cost': committed_cost, 'forecast_remaining_cost': forecast_remaining,
         'estimate_at_completion': eac, 'forecast_gp': forecast_gp, 'forecast_gp_pct': forecast_gp_pct,
         'margin_erosion_pct': margin_erosion, 'invoiced_value': invoiced_value, 'collected_value': collected_value,
         'net_cash_position': net_cash_position, 'health_score': overall, 'health_status': status,
@@ -329,6 +337,7 @@ def recalculate_project(company_id, project_id):
 # ── Portfolio dashboard + project list ──────────────────────────────────────
 PP_LIST_FIELDS = ('id,name,customer,status,project_manager_id,salesperson_id,project_type,'
                    'revenue_forecast,original_gp_pct,forecast_gp_pct,margin_erosion_pct,actual_cost,'
+                   'po_based_actual_cost,non_po_based_actual_cost,'
                    'committed_cost,estimate_at_completion,invoiced_value,collected_value,net_cash_position,'
                    'health_score,health_status,completion_pct,zoho_project_id,quote_ref,created_at')
 

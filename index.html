@@ -566,6 +566,8 @@ function portfolioHTML(){
     <td style="padding:8px">${fmtPct100(p.original_gp_pct||0)}</td>
     <td style="padding:8px">${fmtPct100(p.forecast_gp_pct||0)}</td>
     <td style="padding:8px;${(p.margin_erosion_pct||0)>0?'color:var(--red)':''}">${fmtPct100(p.margin_erosion_pct||0)}</td>
+    <td style="padding:8px">AED ${fmt(p.po_based_actual_cost||0)}</td>
+    <td style="padding:8px">AED ${fmt(p.non_po_based_actual_cost||0)}</td>
     <td style="padding:8px">AED ${fmt(p.estimate_at_completion||0)}</td>
     <td style="padding:8px">${(p.revenue_forecast?((p.invoiced_value||0)/p.revenue_forecast*100):0).toFixed(0)}%</td>
     <td style="padding:8px">AED ${fmt(p.net_cash_position||0)}</td>
@@ -594,6 +596,7 @@ function portfolioHTML(){
         <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200);background:var(--navy);color:#fff">
           <th style="padding:8px">Project</th><th style="padding:8px">Customer</th><th style="padding:8px">Value</th>
           <th style="padding:8px">Original GP%</th><th style="padding:8px">Forecast GP%</th><th style="padding:8px">Erosion</th>
+          <th style="padding:8px">PO Expense</th><th style="padding:8px">Non-PO Expense</th>
           <th style="padding:8px">EAC</th><th style="padding:8px">Invoice%</th><th style="padding:8px">Cash</th>
           <th style="padding:8px">Score</th><th style="padding:8px">Status</th>
         </tr></thead><tbody>${rowsHtml}</tbody></table>`}
@@ -764,6 +767,8 @@ function ppCostControlTab(d){
     </table>
     <div style="margin-top:14px;padding-top:14px;border-top:1.5px solid var(--gray-200);display:flex;gap:24px;flex-wrap:wrap">
       <span>Original Budget: <b>AED ${fmt(p.original_estimated_cost||0)}</b></span>
+      <span>PO-Based Expense: <b>AED ${fmt(p.po_based_actual_cost||0)}</b></span>
+      <span>Non-PO Expense: <b>AED ${fmt(p.non_po_based_actual_cost||0)}</b></span>
       <span>EAC: <b>AED ${fmt(p.estimate_at_completion||0)}</b></span>
       <span>Forecast Variance: <b style="${variance<0?'color:var(--red)':'color:var(--green)'}">AED ${fmt(variance)}</b></span>
     </div>
