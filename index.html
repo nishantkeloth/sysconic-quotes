@@ -456,6 +456,7 @@ function projectsHTML(){
       ${['active','on_hold','completed','cancelled'].map(s=>`<option value="${s}" ${p.status===s?'selected':''}>${s.replace('_',' ')}</option>`).join('')}
     </select></td>
     <td style="padding:8px">${esc(p.po_number||'')}</td>
+    <td style="padding:8px">${p.zoho_project_id?`<span style="color:#16a34a;font-weight:600" title="Linked to Zoho Books">&#10003; Zoho</span>`:`<button class="btn" style="font-size:12px;padding:4px 10px" onclick="createZohoProject('${p.id}')">+ Zoho</button>`}</td>
     <td style="padding:8px;text-align:right"><button class="idel" onclick="deleteProject('${p.id}')" title="Delete project">✕</button></td>
   </tr>`).join('');
   return `<div style="padding:24px">
@@ -474,7 +475,7 @@ function projectsHTML(){
       :!list.length?`<div style="padding:22px;color:var(--gray-500)">No projects yet — add your first one above.</div>`
       :`<table style="width:100%;border-collapse:collapse;font-size:14px">
         <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200)">
-          <th style="padding:8px">Name</th><th style="padding:8px">Customer</th><th style="padding:8px">Site</th><th style="padding:8px">Status</th><th style="padding:8px">PO</th><th></th>
+          <th style="padding:8px">Name</th><th style="padding:8px">Customer</th><th style="padding:8px">Site</th><th style="padding:8px">Status</th><th style="padding:8px">PO</th><th style="padding:8px">Zoho</th><th></th>
         </tr></thead><tbody>${rows}</tbody></table>`}
     </div>
   </div>`;
@@ -495,6 +496,11 @@ async function saveNewProject(){
 async function updateProjectStatus(id,status){
   const r=await api('PUT','/api/projects/'+id,{status});
   if(r.error)alert(r.error);
+}
+async function createZohoProject(id){
+  const r=await api('POST','/api/integrations/zoho/create-project',{project_id:id});
+  if(r.error){alert(r.error);return;}
+  A.projects=null;draw();loadProjectsPage();
 }
 async function deleteProject(id){
   if(!confirm('Delete this project? Linked quotes are kept but unlinked.'))return;

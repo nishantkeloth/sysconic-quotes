@@ -93,6 +93,28 @@ class ZohoAdapter:
         contacts = self.fetch_customers(creds)
         return {'ok': True, 'sample_count': len(contacts)}
 
+    def _post(self, creds, path, body):
+        params = urllib.parse.urlencode({'organization_id': creds['org_id']})
+        url = f"{ZOHO_API}{path}?{params}"
+        data = json.dumps(body).encode('utf-8')
+        req = urllib.request.Request(url, data=data, method='POST', headers={
+            'Authorization': 'Zoho-oauthtoken ' + self._access_token(creds),
+            'Content-Type': 'application/json'})
+        try:
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode('utf-8', 'ignore')[:300]
+            raise RuntimeError(f'Zoho API error {e.code}: {detail}')
+
+    def create_project(self, creds, name, customer_id):
+        body = {'project_name': str(name)[:100], 'customer_id': str(customer_id), 'billing_type': 'fixed_cost_for_project'}
+        r = self._post(creds, '/projects', body)
+        proj = r.get('project') or {}
+        if not proj.get('project_id'):
+            raise RuntimeError('Zoho did not return a project id: ' + json.dumps(r)[:200])
+        return proj
+
 # ── Adapter registry ────────────────────────────────────────────────────────────
 # Each entry provides fetch_customers(creds), fetch_vendors(creds), and
 # is_configured(creds)/test_connection(creds). Adding a new provider (e.g.
@@ -364,6 +386,34 @@ def run_auto_sync():
             count, err = _sync_contacts(cid, provider, kind)
             results.append({'company_id': cid, 'type': kind, 'provider': provider, 'synced': count, 'error': err})
     return jsonify({'companies_processed': len(companies.data or []), 'results': results})
+
+# ── Create a Zoho Books project from an app project ─────────────────────────────
+@app.route('/api/integrations/zoho/create-project', methods=['POST'])
+def zoho_create_project():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not (claims.get('features') or {}).get('projects'):
+        return jsonify({'error': 'Feature not enabled'}), 403
+    pid = (request.json or {}).get('project_id')
+    if not pid: return jsonify({'error': 'project_id is required'}), 400
+    row = sb.table('projects').select('*').eq('id', pid).eq('company_id', claims['company_id']).execute()
+    if not row.data: return jsonify({'error': 'Project not found'}), 404
+    proj = row.data[0]
+    if proj.get('zoho_project_id'):
+        return jsonify({'error': 'Already linked to Zoho', 'zoho_project_id': proj['zoho_project_id']}), 409
+    creds = _get_creds_for(claims['company_id'], 'zoho')
+    adapter = ADAPTERS.get('zoho')
+    if not creds or not adapter or not adapter.is_configured(creds):
+        return jsonify({'error': 'Zoho Books is not connected. Connect it in Integrations first.'}), 400
+    customer_name = (proj.get('customer') or '').strip()
+    if not customer_name:
+        return jsonify({'error': 'Project has no customer set. Add a customer first.'}), 400
+    match = sb.table('customers').select('external_contact_id,name').eq('company_id', claims['company_id']).ilike('name', customer_name).execute()
+    if not match.data or not match.data[0].get('external_contact_id'):
+        return jsonify({'error': f'Customer "{customer_name}" not found in the synced Zoho customer list. Sync customers or check the exact name.'}), 400
+    zoho_proj = adapter.create_project(creds, proj['name'], match.data[0]['external_contact_id'])
+    sb.table('projects').update({'zoho_project_id': zoho_proj['project_id']}).eq('id', pid).eq('company_id', claims['company_id']).execute()
+    return jsonify({'ok': True, 'zoho_project_id': zoho_proj['project_id']})
 
 # Note: a live "/api/integrations/search-customers" route used to live here,
 # searching the connected provider (e.g. Zoho) directly on every keystroke.
