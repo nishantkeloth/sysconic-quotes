@@ -558,6 +558,11 @@ def zoho_create_project():
         return jsonify({'error': f'Customer "{customer_name}" not found in the synced Zoho customer list. Sync customers or check the exact name.'}), 400
     zoho_proj = adapter.create_project(creds, proj['name'], match.data[0]['external_contact_id'])
     sb.table('projects').update({'zoho_project_id': zoho_proj['project_id']}).eq('id', pid).eq('company_id', claims['company_id']).execute()
+    # Mirror the link onto the originating quote too (if this project came
+    # from an awarded quote) so the Zoho project ID is visible right on the
+    # quote itself, not only via the linked project.
+    if proj.get('quotation_id'):
+        sb.table('quotes').update({'zoho_project_id': zoho_proj['project_id']}).eq('id', proj['quotation_id']).eq('company_id', claims['company_id']).execute()
     return jsonify({'ok': True, 'zoho_project_id': zoho_proj['project_id']})
 
 # Note: a live "/api/integrations/search-customers" route used to live here,

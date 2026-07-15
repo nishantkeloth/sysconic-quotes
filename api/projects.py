@@ -786,6 +786,24 @@ class _ZohoSync:
                 })
         return out
 
+    def fetch_all_projects(self, creds):
+        """List every project that exists in Zoho Books for this org --
+        independent of whether it was ever linked to a project in this app.
+        Used by the daily import job / manual Sync Now to pull in projects
+        created directly in Zoho."""
+        rows = self._fetch_paginated(creds, '/projects', {}, 'projects')
+        out = []
+        for r in rows:
+            pid = r.get('project_id')
+            if not pid: continue
+            out.append({
+                'zoho_project_id': str(pid),
+                'project_name': (r.get('project_name') or 'Untitled Zoho Project')[:500],
+                'customer_name': (r.get('customer_name') or '')[:500],
+                'status': r.get('status'),
+            })
+        return out
+
 ZOHO = _ZohoSync()
 
 def _get_zoho_creds(company_id):
@@ -901,7 +919,45 @@ def _sync_project_actuals(company_id, project):
     return results
 
 
-# ── Manual "Sync Now" — per project, or every linked project in the company
+# ── Import every project that exists in Zoho Books but isn't linked to a
+# local `projects` row yet. Imported projects have no originating quote, so
+# they get no commercial baseline (original_selling_price/cost/gp stay 0) --
+# they're actuals-tracked only until/unless a baseline is added by hand.
+# Called from both the manual portfolio-wide "Sync Now" and the daily cron.
+def _import_zoho_projects(company_id):
+    creds = _get_zoho_creds(company_id)
+    if not creds or not ZOHO.is_configured(creds):
+        return {'imported': 0, 'total_in_zoho': 0, 'errors': ['Zoho Books is not connected for this company']}
+
+    try:
+        zoho_projects = ZOHO.fetch_all_projects(creds)
+    except Exception as e:
+        return {'imported': 0, 'total_in_zoho': 0, 'errors': [str(e)]}
+
+    existing = sb.table('projects').select('zoho_project_id').eq('company_id', company_id)\
+        .not_.is_('zoho_project_id', 'null').execute().data or []
+    known_ids = {r['zoho_project_id'] for r in existing}
+
+    imported, errors = 0, []
+    for zp in zoho_projects:
+        if zp['zoho_project_id'] in known_ids:
+            continue
+        try:
+            sb.table('projects').insert({
+                'company_id': company_id,
+                'name': zp['project_name'],
+                'customer': zp['customer_name'],
+                'status': 'active',
+                'zoho_project_id': zp['zoho_project_id'],
+                'source': 'zoho_import',
+            }).execute()
+            imported += 1
+        except Exception as e:
+            errors.append(f"{zp['zoho_project_id']}: {e}")
+    return {'imported': imported, 'total_in_zoho': len(zoho_projects), 'errors': errors}
+
+# ── Manual "Sync Now" — per project, or every linked project in the company.
+# Portfolio-wide runs (no project_id) also import any new Zoho projects first.
 @app.route('/api/pp-sync/run', methods=['POST'])
 def pp_run_sync():
     claims = verify_token(request)
@@ -912,6 +968,7 @@ def pp_run_sync():
     company_id = claims['company_id']
     pid = d.get('project_id')
 
+    import_result = None
     if pid:
         proj = sb.table('projects').select('*').eq('id', pid).eq('company_id', company_id).execute()
         if not proj.data: return jsonify({'error': 'Project not found'}), 404
@@ -921,6 +978,7 @@ def pp_run_sync():
         projects = [project]
     else:
         if not can_manage(claims): return jsonify({'error': 'Admin only — ask a company admin to sync the whole portfolio.'}), 403
+        import_result = _import_zoho_projects(company_id)
         projects = sb.table('projects').select('*').eq('company_id', company_id).not_.is_('zoho_project_id', 'null').execute().data or []
 
     summary = []
@@ -935,7 +993,7 @@ def pp_run_sync():
             traceback.print_exc()
         summary.append({'project_id': project['id'], 'name': project.get('name'), 'sync': sync_results, 'recalculated': bool(calc)})
 
-    return jsonify({'ok': True, 'projects_synced': len(summary), 'results': summary})
+    return jsonify({'ok': True, 'projects_synced': len(summary), 'results': summary, 'zoho_import': import_result})
 
 # ── Cron: run once daily via Vercel's Cron Jobs, same pattern as the
 # existing customer/vendor auto-sync in api/integrations.py ────────────────
@@ -953,6 +1011,7 @@ def pp_run_auto_sync():
         if not (co.get('features') or {}).get('project_performance'):
             continue
         company_id = co['id']
+        _import_zoho_projects(company_id)
         projects = sb.table('projects').select('*').eq('company_id', company_id).not_.is_('zoho_project_id', 'null').execute().data or []
         for project in projects:
             sync_results = _sync_project_actuals(company_id, project)

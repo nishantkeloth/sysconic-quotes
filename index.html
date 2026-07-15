@@ -1011,6 +1011,10 @@ async function ppCreateProjectFromQuote(wonOptionIndex){
   if(r.project_performance&&r.project_performance.needs_zoho_link){
     const zr=await api('POST','/api/integrations/zoho/create-project',{project_id:r.project_performance.project_id});
     if(zr.error)console.warn('Zoho project auto-link failed:',zr.error);
+    else if(zr.zoho_project_id){
+      A.activeQuote.zoho_project_id=zr.zoho_project_id;
+      const qi=A.quotes.findIndex(qq=>qq.id===A.activeQuote.id);if(qi>=0)A.quotes[qi].zoho_project_id=zr.zoho_project_id;
+    }
   }
   draw();
   if(r.project_performance&&r.project_performance.project_id)openProjectPerformance(r.project_performance.project_id);
@@ -2259,7 +2263,7 @@ function editorHTML(){
       <div class="fld2"><label>Date</label><input type="date" value="${o.date||''}" oninput="opts()[A.activeOpt].date=this.value;schedSave()"></div>
       <div class="fld2"><label>Prepared by</label><input value="${esc(o.by||'')}" oninput="opts()[A.activeOpt].by=this.value;schedSave()"></div>
       <div class="fld2"><label>Title / Role</label><input value="${esc(o.title||'')}" oninput="opts()[A.activeOpt].title=this.value;schedSave()"></div>
-      <div></div>
+      <div class="fld2">${q.zoho_project_id?`<label>Zoho Project ID</label><input value="${esc(q.zoho_project_id)}" readonly title="Linked Zoho Books project">`:''}</div>
     </div>
   </div>`;
 
@@ -2355,6 +2359,7 @@ function editorHTML(){
     </div>
     <div class="gs-sep"></div>
     <div class="gs-item"><div class="gs-label">Grand Total</div><div class="gs-val big grand-val" id="gsGrand">${fmtC(T.grand)}</div></div>
+    ${q.zoho_project_id?`<div class="gs-sep"></div><div class="gs-item"><div class="gs-label">Zoho Project</div><div class="gs-val" style="font-size:13px" title="Linked Zoho Books project ID">${esc(q.zoho_project_id)}</div></div>`:''}
   </div>`;
   return html;
 }
