@@ -823,6 +823,10 @@ class _ZohoSync:
                 'project_name': (r.get('project_name') or 'Untitled Zoho Project')[:500],
                 'customer_name': (r.get('customer_name') or '')[:500],
                 'status': r.get('status'),
+                # `rate` only means "Total Project Cost" for fixed-cost
+                # billing -- for hourly/daily/task billing types it's a
+                # per-hour/day rate, not a project value, so don't use it there.
+                'total_project_cost': (r.get('rate') if r.get('billing_type') == 'fixed_cost_for_project' else None),
             })
         return out
 
@@ -840,6 +844,7 @@ class _ZohoSync:
             'project_name': (r.get('project_name') or 'Untitled Zoho Project')[:500],
             'customer_name': (r.get('customer_name') or '')[:500],
             'status': r.get('status'),
+            'total_project_cost': (r.get('rate') if r.get('billing_type') == 'fixed_cost_for_project' else None),
         }
 
 ZOHO = _ZohoSync()
@@ -966,7 +971,7 @@ def _upsert_zoho_project(company_id, zp):
     """Create the local `projects` row for a Zoho project not seen before.
     Shared by the full portfolio import and the targeted Sync Selected
     lookup so both stay in sync on which fields get carried over."""
-    sb.table('projects').insert({
+    insert = {
         'company_id': company_id,
         'name': zp['project_name'],
         'customer': zp['customer_name'],
@@ -974,7 +979,36 @@ def _upsert_zoho_project(company_id, zp):
         'zoho_project_id': zp['zoho_project_id'],
         'zoho_project_no': zp.get('zoho_project_no'),
         'source': 'zoho_import',
-    }).execute()
+    }
+    cost = _num(zp.get('total_project_cost'))
+    if cost:
+        # No quote baseline exists for an imported project, so Zoho's own
+        # Total Project Cost is the best available stand-in for Value --
+        # revenue_forecast is what the Portfolio/detail Value figures read.
+        insert['revenue_forecast'] = cost
+        insert['original_selling_price'] = cost
+    sb.table('projects').insert(insert).execute()
+
+def _zoho_project_patch(row, zp):
+    """Compute which fields on an *existing* local project row should be
+    refreshed from newer Zoho data -- shared by the full-portfolio backfill
+    and the Sync Selected backfill so both apply the same rules."""
+    patch = {}
+    if zp.get('zoho_project_no') and row.get('zoho_project_no') != zp['zoho_project_no']:
+        patch['zoho_project_no'] = zp['zoho_project_no']
+    if zp.get('project_name') and row.get('name') != zp['project_name']:
+        patch['name'] = zp['project_name']
+    if zp.get('customer_name') and row.get('customer') != zp['customer_name']:
+        patch['customer'] = zp['customer_name']
+    # Only ever set Value from Zoho's Total Project Cost for projects with
+    # no quote-derived baseline (source='zoho_import') and no value set yet
+    # -- never overwrite a real commercial baseline frozen from an awarded quote.
+    if row.get('source') == 'zoho_import' and not _num(row.get('revenue_forecast')):
+        cost = _num(zp.get('total_project_cost'))
+        if cost:
+            patch['revenue_forecast'] = cost
+            patch['original_selling_price'] = cost
+    return patch
 
 def _import_zoho_projects(company_id, project_filter=None):
     """project_filter, if given, is a predicate over the fetch_all_projects
@@ -992,7 +1026,7 @@ def _import_zoho_projects(company_id, project_filter=None):
     if project_filter:
         zoho_projects = [zp for zp in zoho_projects if project_filter(zp)]
 
-    existing = sb.table('projects').select('id,zoho_project_id,zoho_project_no,name,customer').eq('company_id', company_id)\
+    existing = sb.table('projects').select('id,zoho_project_id,zoho_project_no,name,customer,source,revenue_forecast').eq('company_id', company_id)\
         .not_.is_('zoho_project_id', 'null').execute().data or []
     existing_by_id = {r['zoho_project_id']: r for r in existing}
 
@@ -1000,17 +1034,10 @@ def _import_zoho_projects(company_id, project_filter=None):
     for zp in zoho_projects:
         row = existing_by_id.get(zp['zoho_project_id'])
         if row:
-            # Already imported before -- but if Zoho now has a Project No
-            # (cf_project_no) that we didn't capture back when this row was
-            # first created, or the name/customer changed in Zoho since,
-            # backfill it rather than leaving the row stale forever.
-            patch = {}
-            if zp.get('zoho_project_no') and row.get('zoho_project_no') != zp['zoho_project_no']:
-                patch['zoho_project_no'] = zp['zoho_project_no']
-            if zp.get('project_name') and row.get('name') != zp['project_name']:
-                patch['name'] = zp['project_name']
-            if zp.get('customer_name') and row.get('customer') != zp['customer_name']:
-                patch['customer'] = zp['customer_name']
+            # Already imported before -- backfill anything we're missing
+            # (Project No, name/customer changes, Value) rather than leaving
+            # the row stale forever.
+            patch = _zoho_project_patch(row, zp)
             if patch:
                 try:
                     sb.table('projects').update(patch).eq('id', row['id']).execute()
@@ -1039,7 +1066,7 @@ def _import_specific_zoho_projects(company_id, values):
     if not creds or not ZOHO.is_configured(creds):
         return {'imported': 0, 'updated': 0, 'total_in_zoho': len(values), 'errors': ['Zoho Books is not connected for this company']}
 
-    existing = sb.table('projects').select('id,zoho_project_id,zoho_project_no').eq('company_id', company_id).execute().data or []
+    existing = sb.table('projects').select('id,zoho_project_id,zoho_project_no,name,customer,source,revenue_forecast').eq('company_id', company_id).execute().data or []
     by_id = {r['zoho_project_id']: r for r in existing if r.get('zoho_project_id')}
     by_no = {r['zoho_project_no']: r for r in existing if r.get('zoho_project_no')}
 
@@ -1050,15 +1077,16 @@ def _import_specific_zoho_projects(company_id, values):
         if not row:
             to_resolve.append(v)
             continue
-        # Already local -- but backfill zoho_project_no if we're missing it
-        # (e.g. this row was imported before the cf_project_no field was
-        # being captured at all).
-        if not row.get('zoho_project_no') and row.get('zoho_project_id'):
+        # Already local -- refresh from Zoho in case Project No, name,
+        # customer, or Value (Total Project Cost) weren't captured before.
+        if row.get('zoho_project_id'):
             try:
                 zp = ZOHO.fetch_project(creds, row['zoho_project_id'])
-                if zp and zp.get('zoho_project_no'):
-                    sb.table('projects').update({'zoho_project_no': zp['zoho_project_no']}).eq('id', row['id']).execute()
-                    updated += 1
+                if zp:
+                    patch = _zoho_project_patch(row, zp)
+                    if patch:
+                        sb.table('projects').update(patch).eq('id', row['id']).execute()
+                        updated += 1
             except Exception as e:
                 errors.append(f'{v}: {e}')
 
