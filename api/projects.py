@@ -1056,6 +1056,23 @@ def _zoho_project_patch(row, zp):
             patch['original_selling_price'] = cost
     return patch
 
+def _mirror_zoho_no_to_quote(company_id, row, patch):
+    """zoho_create_project() mirrors zoho_project_no onto the originating
+    quote once, at the instant the Zoho project is created -- but Zoho often
+    doesn't have cf_project_no (the human-readable Project No) assigned yet
+    at that exact moment; it shows up moments later via Zoho's own
+    auto-numbering. A later sync backfills it onto the `projects` row via
+    _zoho_project_patch above, but that never touched the `quotes` row, so
+    the quote editor kept showing the long internal Zoho ID forever even
+    after the project itself had the correct Project No. Call this right
+    after applying `patch` to the projects row so the quote catches up too."""
+    if patch.get('zoho_project_no') and row.get('quotation_id'):
+        try:
+            sb.table('quotes').update({'zoho_project_no': patch['zoho_project_no']})\
+                .eq('id', row['quotation_id']).eq('company_id', company_id).execute()
+        except Exception:
+            pass  # best-effort -- the projects-row patch above is the source of truth
+
 def _import_zoho_projects(company_id, project_filter=None):
     """project_filter, if given, is a predicate over the fetch_all_projects
     dicts -- used by the Project No range sync so it only imports/backfills
@@ -1072,7 +1089,7 @@ def _import_zoho_projects(company_id, project_filter=None):
     if project_filter:
         zoho_projects = [zp for zp in zoho_projects if project_filter(zp)]
 
-    existing = sb.table('projects').select('id,zoho_project_id,zoho_project_no,name,customer,source,revenue_forecast').eq('company_id', company_id)\
+    existing = sb.table('projects').select('id,zoho_project_id,zoho_project_no,name,customer,source,revenue_forecast,quotation_id').eq('company_id', company_id)\
         .not_.is_('zoho_project_id', 'null').execute().data or []
     existing_by_id = {r['zoho_project_id']: r for r in existing}
 
@@ -1087,6 +1104,7 @@ def _import_zoho_projects(company_id, project_filter=None):
             if patch:
                 try:
                     sb.table('projects').update(patch).eq('id', row['id']).execute()
+                    _mirror_zoho_no_to_quote(company_id, row, patch)
                     updated += 1
                 except Exception as e:
                     errors.append(f"{zp['zoho_project_id']}: {e}")
@@ -1112,7 +1130,7 @@ def _import_specific_zoho_projects(company_id, values):
     if not creds or not ZOHO.is_configured(creds):
         return {'imported': 0, 'updated': 0, 'total_in_zoho': len(values), 'errors': ['Zoho Books is not connected for this company']}
 
-    existing = sb.table('projects').select('id,zoho_project_id,zoho_project_no,name,customer,source,revenue_forecast').eq('company_id', company_id).execute().data or []
+    existing = sb.table('projects').select('id,zoho_project_id,zoho_project_no,name,customer,source,revenue_forecast,quotation_id').eq('company_id', company_id).execute().data or []
     by_id = {r['zoho_project_id']: r for r in existing if r.get('zoho_project_id')}
     by_no = {r['zoho_project_no']: r for r in existing if r.get('zoho_project_no')}
 
@@ -1132,6 +1150,7 @@ def _import_specific_zoho_projects(company_id, values):
                     patch = _zoho_project_patch(row, zp)
                     if patch:
                         sb.table('projects').update(patch).eq('id', row['id']).execute()
+                        _mirror_zoho_no_to_quote(company_id, row, patch)
                         updated += 1
             except Exception as e:
                 errors.append(f'{v}: {e}')
