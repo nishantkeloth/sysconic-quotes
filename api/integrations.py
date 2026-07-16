@@ -107,15 +107,29 @@ class ZohoAdapter:
             detail = e.read().decode('utf-8', 'ignore')[:300]
             raise RuntimeError(f'Zoho API error {e.code}: {detail}')
 
-    def create_project(self, creds, name, customer_id, rate=None):
+    def create_project(self, creds, name, customer_id, rate=None, cost_budget=None, revenue_budget=None):
         # billing_type='fixed_cost_for_project' requires Zoho's `rate` field
         # at creation time (Zoho rejects the call with "Please enter rate for
         # this project" -- code 20007 -- otherwise). `rate` is what Zoho later
         # displays as "Total Project Cost", so this is the awarded quote's
         # contract value (projects.original_selling_price / revenue_forecast).
+        #
+        # cost_budget / revenue_budget map to Zoho's "Cost Budget" (what you
+        # expect to spend) and "Revenue Budget" (what you expect to earn) --
+        # a separate concept from `rate`, per Zoho's own docs. Field names
+        # here (cost_budget/revenue_budget) are a best-effort guess -- the
+        # Books API reference for this endpoint is a JS-rendered page that
+        # couldn't be read to confirm the exact keys. If Zoho rejects or
+        # silently ignores them, that'll surface on the next attempt (this
+        # call already raises/returns Zoho's real error body instead of
+        # swallowing it) and the keys below should be corrected then.
         body = {'project_name': str(name)[:100], 'customer_id': str(customer_id), 'billing_type': 'fixed_cost_for_project'}
         if rate:
             body['rate'] = float(rate)
+        if cost_budget:
+            body['cost_budget'] = float(cost_budget)
+        if revenue_budget:
+            body['revenue_budget'] = float(revenue_budget)
         r = self._post(creds, '/projects', body)
         proj = r.get('project') or {}
         if not proj.get('project_id'):
@@ -620,8 +634,12 @@ def zoho_create_project():
     rate = proj.get('original_selling_price') or proj.get('revenue_forecast')
     if not rate:
         return jsonify({'error': 'This project has no value set (original_selling_price/revenue_forecast) -- Zoho requires a project cost/rate to create a fixed-cost project.'}), 400
+    # Cost Budget = what the baseline estimated we'd spend; Revenue Budget =
+    # the contract value (same figure as `rate`).
+    cost_budget = proj.get('original_estimated_cost')
     try:
-        zoho_proj = adapter.create_project(creds, proj['name'], match.data[0]['external_contact_id'], rate=rate)
+        zoho_proj = adapter.create_project(creds, proj['name'], match.data[0]['external_contact_id'],
+                                            rate=rate, cost_budget=cost_budget, revenue_budget=rate)
     except Exception as e:
         return jsonify({'error': f'Zoho project creation failed: {str(e)[:400]}'}), 502
     # zoho_project_id is Zoho's internal id (required for every subsequent
