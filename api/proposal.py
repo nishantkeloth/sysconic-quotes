@@ -323,11 +323,11 @@ def bom_table(sections, CW, cur, with_price):
             flow.append(Paragraph(f"<b>{esc_p(s['name'])}</b>", ParagraphStyle('sn', fontName='Helvetica-Bold', fontSize=10, textColor=NAVY)))
             flow.append(Spacer(1, 1.5*mm))
         if with_price:
-            hdr = ['#','Brand','Model','Description', f'Unit Price ({cur})', 'Qty', f'Total ({cur})']
-            widths = [CW*0.04, CW*0.11, CW*0.14, CW*0.35, CW*0.14, CW*0.07, CW*0.15]
+            hdr = ['#','Brand','Model','Description', f'Unit Price ({cur})', 'Qty', 'UOM', f'Total ({cur})']
+            widths = [CW*0.04, CW*0.10, CW*0.13, CW*0.32, CW*0.13, CW*0.06, CW*0.06, CW*0.16]
         else:
-            hdr = ['#','Brand','Model','Description','Qty']
-            widths = [CW*0.05, CW*0.16, CW*0.20, CW*0.49, CW*0.10]
+            hdr = ['#','Brand','Model','Description','Qty','UOM']
+            widths = [CW*0.05, CW*0.15, CW*0.19, CW*0.44, CW*0.08, CW*0.09]
         rows = [[Paragraph(h, S_th) for h in hdr]]
         rn = 1
         for it in (s.get('items') or []):
@@ -335,11 +335,12 @@ def bom_table(sections, CW, cur, with_price):
             if with_price:
                 rows.append([Paragraph(str(rn), S_bc), Paragraph(esc_p(it.get('brand') or ''), S_b),
                              Paragraph(esc_p(it.get('model') or ''), S_b), Paragraph(esc_p(it.get('desc') or ''), S_b),
-                             Paragraph(fmt(up), S_br), Paragraph(fmt(_num(it.get('qty'))), S_bc), Paragraph(fmt(tp), S_br)])
+                             Paragraph(fmt(up), S_br), Paragraph(fmt(_num(it.get('qty'))), S_bc),
+                             Paragraph(esc_p(it.get('uom') or 'Pcs'), S_bc), Paragraph(fmt(tp), S_br)])
             else:
                 rows.append([Paragraph(str(rn), S_bc), Paragraph(esc_p(it.get('brand') or ''), S_b),
                              Paragraph(esc_p(it.get('model') or ''), S_b), Paragraph(esc_p(it.get('desc') or ''), S_b),
-                             Paragraph(fmt(_num(it.get('qty'))), S_bc)])
+                             Paragraph(fmt(_num(it.get('qty'))), S_bc), Paragraph(esc_p(it.get('uom') or 'Pcs'), S_bc)])
             rn += 1
         tbl = Table(rows, colWidths=widths, repeatRows=1)
         style = [('BACKGROUND',(0,0),(-1,0),NAVY),('VALIGN',(0,0),(-1,-1),'TOP'),

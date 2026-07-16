@@ -213,8 +213,8 @@ def build_quote_pdf(quote, logo_bytes, which='all', company=None):
         # table) followed by its own item table — mirrors the on-screen/print
         # view, where sections are visually separate blocks rather than rows
         # merged into one continuous table.
-        widths = [CW*0.04, CW*0.10, CW*0.13, CW*0.30, CW*0.12, CW*0.06, CW*0.11, CW*0.14]
-        header = [Paragraph(x, S['th']) for x in ['#','Brand','Model','Description',f'Unit ({cur})','Qty','VAT',f'Total ({cur})']]
+        widths = [CW*0.04, CW*0.09, CW*0.12, CW*0.30, CW*0.11, CW*0.05, CW*0.06, CW*0.10, CW*0.13]
+        header = [Paragraph(x, S['th']) for x in ['#','Brand','Model','Description',f'Unit ({cur})','Qty','UOM','VAT',f'Total ({cur})']]
         rn = 1
         for s in (o.get('sections') or []):
             if s.get('name'):
@@ -231,6 +231,7 @@ def build_quote_pdf(quote, logo_bytes, which='all', company=None):
                 rows.append([Paragraph(str(rn), S['baseC']), Paragraph(str(it.get('brand') or ''), S['base']),
                              Paragraph(str(it.get('model') or ''), S['base']), Paragraph(str(it.get('desc') or ''), S['base']),
                              Paragraph(fmt(up), S['baseR']), Paragraph(fmt(_num(it.get('qty'))), S['baseC']),
+                             Paragraph(str(it.get('uom') or 'Pcs'), S['baseC']),
                              Paragraph(fmt(vat_amt) if vat_amt is not None else '—', vat_style),
                              Paragraph(fmt(tp), S['baseR'])])
                 rn += 1
