@@ -134,6 +134,26 @@ class ZohoAdapter:
         proj = r.get('project') or {}
         if not proj.get('project_id'):
             raise RuntimeError('Zoho did not return a project id: ' + json.dumps(r)[:200])
+        # Zoho doesn't reliably have cf_project_no (the human-readable
+        # Project No, e.g. "PRJ100193") populated in the immediate create
+        # response -- it gets auto-assigned moments later on Zoho's side.
+        # Without this, the frontend was stuck showing the long internal
+        # project_id until someone ran a separate Sync later. Poll briefly
+        # (a few seconds, well inside Vercel's function budget) so the real
+        # Project No comes back in the same request whenever possible; a
+        # later sync still backfills it if Zoho is slower than this.
+        if not proj.get('cf_project_no'):
+            pid = proj['project_id']
+            for wait in (1, 2):
+                time.sleep(wait)
+                try:
+                    fresh = self._get(creds, f'/projects/{pid}', {})
+                    fresh_proj = fresh.get('project') or {}
+                    if fresh_proj.get('cf_project_no'):
+                        proj = fresh_proj
+                        break
+                except Exception:
+                    pass
         return proj
 
     # ── Project Performance actuals fetch ───────────────────────────────────
