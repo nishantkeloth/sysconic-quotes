@@ -597,7 +597,18 @@ def zoho_create_project():
     match = sb.table('customers').select('external_contact_id,name').eq('company_id', claims['company_id']).ilike('name', customer_name).execute()
     if not match.data or not match.data[0].get('external_contact_id'):
         return jsonify({'error': f'Customer "{customer_name}" not found in the synced Zoho customer list. Sync customers or check the exact name.'}), 400
-    zoho_proj = adapter.create_project(creds, proj['name'], match.data[0]['external_contact_id'])
+    # adapter.create_project() (and the _post()/_get() it calls) raise plain
+    # RuntimeErrors on any Zoho API failure (bad auth, expired token, invalid
+    # field, org mismatch, etc). Uncaught, that fell through to Flask's
+    # default error handler, which returns a generic HTML 500 page instead
+    # of JSON -- the frontend then choked trying to parse it as JSON, and
+    # the *actual* Zoho error message (which _post()/_get() already capture)
+    # never reached the user. Catching it here and returning it as JSON is
+    # the fix -- this endpoint should never 500 with an opaque HTML page.
+    try:
+        zoho_proj = adapter.create_project(creds, proj['name'], match.data[0]['external_contact_id'])
+    except Exception as e:
+        return jsonify({'error': f'Zoho project creation failed: {str(e)[:400]}'}), 502
     # zoho_project_id is Zoho's internal id (required for every subsequent
     # Zoho API call -- POs/bills/expenses/invoices are all fetched by it).
     # zoho_project_no is the human-readable number staff actually use,
