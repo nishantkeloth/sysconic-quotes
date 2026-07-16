@@ -308,11 +308,18 @@ def _activate_project_performance(claims, quote, won_option_index):
         'won_option_index': won_option_index,
     }).eq('id', project['id']).eq('company_id', company_id).execute()
 
-    options = quote.get('quote_data') or []
-    option = options[won_option_index] if won_option_index < len(options) else (options[0] if options else {})
-    _freeze_commercial_baseline(company_id, user_id, project['id'], quote, option)
+    # Idempotency (requirement: a project must never be created twice for the
+    # same won quotation) -- if a baseline already exists for this project,
+    # this is a repeat click (e.g. double-submit, or retrying after the Zoho
+    # link step failed) -- reuse it rather than freezing a second one.
+    existing_baseline = sb.table('project_commercial_baselines').select('id').eq('project_id', project['id']).limit(1).execute()
+    already_activated = bool(existing_baseline.data)
+    if not already_activated:
+        options = quote.get('quote_data') or []
+        option = options[won_option_index] if won_option_index < len(options) else (options[0] if options else {})
+        _freeze_commercial_baseline(company_id, user_id, project['id'], quote, option)
 
-    return {'project_id': project['id'], 'needs_zoho_link': not bool(project.get('zoho_project_id'))}
+    return {'project_id': project['id'], 'needs_zoho_link': not bool(project.get('zoho_project_id')), 'already_activated': already_activated}
 
 # ── Update quote ───────────────────────────────────────────────────────────────
 # A quote is only editable while its status is 'draft'. Once it's been
@@ -345,33 +352,6 @@ def update_quote(qid):
     if old_status != 'draft' and not is_transitioning and touches_content:
         return jsonify({'error': f'This quote is locked because its status is "{STATUS_LABELS_PY.get(old_status, old_status)}". Set the status back to Draft to edit it.'}), 423
 
-    # Won -> project performance activation. Checked *before* writing the
-    # status change so a quote never gets stuck half-awarded: if the quote
-    # carries more than one live pricing option and the caller hasn't said
-    # which one actually won, this returns 409 without touching the row at
-    # all, and the frontend is expected to ask the user, then resubmit this
-    # same PUT with won_option_index set.
-    pp_activation = None
-    if is_transitioning and new_status == 'awarded' and old_status != 'awarded' and _has_feature(claims, 'project_performance'):
-        options = update.get('quote_data') if 'quote_data' in update else existing.data[0].get('quote_data')
-        options = options or []
-        won_idx = d.get('won_option_index')
-        if won_idx is None:
-            won_idx = 0 if len(options) <= 1 else None
-        if won_idx is None:
-            return jsonify({
-                'error': 'This quote has more than one pricing option — pick which one was awarded.',
-                'needs_won_option_index': True,
-                'options': [{'index': i, 'label': o.get('label') or f'Option {i+1}'} for i, o in enumerate(options)],
-            }), 409
-        try:
-            won_idx = int(won_idx)
-        except (TypeError, ValueError):
-            return jsonify({'error': 'won_option_index must be a number'}), 400
-        if won_idx < 0 or (options and won_idx >= len(options)):
-            return jsonify({'error': 'won_option_index is out of range for this quote'}), 400
-        update['won_option_index'] = won_idx
-
     row = sb.table('quotes').update(update).eq('id', qid).execute()
     updated_quote = row.data[0]
     # Log status changes specifically (not every autosave — that would flood
@@ -379,23 +359,66 @@ def update_quote(qid):
     if 'status' in update and update['status'] != old_status:
         _log_activity(qid, claims['user_id'], 'status_changed', f"{STATUS_LABELS_PY.get(old_status, old_status)} → {STATUS_LABELS_PY.get(update['status'], update['status'])}")
 
-    # Best-effort -- a failure here must not undo or block the status change
-    # that already landed. Surfaced back to the frontend as a warning so the
-    # user isn't left thinking baseline creation succeeded when it didn't;
-    # the manual "+ Zoho" / a retry path can pick this back up.
-    if 'won_option_index' in update:
-        try:
-            pp_activation = _activate_project_performance(claims, updated_quote, update['won_option_index'])
-            _log_activity(qid, claims['user_id'], 'project_performance_activated',
-                          f"Commercial baseline frozen, project {pp_activation['project_id']}")
-        except Exception as e:
-            traceback.print_exc()
-            pp_activation = {'error': f'Quote was marked Awarded, but Project Performance activation failed: {str(e)[:250]}'}
+    return jsonify({'quote': updated_quote})
 
-    resp = {'quote': updated_quote}
-    if pp_activation is not None:
-        resp['project_performance'] = pp_activation
-    return jsonify(resp)
+# ── Create Project (Project Performance) ────────────────────────────────────
+# Deliberately a separate, explicit action rather than something that fires
+# silently inside the status save above: a "Create Project" button appears
+# in the quote editor once status is Awarded, and this is what it calls.
+# Freezes the commercial baseline and creates/links the local project;
+# Zoho project creation itself is a follow-up call the frontend makes to the
+# existing /api/integrations/zoho/create-project endpoint (see the note on
+# _activate_project_performance above for why that lives in a different file).
+@app.route('/api/quotes/<qid>/create-project', methods=['POST'])
+def create_project_from_quote(qid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not _has_feature(claims, 'project_performance'):
+        return jsonify({'error': 'Project Performance is not enabled for this company'}), 403
+
+    existing = sb.table('quotes').select('id,created_by,status,quote_data,pricing_type,current_version,project_id,quote_ref,title,customer').eq('id', qid).eq('company_id', claims['company_id']).execute()
+    if not existing.data: return jsonify({'error': 'Not found'}), 404
+    quote = existing.data[0]
+    if not _can_edit_quote(quote, claims):
+        return jsonify({'error': 'Forbidden'}), 403
+    if quote.get('status') != 'awarded':
+        return jsonify({'error': 'This quote must be Awarded before a project can be created'}), 400
+
+    d = request.json or {}
+    options = quote.get('quote_data') or []
+    won_idx = d.get('won_option_index')
+    if won_idx is None:
+        won_idx = 0 if len(options) <= 1 else None
+    if won_idx is None:
+        return jsonify({
+            'error': 'This quote has more than one pricing option — pick which one was awarded.',
+            'needs_won_option_index': True,
+            'options': [{'index': i, 'label': o.get('label') or f'Option {i+1}'} for i, o in enumerate(options)],
+        }), 409
+    try:
+        won_idx = int(won_idx)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'won_option_index must be a number'}), 400
+    if won_idx < 0 or (options and won_idx >= len(options)):
+        return jsonify({'error': 'won_option_index is out of range for this quote'}), 400
+
+    sb.table('quotes').update({'won_option_index': won_idx}).eq('id', qid).eq('company_id', claims['company_id']).execute()
+    quote['won_option_index'] = won_idx
+
+    try:
+        pp_activation = _activate_project_performance(claims, quote, won_idx)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': f'Project creation failed: {str(e)[:250]}'}), 500
+
+    if not pp_activation.get('already_activated'):
+        _log_activity(qid, claims['user_id'], 'project_performance_activated',
+                      f"Commercial baseline frozen, project {pp_activation['project_id']}")
+
+    # Return the refreshed quote too so the frontend can update project_id
+    # in place without a second round trip.
+    refreshed = sb.table('quotes').select('*').eq('id', qid).eq('company_id', claims['company_id']).execute()
+    return jsonify({'ok': True, 'project_performance': pp_activation, 'quote': refreshed.data[0] if refreshed.data else None})
 
 # ── Delete quote ───────────────────────────────────────────────────────────────
 @app.route('/api/quotes/<qid>', methods=['DELETE'])
