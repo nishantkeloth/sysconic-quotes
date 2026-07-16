@@ -145,14 +145,43 @@ class ZohoAdapter:
         return out
 
     def fetch_purchase_orders(self, creds, zoho_project_id):
-        """Returns (po_dicts, line_dicts) -- line items aren't included on the
-        list endpoint in Zoho Books v3, so each PO is re-fetched individually
-        for its line_items. Committed-cost calculation needs both."""
+        """Returns (po_dicts, line_dicts). Zoho lets each PO *line item* be
+        assigned to a different project (line item -> More -> Project) --
+        confirmed in Zoho's own API docs, line_items[].project_id /
+        .project_name -- so a single PO can span multiple projects. Its
+        header-level `total` is the sum across ALL of them, not just this
+        one. When any line item carries a project_id, this scopes the PO's
+        total/billed_total and the stored lines down to just the lines that
+        belong to THIS project, instead of attributing the whole PO to
+        whichever project's sync happens to run first. Falls back to the
+        header total when no line carries a project_id at all (org isn't
+        using per-line project assignment). Kept in sync by hand with the
+        duplicate of this method in api/projects.py's _ZohoSync -- that one
+        is what the actual sync engine calls; this copy exists for the same
+        one-file-per-route reason as the rest of this adapter."""
         rows = self._fetch_paginated(creds, '/purchaseorders', {'project_id': zoho_project_id}, 'purchaseorders')
         pos, lines = [], []
         for r in rows:
             po_id = r.get('purchaseorder_id')
             if not po_id: continue
+            try:
+                detail = self._get(creds, f'/purchaseorders/{po_id}', {})
+                all_lines = (detail.get('purchaseorder') or {}).get('line_items') or []
+            except Exception:
+                all_lines = []  # best-effort; PO header row still syncs on the fallback below
+
+            lines_with_project = [li for li in all_lines if li.get('project_id')]
+            if lines_with_project:
+                matching = [li for li in all_lines if str(li.get('project_id') or '') == str(zoho_project_id)]
+                po_total = sum(float(li.get('item_total') or 0) for li in matching)
+                header_total = float(r.get('total') or 0)
+                share = (po_total / header_total) if header_total else 0.0
+                billed_total = float(r.get('total_invoiced_amount') or r.get('billed_amount') or 0) * share
+            else:
+                matching = all_lines
+                po_total = r.get('total') or 0
+                billed_total = r.get('total_invoiced_amount') or r.get('billed_amount') or 0
+
             pos.append({
                 'zoho_purchase_order_id': po_id,
                 'zoho_project_id': zoho_project_id,
@@ -160,33 +189,49 @@ class ZohoAdapter:
                 'po_date': r.get('date'),
                 'vendor_name': r.get('vendor_name'),
                 'status': r.get('status'),
-                'total': r.get('total') or 0,
-                'billed_total': r.get('total_invoiced_amount') or r.get('billed_amount') or 0,
+                'total': po_total,
+                'billed_total': billed_total,
                 'raw': r,
             })
-            try:
-                detail = self._get(creds, f'/purchaseorders/{po_id}', {})
-                for li in (detail.get('purchaseorder') or {}).get('line_items') or []:
-                    lines.append({
-                        'zoho_purchase_order_id': po_id,
-                        'zoho_purchase_order_line_id': li.get('line_item_id'),
-                        'zoho_item_id': li.get('item_id'),
-                        'item_name': li.get('name') or li.get('description'),
-                        'quantity': li.get('quantity') or 0,
-                        'rate': li.get('rate') or 0,
-                        'total': li.get('item_total') or 0,
-                        'raw': li,
-                    })
-            except Exception:
-                pass  # line-item detail fetch is best-effort; the PO header row is still synced
+            for li in matching:
+                lines.append({
+                    'zoho_purchase_order_id': po_id,
+                    'zoho_purchase_order_line_id': li.get('line_item_id'),
+                    'zoho_item_id': li.get('item_id'),
+                    'item_name': li.get('name') or li.get('description'),
+                    'quantity': li.get('quantity') or 0,
+                    'rate': li.get('rate') or 0,
+                    'total': li.get('item_total') or 0,
+                    'raw': li,
+                })
         return pos, lines
 
     def fetch_bills(self, creds, zoho_project_id):
+        """Same rationale as fetch_purchase_orders above: Zoho lets each
+        bill line item be assigned to its own project too, so a bill can
+        span multiple projects. Scopes total/lines to just this project's
+        share when line items carry a project_id; falls back to the header
+        total otherwise. Kept in sync by hand with api/projects.py's
+        _ZohoSync copy, which is what the sync engine actually calls."""
         rows = self._fetch_paginated(creds, '/bills', {'project_id': zoho_project_id}, 'bills')
         bills, lines = [], []
         for r in rows:
             bill_id = r.get('bill_id')
             if not bill_id: continue
+            try:
+                detail = self._get(creds, f'/bills/{bill_id}', {})
+                all_lines = (detail.get('bill') or {}).get('line_items') or []
+            except Exception:
+                all_lines = []
+
+            lines_with_project = [li for li in all_lines if li.get('project_id')]
+            if lines_with_project:
+                matching = [li for li in all_lines if str(li.get('project_id') or '') == str(zoho_project_id)]
+                bill_total = sum(float(li.get('item_total') or 0) for li in matching)
+            else:
+                matching = all_lines
+                bill_total = r.get('total') or 0
+
             bills.append({
                 'zoho_bill_id': bill_id,
                 'zoho_purchase_order_id': r.get('purchaseorder_id') or r.get('purchase_order_id'),
@@ -194,24 +239,20 @@ class ZohoAdapter:
                 'bill_date': r.get('date'),
                 'vendor_name': r.get('vendor_name'),
                 'status': r.get('status'),
-                'total': r.get('total') or 0,
+                'total': bill_total,
                 'raw': r,
             })
-            try:
-                detail = self._get(creds, f'/bills/{bill_id}', {})
-                for li in (detail.get('bill') or {}).get('line_items') or []:
-                    lines.append({
-                        'zoho_bill_id': bill_id,
-                        'zoho_bill_line_id': li.get('line_item_id'),
-                        'zoho_item_id': li.get('item_id'),
-                        'item_name': li.get('name') or li.get('description'),
-                        'quantity': li.get('quantity') or 0,
-                        'rate': li.get('rate') or 0,
-                        'total': li.get('item_total') or 0,
-                        'raw': li,
-                    })
-            except Exception:
-                pass
+            for li in matching:
+                lines.append({
+                    'zoho_bill_id': bill_id,
+                    'zoho_bill_line_id': li.get('line_item_id'),
+                    'zoho_item_id': li.get('item_id'),
+                    'item_name': li.get('name') or li.get('description'),
+                    'quantity': li.get('quantity') or 0,
+                    'rate': li.get('rate') or 0,
+                    'total': li.get('item_total') or 0,
+                    'raw': li,
+                })
         return bills, lines
 
     def fetch_expenses(self, creds, zoho_project_id):
