@@ -189,14 +189,14 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 
 /* ── Column headers ── */
 .col-hd{display:grid;padding:9px 14px;background:var(--navy);border-radius:8px 8px 0 0;font-size:12px;font-weight:700;color:rgba(255,255,255,.85);text-transform:uppercase;letter-spacing:.05em}
-.col-hd.int{grid-template-columns:46px 28px 90px 130px 80px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 95px 92px 128px 28px;min-width:1316px;font-size:10.5px;letter-spacing:.02em}
+.col-hd.int{grid-template-columns:46px 28px 90px 130px 80px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 55px 95px 92px 128px 28px;min-width:1371px;font-size:10.5px;letter-spacing:.02em}
 .col-hd.int div{padding:0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-right:1px solid rgba(255,255,255,.15)}
 .col-hd.int div:last-child{border-right:none}
 .item-row.int>*{border-right:1px solid var(--gray-100)}
 .item-row.int>*:last-child{border-right:none}
-.col-hd.int.img{grid-template-columns:46px 28px 44px 90px 130px 80px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 95px 92px 128px 28px;min-width:1360px}
-.col-hd.cli{grid-template-columns:28px 90px 140px 1fr 60px 95px 115px 28px}
-.col-hd.cli.img{grid-template-columns:28px 44px 90px 140px 1fr 60px 95px 115px 28px}
+.col-hd.int.img{grid-template-columns:46px 28px 44px 90px 130px 80px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 55px 95px 92px 128px 28px;min-width:1415px}
+.col-hd.cli{grid-template-columns:28px 90px 140px 1fr 60px 55px 95px 115px 28px}
+.col-hd.cli.img{grid-template-columns:28px 44px 90px 140px 1fr 60px 55px 95px 115px 28px}
 .col-hd div{padding:0 5px}
 .grid-scroll{overflow-x:auto;overflow-y:hidden}
 
@@ -205,12 +205,12 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .item-row{display:grid;padding:9px 14px;align-items:start;border-bottom:1px solid var(--gray-100);transition:background .12s}
 .item-row:last-child{border-bottom:none}
 .item-row:hover{background:#f5f8ff}
-.item-row.int{grid-template-columns:46px 28px 90px 130px 80px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 95px 92px 128px 28px;min-width:1316px}
+.item-row.int{grid-template-columns:46px 28px 90px 130px 80px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 55px 95px 92px 128px 28px;min-width:1371px}
 .item-row.int input[type=number]{padding:7px 5px;font-size:13px}
 .item-row.int .icalc{font-size:13px}
-.item-row.int.img{grid-template-columns:46px 28px 44px 90px 130px 80px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 95px 92px 128px 28px;min-width:1360px}
-.item-row.cli{grid-template-columns:28px 90px 140px 1fr 60px 95px 115px 28px}
-.item-row.cli.img{grid-template-columns:28px 44px 90px 140px 1fr 60px 95px 115px 28px}
+.item-row.int.img{grid-template-columns:46px 28px 44px 90px 130px 80px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 55px 95px 92px 128px 28px;min-width:1415px}
+.item-row.cli{grid-template-columns:28px 90px 140px 1fr 60px 55px 95px 115px 28px}
+.item-row.cli.img{grid-template-columns:28px 44px 90px 140px 1fr 60px 55px 95px 115px 28px}
 .item-row>*{padding:0 5px}
 .inum{font-size:12px;color:var(--gray-300);font-weight:700;text-align:center;padding-top:10px}
 .iinput{width:100%;padding:7px 8px;font-size:14px;border:1.5px solid transparent;border-radius:6px;font-family:inherit;color:var(--gray-900);background:transparent;transition:all .15s;resize:none;overflow:hidden;min-height:36px;line-height:1.4}
@@ -941,8 +941,8 @@ const fmtC=n=>A.cur+' '+fmt(n);
 const sym=()=>A.cur;
 
 // ── Data factories ───────────────────────────────────────────────────────────
-function mkItem(brand='',model='',desc='',qty=1,cost=0,disc=0,margin=0.2,discAdd=0,costUsd=0,vendor=''){
-  return{id:uid(),brand,model,desc,qty,cost,disc,margin,discAdd,costUsd,vendor};
+function mkItem(brand='',model='',desc='',qty=1,cost=0,disc=0,margin=0.2,discAdd=0,costUsd=0,vendor='',uom='Pcs'){
+  return{id:uid(),brand,model,desc,qty,cost,disc,margin,discAdd,costUsd,vendor,uom};
 }
 function mkOption(label='Option 1'){
   return{id:uid(),label,customer:'',ref:'QT-2026-001',
@@ -2450,7 +2450,7 @@ function editorHTML(){
   (o.sections||[]).forEach((s,si)=>{
     let rn=1;
     const IC=IMG?['']:[];
-    const hds=isInt?['','#',...IC,'Vendor','Model','Brand','Description','USD Cost','Cost','Disc%','Add.Disc%',(A.activeQuote?.pricing_type==='margin'?'Margin%':'Markup%'),'Qty','Unit Price','VAT','Total','']:['#',...IC,'Brand','Model','Description','Qty','Unit Price','Total',''];
+    const hds=isInt?['','#',...IC,'Vendor','Model','Brand','Description','USD Cost','Cost','Disc%','Add.Disc%',(A.activeQuote?.pricing_type==='margin'?'Margin%':'Markup%'),'Qty','UOM','Unit Price','VAT','Total','']:['#',...IC,'Brand','Model','Description','Qty','UOM','Unit Price','Total',''];
     let rows='';
     s.items.forEach((it,ii)=>{
       const c=calcItem(it);
@@ -2476,6 +2476,7 @@ function editorHTML(){
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="discadd" value="${it.discAdd||0}" oninput="liveCalc(this)" title="Additional discount, applied on top of Disc%" placeholder="0">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="margin" value="${((it.margin||0.2)*100).toFixed(2)}" step="0.01" oninput="liveCalc(this)" placeholder="20.00">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="qty" value="${it.qty||1}" oninput="liveCalc(this)" placeholder="1">
+          <input class="iinput" type="text" oninput="sec(${si}).items[${ii}].uom=this.value;schedSave()" placeholder="Pcs" value="${esc(it.uom||'Pcs')}">
           <input class="iinput editable-calc" type="number" id="unitprice-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="unitprice" value="${c.up}" oninput="liveCalc(this)" title="Edit to auto-adjust markup" placeholder="0">
           <div class="icalc" id="vat-${si}-${ii}" style="color:var(--gray-500)" title="Read-only — set VAT % at the option level">${o.vatEnabled?fmtC(c.tp*(o.vatRate||5)/100):'—'}</div>
           <div class="icalc total" id="total-${si}-${ii}">${fmtC(c.tp)}</div>
@@ -2489,6 +2490,7 @@ function editorHTML(){
           <div style="padding:8px 5px;font-size:14px">${esc(it.model)}</div>
           <div style="padding:8px 5px;font-size:14px">${esc(it.desc)}</div>
           <div style="padding:8px 5px;font-size:14px;text-align:center">${it.qty||1}</div>
+          <div style="padding:8px 5px;font-size:14px;text-align:center">${esc(it.uom||'Pcs')}</div>
           <div class="icalc cost">${fmt(c.up)}</div>
           <div class="icalc total">${fmtC(c.tp)}</div>
           <div></div>
@@ -2760,6 +2762,7 @@ function printHTML(forExport){
         <td style="padding:10px 10px;font-size:12px;color:#555;${cellB};border-bottom:1px solid #eef1f5">${esc(it.desc)}</td>
         <td style="padding:10px 10px;font-size:13px;font-weight:700;text-align:right;color:${TH.dark};${cellB};border-bottom:1px solid #eef1f5">${fmt(c.up)}</td>
         <td style="padding:10px 8px;font-size:12px;text-align:center;color:#555;${cellB};border-bottom:1px solid #eef1f5">${it.qty||1}</td>
+        <td style="padding:10px 8px;font-size:11px;text-align:center;color:#a8b0bd;${cellB};border-bottom:1px solid #eef1f5">${esc(it.uom||'Pcs')}</td>
         <td style="padding:10px 10px;font-size:12px;text-align:right;color:#a8b0bd;${cellB};border-bottom:1px solid #eef1f5">${vatAmt!==null?fmt(vatAmt):'—'}</td>
         <td style="padding:10px 10px;font-size:13px;font-weight:700;text-align:right;color:${TH.dark};border-bottom:1px solid #eef1f5">${fmt(c.tp)}</td>
       </tr>`;});
@@ -2773,6 +2776,7 @@ function printHTML(forExport){
           <th style="padding:10px;text-align:left;font-weight:700;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Description</th>
           <th style="padding:10px;text-align:right;width:85px;font-weight:700;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Unit (${sym()})</th>
           <th style="padding:10px 8px;text-align:center;width:45px;font-weight:700;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Qty</th>
+          <th style="padding:10px 8px;text-align:center;width:50px;font-weight:700;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">UOM</th>
           <th style="padding:10px;text-align:right;width:75px;font-weight:700;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">VAT</th>
           <th style="padding:10px;text-align:right;width:95px;font-weight:700;color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.03em">Total</th>
         </tr></thead>
