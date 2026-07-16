@@ -107,8 +107,15 @@ class ZohoAdapter:
             detail = e.read().decode('utf-8', 'ignore')[:300]
             raise RuntimeError(f'Zoho API error {e.code}: {detail}')
 
-    def create_project(self, creds, name, customer_id):
+    def create_project(self, creds, name, customer_id, rate=None):
+        # billing_type='fixed_cost_for_project' requires Zoho's `rate` field
+        # at creation time (Zoho rejects the call with "Please enter rate for
+        # this project" -- code 20007 -- otherwise). `rate` is what Zoho later
+        # displays as "Total Project Cost", so this is the awarded quote's
+        # contract value (projects.original_selling_price / revenue_forecast).
         body = {'project_name': str(name)[:100], 'customer_id': str(customer_id), 'billing_type': 'fixed_cost_for_project'}
+        if rate:
+            body['rate'] = float(rate)
         r = self._post(creds, '/projects', body)
         proj = r.get('project') or {}
         if not proj.get('project_id'):
@@ -605,8 +612,16 @@ def zoho_create_project():
     # the *actual* Zoho error message (which _post()/_get() already capture)
     # never reached the user. Catching it here and returning it as JSON is
     # the fix -- this endpoint should never 500 with an opaque HTML page.
+    # Zoho requires `rate` (-> "Total Project Cost") up front for a
+    # fixed_cost_for_project project. This project came from an awarded
+    # quote, so its contract value was already frozen onto the row by
+    # _freeze_commercial_baseline() -- original_selling_price is the primary
+    # source, revenue_forecast is the same figure kept as a fallback.
+    rate = proj.get('original_selling_price') or proj.get('revenue_forecast')
+    if not rate:
+        return jsonify({'error': 'This project has no value set (original_selling_price/revenue_forecast) -- Zoho requires a project cost/rate to create a fixed-cost project.'}), 400
     try:
-        zoho_proj = adapter.create_project(creds, proj['name'], match.data[0]['external_contact_id'])
+        zoho_proj = adapter.create_project(creds, proj['name'], match.data[0]['external_contact_id'], rate=rate)
     except Exception as e:
         return jsonify({'error': f'Zoho project creation failed: {str(e)[:400]}'}), 502
     # zoho_project_id is Zoho's internal id (required for every subsequent
