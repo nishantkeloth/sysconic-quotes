@@ -578,7 +578,7 @@ def run_auto_sync():
 def zoho_create_project():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    if not (claims.get('features') or {}).get('projects'):
+    if not (claims.get('features') or {}).get('project_performance'):
         return jsonify({'error': 'Feature not enabled'}), 403
     pid = (request.json or {}).get('project_id')
     if not pid: return jsonify({'error': 'project_id is required'}), 400

@@ -1103,32 +1103,76 @@ async function saveQuote(){
 // editor (appears once the quote is Awarded — see buildCstrip()). Freezes
 // the commercial baseline, then best-effort auto-links Zoho the same way
 // the old Projects-page "+ Zoho" button did.
+//
+// A.ppCreating / A.ppZohoError drive the visible status in the toolbar
+// (see ppCreateProjectBtnHTML) -- a Zoho link failure used to only go to
+// console.warn, so the user had no way to tell it hadn't actually worked.
+function ppCreateProjectBtnHTML(){
+  if(A.ppCreating){
+    return `<span style="color:var(--gray-500);font-size:12px;font-weight:600">⏳ Creating project…</span>`;
+  }
+  if(!A.activeQuote.project_id){
+    return `<button class="btn btn-green" style="font-size:12px;padding:4px 10px;font-weight:700" onclick="ppCreateProjectFromQuote()">Create Project</button>`;
+  }
+  const zohoNoVal=zohoNo(A.activeQuote);
+  const viewBtn=`<button class="btn btn-navy" style="font-size:12px;padding:4px 10px" onclick="openProjectPerformance('${A.activeQuote.project_id}')">View Project</button>`;
+  if(zohoNoVal){
+    return `${viewBtn}<span style="color:var(--green);font-size:12px;font-weight:600" title="Linked Zoho Books project">✓ Zoho ${esc(zohoNoVal)}</span>`;
+  }
+  return `${viewBtn}<span style="color:var(--red);font-size:12px;font-weight:600" title="${esc(A.ppZohoError||'The local project was created, but linking it to Zoho Books failed.')}">⚠ Not created in Zoho</span>`
+    +`<button class="btn btn-red" style="font-size:12px;padding:4px 10px" onclick="ppRetryZohoLink()">Retry Zoho</button>`;
+}
 async function ppCreateProjectFromQuote(wonOptionIndex){
   if(!A.activeQuote)return;
   const body={};
   if(wonOptionIndex!=null)body.won_option_index=wonOptionIndex;
-  const r=await api('POST','/api/quotes/'+A.activeQuote.id+'/create-project',body);
+  A.ppCreating=true;A.ppZohoError=null;draw();
+  let r;
+  try{
+    r=await api('POST','/api/quotes/'+A.activeQuote.id+'/create-project',body);
+  }finally{
+    A.ppCreating=false;
+  }
   if(r.needs_won_option_index){
+    draw();
     const labels=(r.options||[]).map(o=>`${o.index+1}. ${o.label}`).join('\n');
     const pick=prompt(`This quote has more than one pricing option. Which one was awarded?\n${labels}\n\nEnter the option number:`);
     const idx=parseInt(pick,10)-1;
     if(pick!==null&&!isNaN(idx)&&idx>=0)return ppCreateProjectFromQuote(idx);
     return;
   }
-  if(r.error){alert(r.error);return;}
+  if(r.error){draw();alert(r.error);return;}
   if(r.quote){A.activeQuote.project_id=r.quote.project_id;const i=A.quotes.findIndex(q=>q.id===A.activeQuote.id);if(i>=0)A.quotes[i]=r.quote;}
   if(r.project_performance&&r.project_performance.needs_zoho_link){
-    const zr=await api('POST','/api/integrations/zoho/create-project',{project_id:r.project_performance.project_id});
-    if(zr.error)console.warn('Zoho project auto-link failed:',zr.error);
-    else if(zr.zoho_project_id){
-      A.activeQuote.zoho_project_id=zr.zoho_project_id;
-      A.activeQuote.zoho_project_no=zr.zoho_project_no||null;
-      const qi=A.quotes.findIndex(qq=>qq.id===A.activeQuote.id);
-      if(qi>=0){A.quotes[qi].zoho_project_id=zr.zoho_project_id;A.quotes[qi].zoho_project_no=zr.zoho_project_no||null;}
-    }
+    await ppLinkZoho(r.project_performance.project_id);
   }
   draw();
-  if(r.project_performance&&r.project_performance.project_id)openProjectPerformance(r.project_performance.project_id);
+}
+// Shared by the auto-link right after Create Project and the manual Retry
+// Zoho button (when the auto-link failed and project_id already exists).
+async function ppLinkZoho(projectId){
+  const zr=await api('POST','/api/integrations/zoho/create-project',{project_id:projectId});
+  if(zr.error){
+    A.ppZohoError=zr.error;
+    console.warn('Zoho project link failed:',zr.error);
+    return false;
+  }
+  A.ppZohoError=null;
+  if(zr.zoho_project_id){
+    A.activeQuote.zoho_project_id=zr.zoho_project_id;
+    A.activeQuote.zoho_project_no=zr.zoho_project_no||null;
+    const qi=A.quotes.findIndex(qq=>qq.id===A.activeQuote.id);
+    if(qi>=0){A.quotes[qi].zoho_project_id=zr.zoho_project_id;A.quotes[qi].zoho_project_no=zr.zoho_project_no||null;}
+  }
+  return true;
+}
+async function ppRetryZohoLink(){
+  if(!A.activeQuote||!A.activeQuote.project_id)return;
+  A.ppCreating=true;draw();
+  const ok=await ppLinkZoho(A.activeQuote.project_id);
+  A.ppCreating=false;
+  draw();
+  if(!ok)alert(A.ppZohoError||'Zoho project link failed.');
 }
 function schedSave(){if(A.reviewMode)return;if(_st)clearTimeout(_st);_st=setTimeout(saveQuote,3000);}
 // A quote is only editable while its status is Draft — once it's Sent (or
@@ -2259,9 +2303,7 @@ function buildCstrip(){
     <select onchange="A.activeQuote.status=this.value;schedSave()">
       ${['draft','sent','awarded','lost'].map(s=>`<option value="${s}" ${A.activeQuote.status===s?'selected':''}>${STATUS_LABELS[s]}</option>`).join('')}
     </select>
-    ${hasFeature('project_performance')&&A.activeQuote.status==='awarded'?(A.activeQuote.project_id
-      ?`<button class="btn btn-navy" style="font-size:12px;padding:4px 10px" onclick="openProjectPerformance('${A.activeQuote.project_id}')">View Project</button>`
-      :`<button class="btn btn-green" style="font-size:12px;padding:4px 10px;font-weight:700" onclick="ppCreateProjectFromQuote()">Create Project</button>`):''}
+    ${hasFeature('project_performance')&&A.activeQuote.status==='awarded'?ppCreateProjectBtnHTML():''}
     <span style="color:var(--gray-300)">|</span>
     <span class="cstrip-label" title="How each item's percentage is applied. Markup = Cost × (1+%). Margin = Cost ÷ (1-%), i.e. % of the selling price. Changing this recalculates every item's price immediately using its existing % — the % values themselves are not changed.">Pricing</span>
     <select ${locked?'disabled title="Locked — unlock the quote to change"':''} onchange="A.activeQuote.pricing_type=this.value;schedSave();draw()">
