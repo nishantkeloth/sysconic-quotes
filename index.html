@@ -583,6 +583,63 @@ async function ppRunSyncLoop(baseBody){
 }
 function openProjectPerformance(id){A.ppDetailId=id;A.ppDetail=null;A.ppDetailTab='overview';A.page='projectPerformanceDetail';draw();}
 
+// Column definitions for the Portfolio table -- one place for label,
+// tooltip (what it means + how it's calculated) and cell rendering, so the
+// header, the show/hide menu, and the row markup all stay in sync.
+const PP_COLUMNS=[
+  {key:'project',label:'Project',locked:true,
+    tip:'Project name. Click a row to open full details.',
+    cell:p=>`<td style="padding:8px;font-weight:600">${esc(p.name)}</td>`},
+  {key:'customer',label:'Customer',
+    tip:'Customer this project is for, from the awarded quote or Zoho Books.',
+    cell:p=>`<td style="padding:8px">${esc(p.customer||'')}</td>`},
+  {key:'projectNo',label:'Project No',
+    tip:'Zoho Books project number (the cf_project_no custom field). Falls back to Zoho\'s internal project ID if that field isn\'t set.',
+    cell:p=>`<td style="padding:8px">${zohoNo(p)?esc(zohoNo(p)):'—'}</td>`},
+  {key:'value',label:'Value',
+    tip:'Revenue Forecast: the project\'s current expected revenue. Comes from the awarded quote\'s subtotal (ex-VAT) frozen when the project was created, or from Zoho\'s Total Project Cost for projects with no quote behind them.',
+    cell:p=>`<td style="padding:8px">AED ${fmt(p.revenue_forecast||0)}</td>`},
+  {key:'originalGp',label:'Original GP%',
+    tip:'Gross profit % frozen from the awarded quote at project creation: (Original Selling Price − Original Estimated Cost) ÷ Original Selling Price. Never changes after the project is created.',
+    cell:p=>`<td style="padding:8px">${fmtPct100(p.original_gp_pct||0)}</td>`},
+  {key:'forecastGp',label:'Forecast GP%',
+    tip:'Current forecast gross profit %, recalculated on every sync: (Revenue Forecast − Estimate at Completion) ÷ Revenue Forecast.',
+    cell:p=>`<td style="padding:8px">${fmtPct100(p.forecast_gp_pct||0)}</td>`},
+  {key:'erosion',label:'Erosion',
+    tip:'Margin Erosion = Original GP% − Forecast GP%. A positive number (shown in red) means margin has eroded since the quote was awarded.',
+    cell:p=>`<td style="padding:8px;${(p.margin_erosion_pct||0)>0?'color:var(--red)':''}">${fmtPct100(p.margin_erosion_pct||0)}</td>`},
+  {key:'poExpense',label:'PO Expense',
+    tip:'Actual billed cost that traces back to a Purchase Order in Zoho Books (bills with a linked PO).',
+    cell:p=>`<td style="padding:8px">AED ${fmt(p.po_based_actual_cost||0)}</td>`},
+  {key:'nonPoExpense',label:'Non-PO Expense',
+    tip:'Actual billed cost with no Purchase Order behind it (direct bills), plus all project expenses logged in Zoho Books.',
+    cell:p=>`<td style="padding:8px">AED ${fmt(p.non_po_based_actual_cost||0)}</td>`},
+  {key:'eac',label:'EAC',
+    tip:'Estimate at Completion = Actual Cost (PO Expense + Non-PO Expense) + Committed Cost (open POs not yet billed) + Forecast Remaining Cost.',
+    cell:p=>`<td style="padding:8px">AED ${fmt(p.estimate_at_completion||0)}</td>`},
+  {key:'invoicePct',label:'Invoice%',
+    tip:'Invoiced Value ÷ Revenue Forecast × 100 — how much of the project\'s value has been invoiced so far.',
+    cell:p=>`<td style="padding:8px">${(p.revenue_forecast?((p.invoiced_value||0)/p.revenue_forecast*100):0).toFixed(0)}%</td>`},
+  {key:'cash',label:'Cash',
+    tip:'Net Project Cash Position = cash collected from the customer − cash paid to vendors and expenses. Negative means more has gone out than has come in so far.',
+    cell:p=>`<td style="padding:8px">AED ${fmt(p.net_cash_position||0)}</td>`},
+  {key:'score',label:'Score',
+    tip:'Overall Health Score (0-100): a weighted average of margin, cost control, billing, collection, cash and commitment-exposure health.',
+    cell:p=>`<td style="padding:8px">${p.health_score!=null?Math.round(p.health_score):'—'}</td>`},
+  {key:'status',label:'Status',
+    tip:'Healthy / At Risk / Critical, based on the Health Score against the configured thresholds.',
+    cell:p=>`<td style="padding:8px">${healthBadge(p.health_status)}</td>`},
+];
+function ppHiddenCols(){try{return JSON.parse(localStorage.getItem('pp_hidden_cols')||'[]');}catch(e){return [];}}
+function ppToggleCol(key){
+  const hidden=ppHiddenCols();
+  const i=hidden.indexOf(key);
+  if(i>=0)hidden.splice(i,1);else hidden.push(key);
+  localStorage.setItem('pp_hidden_cols',JSON.stringify(hidden));
+  draw();
+}
+function ppToggleColMenu(){A.ppColMenuOpen=!A.ppColMenuOpen;draw();}
+
 function portfolioHTML(){
   const d=A.portfolio;
   const k=(d&&d.kpis)||{};
@@ -599,22 +656,19 @@ function portfolioHTML(){
   ];
   const kpiHtml=kpiCards.map(([label,val,cls])=>`<div class="mcard"><div class="mcard-label">${label}</div><div class="mcard-val ${cls}">${val}</div></div>`).join('');
 
+  const hidden=ppHiddenCols();
+  const visibleCols=PP_COLUMNS.filter(c=>c.locked||!hidden.includes(c.key));
+
   const rowsHtml=rows.map(p=>`<tr style="border-bottom:1px solid var(--gray-100);cursor:pointer" onclick="openProjectPerformance('${p.id}')">
-    <td style="padding:8px;font-weight:600">${esc(p.name)}</td>
-    <td style="padding:8px">${esc(p.customer||'')}</td>
-    <td style="padding:8px">${zohoNo(p)?esc(zohoNo(p)):'—'}</td>
-    <td style="padding:8px">AED ${fmt(p.revenue_forecast||0)}</td>
-    <td style="padding:8px">${fmtPct100(p.original_gp_pct||0)}</td>
-    <td style="padding:8px">${fmtPct100(p.forecast_gp_pct||0)}</td>
-    <td style="padding:8px;${(p.margin_erosion_pct||0)>0?'color:var(--red)':''}">${fmtPct100(p.margin_erosion_pct||0)}</td>
-    <td style="padding:8px">AED ${fmt(p.po_based_actual_cost||0)}</td>
-    <td style="padding:8px">AED ${fmt(p.non_po_based_actual_cost||0)}</td>
-    <td style="padding:8px">AED ${fmt(p.estimate_at_completion||0)}</td>
-    <td style="padding:8px">${(p.revenue_forecast?((p.invoiced_value||0)/p.revenue_forecast*100):0).toFixed(0)}%</td>
-    <td style="padding:8px">AED ${fmt(p.net_cash_position||0)}</td>
-    <td style="padding:8px">${p.health_score!=null?Math.round(p.health_score):'—'}</td>
-    <td style="padding:8px">${healthBadge(p.health_status)}</td>
+    ${visibleCols.map(c=>c.cell(p)).join('')}
   </tr>`).join('');
+
+  const colMenuHtml=A.ppColMenuOpen?`<div style="position:absolute;right:24px;margin-top:36px;background:#fff;border:1px solid var(--gray-200);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.12);padding:10px;z-index:5;min-width:190px">
+    ${PP_COLUMNS.map(c=>`<label style="display:flex;align-items:center;gap:8px;padding:4px 6px;font-size:13px;${c.locked?'color:var(--gray-400)':'cursor:pointer'}">
+      <input type="checkbox" ${c.locked?'checked disabled':(hidden.includes(c.key)?'':'checked')} ${c.locked?'':`onchange="ppToggleCol('${c.key}')"`}>
+      ${esc(c.label)}
+    </label>`).join('')}
+  </div>`:'';
 
   return `<div style="padding:24px">
     <h2 style="margin:0 0 16px">Project Performance</h2>
@@ -628,7 +682,11 @@ function portfolioHTML(){
       <select class="iinput" style="max-width:160px" onchange="ppSetFilter('status',this.value)">
         <option value="">All statuses</option><option value="active">Active</option><option value="on_hold">On Hold</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option>
       </select>
-      <input class="iinput" id="ppZohoIdsInp" placeholder="Zoho Project ID(s), comma-separated" style="max-width:230px;margin-left:auto" title="For testing: sync only these specific Zoho projects instead of the whole portfolio">
+      <div style="position:relative;margin-left:auto">
+        <button class="btn" onclick="ppToggleColMenu()">Columns ▾</button>
+        ${colMenuHtml}
+      </div>
+      <input class="iinput" id="ppZohoIdsInp" placeholder="Zoho Project ID(s), comma-separated" style="max-width:230px" title="For testing: sync only these specific Zoho projects instead of the whole portfolio">
       <button class="btn" onclick="ppSyncSelected()">Sync Selected</button>
       <input class="iinput" id="ppZohoNoFrom" placeholder="Project No from" style="max-width:130px" title="e.g. PRJ100000">
       <input class="iinput" id="ppZohoNoTo" placeholder="Project No to" style="max-width:130px" title="e.g. PRJ100010">
@@ -638,13 +696,9 @@ function portfolioHTML(){
     <div style="background:#fff;border-radius:10px;overflow:auto;box-shadow:0 1px 3px rgba(0,0,0,.06);max-height:calc(100vh - 320px)">
       ${d===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
       :!rows.length?`<div style="padding:22px;color:var(--gray-500)">No projects yet — a project appears here automatically once a quote is marked Awarded.</div>`
-      :(()=>{const th=(l)=>`<th style="padding:8px;position:sticky;top:0;background:var(--navy);color:#fff;z-index:1;text-align:left;border-bottom:1px solid var(--gray-200)">${l}</th>`;return `<table style="width:100%;border-collapse:collapse;font-size:13.5px">
+      :(()=>{const th=(c)=>`<th style="padding:8px;position:sticky;top:0;background:var(--navy);color:#fff;z-index:1;text-align:left;border-bottom:1px solid var(--gray-200)" title="${esc(c.tip)}">${esc(c.label)}</th>`;return `<table style="width:100%;border-collapse:collapse;font-size:13.5px">
         <thead><tr>
-          ${th('Project')}${th('Customer')}${th('Project No')}${th('Value')}
-          ${th('Original GP%')}${th('Forecast GP%')}${th('Erosion')}
-          ${th('PO Expense')}${th('Non-PO Expense')}
-          ${th('EAC')}${th('Invoice%')}${th('Cash')}
-          ${th('Score')}${th('Status')}
+          ${visibleCols.map(th).join('')}
         </tr></thead><tbody>${rowsHtml}</tbody></table>`;})()}
     </div>
   </div>`;
