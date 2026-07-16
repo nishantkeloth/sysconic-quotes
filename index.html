@@ -152,6 +152,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .s-sent{background:var(--navy-light);color:var(--navy)}
 .s-awarded{background:var(--green-light);color:var(--green)}
 .s-lost{background:var(--red-light);color:var(--red)}
+.s-healthy{background:var(--green-light);color:var(--green)}
+.s-at_risk{background:var(--amber-light);color:var(--amber)}
+.s-critical{background:var(--red-light);color:var(--red)}
 .empty-state{text-align:center;padding:80px 20px}
 .empty-icon{font-size:52px;margin-bottom:16px}
 .empty-title{font-size:20px;font-weight:700;color:var(--gray-700);margin-bottom:8px}
@@ -442,10 +445,16 @@ const DEFAULT_TERMS=[
 let _n=1; const uid=()=>'i'+ _n++;
 const A={screen:'login',token:localStorage.getItem('sq_token')||null,user:null,company:null,
   page:'dashboard',quotes:[],activeQuote:null,view:'internal',cur:'AED',rate:1,
-  activeOpt:0,saveStatus:'',searchQ:'',filterStatus:'all',sbOpen:false};
+  activeOpt:0,saveStatus:'',searchQ:'',filterStatus:'all',sbOpen:false,
+  portfolio:null,ppFilters:{},ppDetail:null,ppDetailId:null,ppDetailTab:'overview'};
 function toggleSidebar(){A.sbOpen=!A.sbOpen;draw();}
 function parseJwt(t){try{return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));}catch(e){return {};}}
 function hasFeature(f){return !!(A.token&&(parseJwt(A.token).features||{})[f]);}
+// Zoho's internal project_id isn't the human-readable number staff use --
+// that's the cf_project_no custom field, stored separately as
+// zoho_project_no. Display should always prefer it, falling back to the
+// internal id only if the custom field hasn't been set in Zoho yet.
+function zohoNo(o){return (o&&(o.zoho_project_no||o.zoho_project_id))||'';}
 function projectsHTML(){
   const list=A.projects||null;
   const rows=(list||[]).map(p=>`<tr style="border-bottom:1px solid var(--gray-100)">
@@ -456,7 +465,7 @@ function projectsHTML(){
       ${['active','on_hold','completed','cancelled'].map(s=>`<option value="${s}" ${p.status===s?'selected':''}>${s.replace('_',' ')}</option>`).join('')}
     </select></td>
     <td style="padding:8px">${esc(p.po_number||'')}</td>
-    <td style="padding:8px">${p.zoho_project_id?`<span style="color:#16a34a;font-weight:600" title="Linked to Zoho Books">&#10003; Zoho</span>`:`<button class="btn" style="font-size:12px;padding:4px 10px" onclick="createZohoProject('${p.id}')">+ Zoho</button>`}</td>
+    <td style="padding:8px">${p.zoho_project_id?`<span style="color:#16a34a;font-weight:600" title="Linked to Zoho Books">&#10003; Zoho</span>`:`<span style="color:var(--gray-500)">—</span>`}</td>
     <td style="padding:8px;text-align:right"><button class="idel" onclick="deleteProject('${p.id}')" title="Delete project">✕</button></td>
   </tr>`).join('');
   return `<div style="padding:24px">
@@ -475,7 +484,7 @@ function projectsHTML(){
       :!list.length?`<div style="padding:22px;color:var(--gray-500)">No projects yet — add your first one above.</div>`
       :`<table style="width:100%;border-collapse:collapse;font-size:14px">
         <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200)">
-          <th style="padding:8px">Name</th><th style="padding:8px">Customer</th><th style="padding:8px">Site</th><th style="padding:8px">Status</th><th style="padding:8px">PO</th><th style="padding:8px">Zoho</th><th></th>
+          <th style="padding:8px">Name</th><th style="padding:8px">Customer</th><th style="padding:8px">Site</th><th style="padding:8px">Status</th><th style="padding:8px">PO</th><th style="padding:8px">Zoho</th><th style="padding:8px"></th>
         </tr></thead><tbody>${rows}</tbody></table>`}
     </div>
   </div>`;
@@ -508,6 +517,418 @@ async function deleteProject(id){
   if(r.error){alert(r.error);return;}
   A.projects=null;draw();loadProjectsPage();
 }
+// ══════════════════════════════════════════════════════════════════════════
+// Project Performance module — portfolio dashboard, project list, project
+// detail (Overview / Financial Performance / Cost Control / Billing &
+// Collection / Cash Position tabs). Reuses the app's existing design system
+// (.mcard KPI cards, .sbadge status pills, .tab-btn tabs, .card panels) —
+// see api/project_performance.py and api/pp_sync.py for the backend.
+// ══════════════════════════════════════════════════════════════════════════
+const fmtPct100=n=>(isNaN(n)?0:n).toFixed(1)+'%';
+function healthBadge(status){
+  const map={healthy:['Healthy','s-healthy'],at_risk:['At Risk','s-at_risk'],critical:['Critical','s-critical']};
+  const [label,cls]=map[status]||['—','s-draft'];
+  return `<span class="sbadge ${cls}">${label}</span>`;
+}
+
+// ── Portfolio dashboard + list ──────────────────────────────────────────────
+async function loadPortfolioPage(){
+  const qs=new URLSearchParams();
+  Object.entries(A.ppFilters||{}).forEach(([k,v])=>{if(v)qs.set(k,v);});
+  const r=await api('GET','/api/project-performance?'+qs.toString());
+  if(r.error){A.portfolio={kpis:{},projects:[]};alert(r.error);}else{A.portfolio=r;}
+  draw();
+}
+function ppSetFilter(key,val){A.ppFilters=A.ppFilters||{};A.ppFilters[key]=val;A.portfolio=null;draw();loadPortfolioPage();}
+function ppSearch(){const v=document.getElementById('ppSearchInp')?.value||'';ppSetFilter('search',v);}
+async function ppSyncAll(){
+  // A big portfolio can't be synced in one request without risking a
+  // timeout (see api/projects.py) -- the backend processes a time-boxed
+  // batch per call and reports has_more, so keep calling until it's done.
+  await ppRunSyncLoop({});
+}
+async function ppSyncSelected(){
+  const raw=(document.getElementById('ppZohoIdsInp')?.value||'').trim();
+  if(!raw){alert('Enter one or more Zoho Project IDs, comma-separated (e.g. from the Project No column)');return;}
+  const ids=raw.split(/[,\n]/).map(s=>s.trim()).filter(Boolean);
+  const r=await ppRunSyncLoop({zoho_project_ids:ids});
+  if(r&&r.zoho_import&&(r.zoho_import.errors||[]).length)console.warn('Zoho import issues:',r.zoho_import.errors);
+}
+async function ppSyncRange(){
+  const from=(document.getElementById('ppZohoNoFrom')?.value||'').trim();
+  const to=(document.getElementById('ppZohoNoTo')?.value||'').trim();
+  if(!from&&!to){alert('Enter a Project No to sync from and/or to (e.g. PRJ100000 to PRJ100010)');return;}
+  const r=await ppRunSyncLoop({zoho_project_no_from:from||null,zoho_project_no_to:to||null});
+  if(r&&r.zoho_import&&(r.zoho_import.errors||[]).length)console.warn('Zoho import issues:',r.zoho_import.errors);
+}
+async function ppRunSyncLoop(baseBody){
+  const btn=document.getElementById('ppSyncBtn');
+  const origLabel=btn?btn.textContent:'';
+  if(btn)btn.disabled=true;
+  let more=true, first=true, done=0, loops=0, last=null;
+  while(more&&loops<50){
+    loops++;
+    const body=first?baseBody:{...baseBody,skip_import:true};
+    const r=await api('POST','/api/pp-sync/run', body);
+    last=r;
+    if(r.error){alert(r.error);break;}
+    done+=(r.projects_synced||0);
+    more=!!r.has_more;
+    if(btn)btn.textContent=more?`🔄 Syncing… (${done} done, ${r.remaining} left)`:'🔄 Sync Now';
+    first=false;
+  }
+  if(btn){btn.disabled=false;btn.textContent=origLabel;}
+  A.portfolio=null;draw();loadPortfolioPage();
+  return last;
+}
+function openProjectPerformance(id){A.ppDetailId=id;A.ppDetail=null;A.ppDetailTab='overview';A.page='projectPerformanceDetail';draw();}
+
+// Column definitions for the Portfolio table -- one place for label,
+// tooltip (what it means + how it's calculated) and cell rendering, so the
+// header, the show/hide menu, and the row markup all stay in sync.
+const PP_COLUMNS=[
+  {key:'project',label:'Project',locked:true,
+    tip:'Project name. Click a row to open full details.',
+    cell:p=>`<td style="padding:8px;font-weight:600">${esc(p.name)}</td>`},
+  {key:'customer',label:'Customer',
+    tip:'Customer this project is for, from the awarded quote or Zoho Books.',
+    cell:p=>`<td style="padding:8px">${esc(p.customer||'')}</td>`},
+  {key:'projectNo',label:'Project No',
+    tip:'Zoho Books project number (the cf_project_no custom field). Falls back to Zoho\'s internal project ID if that field isn\'t set.',
+    cell:p=>`<td style="padding:8px">${zohoNo(p)?esc(zohoNo(p)):'—'}</td>`},
+  {key:'value',label:'Value',
+    tip:'Revenue Forecast: the project\'s current expected revenue. Comes from the awarded quote\'s subtotal (ex-VAT) frozen when the project was created, or from Zoho\'s Total Project Cost for projects with no quote behind them.',
+    cell:p=>`<td style="padding:8px">AED ${fmt(p.revenue_forecast||0)}</td>`},
+  {key:'originalGp',label:'Original GP%',
+    tip:'Gross profit % frozen from the awarded quote at project creation: (Original Selling Price − Original Estimated Cost) ÷ Original Selling Price. Never changes after the project is created.',
+    cell:p=>`<td style="padding:8px">${fmtPct100(p.original_gp_pct||0)}</td>`},
+  {key:'forecastGp',label:'Forecast GP%',
+    tip:'Current forecast gross profit %, recalculated on every sync: (Revenue Forecast − Estimate at Completion) ÷ Revenue Forecast.',
+    cell:p=>`<td style="padding:8px">${fmtPct100(p.forecast_gp_pct||0)}</td>`},
+  {key:'erosion',label:'Erosion',
+    tip:'Margin Erosion = Original GP% − Forecast GP%. A positive number (shown in red) means margin has eroded since the quote was awarded.',
+    cell:p=>`<td style="padding:8px;${(p.margin_erosion_pct||0)>0?'color:var(--red)':''}">${fmtPct100(p.margin_erosion_pct||0)}</td>`},
+  {key:'poExpense',label:'PO Expense',
+    tip:'Actual billed cost that traces back to a Purchase Order in Zoho Books (bills with a linked PO).',
+    cell:p=>`<td style="padding:8px">AED ${fmt(p.po_based_actual_cost||0)}</td>`},
+  {key:'nonPoExpense',label:'Non-PO Expense',
+    tip:'Actual billed cost with no Purchase Order behind it (direct bills), plus all project expenses logged in Zoho Books.',
+    cell:p=>`<td style="padding:8px">AED ${fmt(p.non_po_based_actual_cost||0)}</td>`},
+  {key:'eac',label:'EAC',
+    tip:'Estimate at Completion = Actual Cost (PO Expense + Non-PO Expense) + Committed Cost (open POs not yet billed) + Forecast Remaining Cost.',
+    cell:p=>`<td style="padding:8px">AED ${fmt(p.estimate_at_completion||0)}</td>`},
+  {key:'invoicePct',label:'Invoice%',
+    tip:'Invoiced Value ÷ Revenue Forecast × 100 — how much of the project\'s value has been invoiced so far.',
+    cell:p=>`<td style="padding:8px">${(p.revenue_forecast?((p.invoiced_value||0)/p.revenue_forecast*100):0).toFixed(0)}%</td>`},
+  {key:'cash',label:'Cash',
+    tip:'Net Project Cash Position = cash collected from the customer − cash paid to vendors and expenses. Negative means more has gone out than has come in so far.',
+    cell:p=>`<td style="padding:8px">AED ${fmt(p.net_cash_position||0)}</td>`},
+  {key:'score',label:'Score',
+    tip:'Overall Health Score (0-100): a weighted average of margin, cost control, billing, collection, cash and commitment-exposure health.',
+    cell:p=>`<td style="padding:8px">${p.health_score!=null?Math.round(p.health_score):'—'}</td>`},
+  {key:'status',label:'Status',
+    tip:'Healthy / At Risk / Critical, based on the Health Score against the configured thresholds.',
+    cell:p=>`<td style="padding:8px">${healthBadge(p.health_status)}</td>`},
+];
+function ppHiddenCols(){try{return JSON.parse(localStorage.getItem('pp_hidden_cols')||'[]');}catch(e){return [];}}
+function ppToggleCol(key){
+  const hidden=ppHiddenCols();
+  const i=hidden.indexOf(key);
+  if(i>=0)hidden.splice(i,1);else hidden.push(key);
+  localStorage.setItem('pp_hidden_cols',JSON.stringify(hidden));
+  draw();
+}
+function ppToggleColMenu(){A.ppColMenuOpen=!A.ppColMenuOpen;draw();}
+
+function portfolioHTML(){
+  const d=A.portfolio;
+  const k=(d&&d.kpis)||{};
+  const rows=(d&&d.projects)||[];
+  const kpiCards=[
+    ['Active Projects',k.active_projects||0,'navy'],
+    ['Total Active Value','AED '+fmt(k.total_active_project_value||0),'navy'],
+    ['Portfolio Forecast GP%',fmtPct100(k.portfolio_forecast_gp_pct||0),'green'],
+    ['Projects At Risk',k.projects_at_risk||0,'amber'],
+    ['Critical Projects',k.critical_projects||0,'red'],
+    ['Total Unbilled',(k.total_unbilled_value||0)>=0?'AED '+fmt(k.total_unbilled_value):'AED 0','amber'],
+    ['Outstanding Receivables','AED '+fmt(k.total_outstanding_receivables||0),'amber'],
+    ['Cash Exposure','AED '+fmt(k.total_project_cash_exposure||0),(k.total_project_cash_exposure||0)<0?'red':'green'],
+  ];
+  const kpiHtml=kpiCards.map(([label,val,cls])=>`<div class="mcard"><div class="mcard-label">${label}</div><div class="mcard-val ${cls}">${val}</div></div>`).join('');
+
+  const hidden=ppHiddenCols();
+  const visibleCols=PP_COLUMNS.filter(c=>c.locked||!hidden.includes(c.key));
+
+  const rowsHtml=rows.map(p=>`<tr style="border-bottom:1px solid var(--gray-100);cursor:pointer" onclick="openProjectPerformance('${p.id}')">
+    ${visibleCols.map(c=>c.cell(p)).join('')}
+  </tr>`).join('');
+
+  const colMenuHtml=A.ppColMenuOpen?`<div style="position:absolute;right:24px;margin-top:36px;background:#fff;border:1px solid var(--gray-200);border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.12);padding:10px;z-index:5;min-width:190px">
+    ${PP_COLUMNS.map(c=>`<label style="display:flex;align-items:center;gap:8px;padding:4px 6px;font-size:13px;${c.locked?'color:var(--gray-400)':'cursor:pointer'}">
+      <input type="checkbox" ${c.locked?'checked disabled':(hidden.includes(c.key)?'':'checked')} ${c.locked?'':`onchange="ppToggleCol('${c.key}')"`}>
+      ${esc(c.label)}
+    </label>`).join('')}
+  </div>`:'';
+
+  return `<div style="padding:24px">
+    <h2 style="margin:0 0 16px">Project Performance</h2>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px">${kpiHtml}</div>
+    <div style="background:#fff;border-radius:10px;padding:14px 16px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.06);display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <input class="iinput" id="ppSearchInp" placeholder="Search name, customer, Zoho ID, quote #" style="max-width:260px" onkeydown="if(event.key==='Enter')ppSearch()">
+      <button class="btn" onclick="ppSearch()">Search</button>
+      <select class="iinput" style="max-width:160px" onchange="ppSetFilter('health_status',this.value)">
+        <option value="">All health</option><option value="healthy">Healthy</option><option value="at_risk">At Risk</option><option value="critical">Critical</option>
+      </select>
+      <select class="iinput" style="max-width:160px" onchange="ppSetFilter('status',this.value)">
+        <option value="">All statuses</option><option value="active">Active</option><option value="on_hold">On Hold</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option>
+      </select>
+      <span style="font-size:12px;color:var(--gray-500)">Created</span>
+      <input type="date" class="iinput" style="max-width:150px" title="Project created from" value="${((A.ppFilters&&A.ppFilters.date_from)||'').split('T')[0]}" onchange="ppSetFilter('date_from',this.value)">
+      <span style="font-size:12px;color:var(--gray-500)">to</span>
+      <input type="date" class="iinput" style="max-width:150px" title="Project created to" value="${((A.ppFilters&&A.ppFilters.date_to)||'').split('T')[0]}" onchange="ppSetFilter('date_to',this.value?this.value+'T23:59:59':'')">
+      <div style="position:relative;margin-left:auto">
+        <button class="btn" onclick="ppToggleColMenu()">Columns ▾</button>
+        ${colMenuHtml}
+      </div>
+      <input class="iinput" id="ppZohoIdsInp" placeholder="Zoho Project ID(s), comma-separated" style="max-width:230px" title="For testing: sync only these specific Zoho projects instead of the whole portfolio">
+      <button class="btn" onclick="ppSyncSelected()">Sync Selected</button>
+      <input class="iinput" id="ppZohoNoFrom" placeholder="Project No from" style="max-width:130px" title="e.g. PRJ100000">
+      <input class="iinput" id="ppZohoNoTo" placeholder="Project No to" style="max-width:130px" title="e.g. PRJ100010">
+      <button class="btn" onclick="ppSyncRange()">Sync Range</button>
+      <button class="btn btn-navy" id="ppSyncBtn" onclick="ppSyncAll()">🔄 Sync Now</button>
+    </div>
+    <div style="background:#fff;border-radius:10px;overflow:auto;box-shadow:0 1px 3px rgba(0,0,0,.06);max-height:calc(100vh - 320px)">
+      ${d===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
+      :!rows.length?`<div style="padding:22px;color:var(--gray-500)">No projects yet — a project appears here automatically once a quote is marked Awarded.</div>`
+      :(()=>{const th=(c)=>`<th style="padding:8px;position:sticky;top:0;background:var(--navy);color:#fff;z-index:1;text-align:left;border-bottom:1px solid var(--gray-200)" title="${esc(c.tip)}">${esc(c.label)}</th>`;return `<table style="width:100%;border-collapse:collapse;font-size:13.5px">
+        <thead><tr>
+          ${visibleCols.map(th).join('')}
+        </tr></thead><tbody>${rowsHtml}</tbody></table>`;})()}
+    </div>
+  </div>`;
+}
+
+// ── Project detail ───────────────────────────────────────────────────────
+async function loadProjectPerformanceDetail(){
+  if(!A.ppDetailId)return;
+  const r=await api('GET','/api/project-performance/'+A.ppDetailId);
+  if(r.error){alert(r.error);A.page='projectPerformance';draw();return;}
+  A.ppDetail=r;draw();
+}
+function ppSetTab(t){A.ppDetailTab=t;draw();}
+async function ppSyncProject(){
+  const r=await api('POST','/api/pp-sync/run',{project_id:A.ppDetailId});
+  if(r.error)alert(r.error);
+  A.ppDetail=null;draw();loadProjectPerformanceDetail();
+}
+async function ppQuickCompletion(){
+  const v=prompt('New completion percentage (0-100):');
+  if(v===null)return;
+  const pct=parseFloat(v);
+  if(isNaN(pct))return;
+  const comment=prompt('Comment (optional):')||'';
+  const r=await api('POST','/api/project-performance/'+A.ppDetailId+'/completion',{percentage:pct,comment});
+  if(r.error){alert(r.error);return;}
+  A.ppDetail=null;draw();loadProjectPerformanceDetail();
+}
+async function ppAddForecastQuick(){
+  const desc=prompt('Forecast remaining cost — description:');
+  if(!desc)return;
+  const amt=parseFloat(prompt('Amount (AED):')||'0');
+  if(!amt)return;
+  const r=await api('POST','/api/project-performance/'+A.ppDetailId+'/forecast',{description:desc,amount:amt});
+  if(r.error){alert(r.error);return;}
+  A.ppDetail=null;draw();loadProjectPerformanceDetail();
+}
+async function ppRemoveForecast(fid){
+  const reason=prompt('Reason for removing this forecast entry:');
+  if(!reason)return;
+  const r=await api('DELETE','/api/project-performance/'+A.ppDetailId+'/forecast/'+fid,{reason});
+  if(r.error){alert(r.error);return;}
+  A.ppDetail=null;draw();loadProjectPerformanceDetail();
+}
+async function ppUpdateAlert(aid,status){
+  const r=await api('PUT','/api/project-performance/alerts/'+aid,{status});
+  if(r.error){alert(r.error);return;}
+  A.ppDetail=null;draw();loadProjectPerformanceDetail();
+}
+
+function projectPerformanceDetailHTML(){
+  if(!A.ppDetail)return `<div style="padding:24px;color:var(--gray-500)">Loading…</div>`;
+  const p=A.ppDetail.project;
+  const tabs=[['overview','Overview'],['financial','Financial Performance'],['cost','Cost Control'],['billing','Billing & Collection'],['cash','Cash Position']];
+  const tabBtns=tabs.map(([k,label])=>`<button class="tab-btn ${A.ppDetailTab===k?'active':''}" onclick="ppSetTab('${k}')">${label}</button>`).join('');
+  let body='';
+  if(A.ppDetailTab==='overview')body=ppOverviewTab(A.ppDetail);
+  else if(A.ppDetailTab==='financial')body=ppFinancialTab(A.ppDetail);
+  else if(A.ppDetailTab==='cost')body=ppCostControlTab(A.ppDetail);
+  else if(A.ppDetailTab==='billing')body=ppBillingTab(A.ppDetail);
+  else if(A.ppDetailTab==='cash')body=ppCashTab(A.ppDetail);
+
+  return `<div style="padding:24px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:16px">
+      <div>
+        <button class="btn" style="margin-bottom:8px" onclick="A.page='projectPerformance';A.ppDetail=null;draw();loadPortfolioPage()">← Back to Portfolio</button>
+        <h2 style="margin:4px 0 4px">${esc(p.name)} ${healthBadge(p.health_status)}</h2>
+        <div style="color:var(--gray-500);font-size:13.5px">${esc(p.customer||'')}${p.quote_ref?' · Quote '+esc(p.quote_ref):''}${zohoNo(p)?' · Zoho Project '+esc(zohoNo(p)):(p.zoho_project_id?' · Zoho-linked (no Project No set yet)':' · Not linked to Zoho yet')}</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" onclick="ppQuickCompletion()">Update Completion %</button>
+        <button class="btn" onclick="ppAddForecastQuick()">+ Forecast Cost</button>
+        <button class="btn btn-navy" onclick="ppSyncProject()">🔄 Sync Now</button>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">${tabBtns}</div>
+    ${body}
+  </div>`;
+}
+
+function ppOverviewTab(d){
+  const p=d.project;
+  const cards=[
+    ['Project Value','AED '+fmt(p.revenue_forecast||0),'navy'],
+    ['Original GP%',fmtPct100(p.original_gp_pct||0),'navy'],
+    ['Forecast GP%',fmtPct100(p.forecast_gp_pct||0),'green'],
+    ['Margin Erosion',fmtPct100(p.margin_erosion_pct||0),(p.margin_erosion_pct||0)>0?'red':'green'],
+    ['Actual Cost','AED '+fmt(p.actual_cost||0),'navy'],
+    ['Committed Cost','AED '+fmt(p.committed_cost||0),'amber'],
+    ['Estimate at Completion','AED '+fmt(p.estimate_at_completion||0),'navy'],
+    ['Invoiced Value','AED '+fmt(p.invoiced_value||0),'navy'],
+    ['Collected Value','AED '+fmt(p.collected_value||0),'green'],
+    ['Net Cash Position','AED '+fmt(p.net_cash_position||0),(p.net_cash_position||0)<0?'red':'green'],
+  ];
+  const cardsHtml=cards.map(([label,val,cls])=>`<div class="mcard"><div class="mcard-label">${label}</div><div class="mcard-val ${cls}">${val}</div></div>`).join('');
+  const h=d.health_detail;
+  const healthRows=h?[['Margin Health',h.margin_health],['Cost Control',h.cost_control],['Billing Health',h.billing_health],['Collection Health',h.collection_health],['Cash Health',h.cash_health],['Commitment Exposure',h.commitment_exposure]]:[];
+  const healthHtml=h?`<div class="card">
+    <div class="card-title">Project Health Score</div>
+    ${healthRows.map(([l,v])=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--gray-100)"><span>${l}</span><b>${v!=null?Math.round(v):'—'}</b></div>`).join('')}
+    <div style="display:flex;justify-content:space-between;padding:10px 0 4px;font-size:16px"><b>Overall Score</b><b>${h.overall_score!=null?Math.round(h.overall_score):'—'} / 100</b></div>
+    <div>Status: ${healthBadge(h.status)}</div>
+  </div>`:`<div class="card"><div class="card-title">Project Health Score</div><div style="color:var(--gray-500)">No score calculated yet — run Sync Now.</div></div>`;
+  const openAlerts=(d.alerts||[]).filter(a=>a.status==='open');
+  const alertsHtml=openAlerts.length?openAlerts.slice(0,8).map(a=>`<div style="padding:8px 0;border-bottom:1px solid var(--gray-100)">
+    <span class="sbadge ${(a.severity==='critical'||a.severity==='high')?'s-critical':a.severity==='medium'?'s-at_risk':'s-draft'}">${esc(a.severity)}</span>
+    <span style="margin-left:8px">${esc(a.explanation||a.alert_type)}</span>
+    <button class="btn" style="float:right;font-size:11px;padding:2px 8px" onclick="ppUpdateAlert('${a.id}','acknowledged')">Acknowledge</button>
+  </div>`).join(''):'<div style="color:var(--gray-500)">No open alerts.</div>';
+
+  return `<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:20px">${cardsHtml}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      ${healthHtml}
+      <div class="card"><div class="card-title">Open Alerts</div>${alertsHtml}</div>
+    </div>`;
+}
+
+function ppFinancialTab(d){
+  const p=d.project;
+  return `<div class="card">
+    <div class="card-title">Profitability</div>
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <tr><td style="padding:6px 0">Original Selling Price</td><td style="text-align:right">AED ${fmt(p.original_selling_price||0)}</td></tr>
+      <tr><td style="padding:6px 0">Original Estimated Cost</td><td style="text-align:right">AED ${fmt(p.original_estimated_cost||0)}</td></tr>
+      <tr><td style="padding:6px 0">Original GP</td><td style="text-align:right">AED ${fmt(p.original_gp||0)} (${fmtPct100(p.original_gp_pct||0)})</td></tr>
+      <tr style="border-top:1.5px solid var(--gray-200)"><td style="padding:6px 0">Current Revenue Forecast</td><td style="text-align:right">AED ${fmt(p.revenue_forecast||0)}</td></tr>
+      <tr><td style="padding:6px 0">Estimate at Completion</td><td style="text-align:right">AED ${fmt(p.estimate_at_completion||0)}</td></tr>
+      <tr><td style="padding:6px 0">Forecast GP</td><td style="text-align:right">AED ${fmt(p.forecast_gp||0)} (${fmtPct100(p.forecast_gp_pct||0)})</td></tr>
+      <tr style="border-top:1.5px solid var(--gray-200)"><td style="padding:6px 0;font-weight:700">Margin Erosion</td><td style="text-align:right;font-weight:700;${(p.margin_erosion_pct||0)>0?'color:var(--red)':'color:var(--green)'}">${fmtPct100(p.margin_erosion_pct||0)}</td></tr>
+    </table>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <div class="card-title">Margin Trend</div>
+    ${(d.snapshots||[]).length?`<table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200)"><th style="padding:6px">Date</th><th style="padding:6px">Forecast GP%</th><th style="padding:6px">Margin Erosion</th><th style="padding:6px">Health Score</th></tr></thead>
+      <tbody>${d.snapshots.map(s=>`<tr style="border-bottom:1px solid var(--gray-100)"><td style="padding:6px">${esc(s.snapshot_date)}</td><td style="padding:6px">${fmtPct100(s.forecast_gp_pct||0)}</td><td style="padding:6px">${fmtPct100(s.margin_erosion_pct||0)}</td><td style="padding:6px">${s.health_score!=null?Math.round(s.health_score):'—'}</td></tr>`).join('')}</tbody>
+    </table>`:'<div style="color:var(--gray-500)">No history yet — builds up after each sync.</div>'}
+  </div>`;
+}
+
+function ppCostControlTab(d){
+  const p=d.project;
+  const rows=(d.cost_breakdown||[]).map(c=>{
+    const eac=(c.actual||0)+(c.committed||0)+(c.forecast_remaining||0);
+    return `<tr style="border-bottom:1px solid var(--gray-100)">
+      <td style="padding:8px">${esc(c.name)}</td>
+      <td style="padding:8px;text-align:right">AED ${fmt(c.actual||0)}</td>
+      <td style="padding:8px;text-align:right">AED ${fmt(c.committed||0)}</td>
+      <td style="padding:8px;text-align:right">AED ${fmt(c.forecast_remaining||0)}</td>
+      <td style="padding:8px;text-align:right;font-weight:600">AED ${fmt(eac)}</td>
+    </tr>`;
+  }).join('');
+  const forecastRows=(d.forecasts||[]).filter(f=>f.status==='active').map(f=>`<tr style="border-bottom:1px solid var(--gray-100)">
+    <td style="padding:8px">${esc(f.description||'')}</td>
+    <td style="padding:8px;text-align:right">AED ${fmt(f.amount||0)}</td>
+    <td style="padding:8px">${esc(f.expected_date||'')}</td>
+    <td style="padding:8px;text-align:right"><button class="idel" onclick="ppRemoveForecast('${f.id}')" title="Remove">✕</button></td>
+  </tr>`).join('');
+  const variance=(p.original_estimated_cost||0)-(p.estimate_at_completion||0);
+
+  return `<div class="card">
+    <div class="card-title">Cost Control — by Category</div>
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200)"><th style="padding:8px">Category</th><th style="padding:8px;text-align:right">Actual</th><th style="padding:8px;text-align:right">Committed</th><th style="padding:8px;text-align:right">Forecast Remaining</th><th style="padding:8px;text-align:right">EAC</th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="5" style="padding:12px;color:var(--gray-500)">No costs synced yet — categorization improves once Cost Category Mapping (Phase 2) is configured; uncategorized costs still count toward EAC.</td></tr>'}</tbody>
+    </table>
+    <div style="margin-top:14px;padding-top:14px;border-top:1.5px solid var(--gray-200);display:flex;gap:24px;flex-wrap:wrap">
+      <span>Original Budget: <b>AED ${fmt(p.original_estimated_cost||0)}</b></span>
+      <span>PO-Based Expense: <b>AED ${fmt(p.po_based_actual_cost||0)}</b></span>
+      <span>Non-PO Expense: <b>AED ${fmt(p.non_po_based_actual_cost||0)}</b></span>
+      <span>EAC: <b>AED ${fmt(p.estimate_at_completion||0)}</b></span>
+      <span>Forecast Variance: <b style="${variance<0?'color:var(--red)':'color:var(--green)'}">AED ${fmt(variance)}</b></span>
+    </div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <div class="card-title">Forecast Remaining Cost</div>
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200)"><th style="padding:8px">Description</th><th style="padding:8px;text-align:right">Amount</th><th style="padding:8px">Expected Date</th><th></th></tr></thead>
+      <tbody>${forecastRows||'<tr><td colspan="4" style="padding:12px;color:var(--gray-500)">No forecast entries.</td></tr>'}</tbody>
+    </table>
+  </div>`;
+}
+
+function ppBillingTab(d){
+  const p=d.project;
+  const invPct=p.revenue_forecast?((p.invoiced_value||0)/p.revenue_forecast*100):0;
+  const colPct=p.invoiced_value?((p.collected_value||0)/p.invoiced_value*100):0;
+  const rows=(d.invoices||[]).map(i=>`<tr style="border-bottom:1px solid var(--gray-100)">
+    <td style="padding:8px">${esc(i.invoice_number||'')}</td>
+    <td style="padding:8px">${esc(i.invoice_date||'')}</td>
+    <td style="padding:8px;text-align:right">AED ${fmt(i.total||0)}</td>
+    <td style="padding:8px;text-align:right">AED ${fmt((i.total||0)-(i.balance||0))}</td>
+    <td style="padding:8px;text-align:right">AED ${fmt(i.balance||0)}</td>
+    <td style="padding:8px">${esc(i.due_date||'')}</td>
+    <td style="padding:8px">${esc(i.status||'')}</td>
+  </tr>`).join('');
+  return `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px">
+      <div class="mcard"><div class="mcard-label">Invoice %</div><div class="mcard-val navy">${invPct.toFixed(0)}%</div></div>
+      <div class="mcard"><div class="mcard-label">Collection %</div><div class="mcard-val green">${colPct.toFixed(0)}%</div></div>
+      <div class="mcard"><div class="mcard-label">Unbilled Value</div><div class="mcard-val amber">AED ${fmt((p.revenue_forecast||0)-(p.invoiced_value||0))}</div></div>
+      <div class="mcard"><div class="mcard-label">Outstanding Receivable</div><div class="mcard-val amber">AED ${fmt((p.invoiced_value||0)-(p.collected_value||0))}</div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Invoices</div>
+      <table style="width:100%;border-collapse:collapse;font-size:14px">
+        <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200)"><th style="padding:8px">Invoice #</th><th style="padding:8px">Date</th><th style="padding:8px;text-align:right">Amount</th><th style="padding:8px;text-align:right">Received</th><th style="padding:8px;text-align:right">Balance</th><th style="padding:8px">Due</th><th style="padding:8px">Status</th></tr></thead>
+        <tbody>${rows||'<tr><td colspan="7" style="padding:12px;color:var(--gray-500)">No invoices synced yet.</td></tr>'}</tbody>
+      </table>
+    </div>`;
+}
+
+function ppCashTab(d){
+  const p=d.project;
+  const cashOut=(p.collected_value||0)-(p.net_cash_position||0);
+  return `<div class="card">
+    <div class="card-title">Project Cash Position</div>
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <tr><td style="padding:6px 0">Customer Cash Received</td><td style="text-align:right">AED ${fmt(p.collected_value||0)}</td></tr>
+      <tr><td style="padding:6px 0">Vendor + Expense Cash Paid</td><td style="text-align:right">AED ${fmt(cashOut)}</td></tr>
+      <tr style="border-top:1.5px solid var(--gray-200)"><td style="padding:6px 0;font-weight:700">Net Project Cash Position</td><td style="text-align:right;font-weight:700;${(p.net_cash_position||0)<0?'color:var(--red)':'color:var(--green)'}">AED ${fmt(p.net_cash_position||0)}</td></tr>
+    </table>
+    <div style="margin-top:10px">Status: ${(p.net_cash_position||0)>0?'<span class="sbadge s-healthy">Cash Positive</span>':(p.net_cash_position||0)===0?'<span class="sbadge s-draft">Cash Neutral</span>':'<span class="sbadge s-critical">Cash Negative</span>'}</div>
+    ${(p.forecast_gp||0)>0&&(p.net_cash_position||0)<0?'<div style="margin-top:10px;color:var(--red);font-weight:600">⚠ This project is forecast profitable but significantly cash negative.</div>':''}
+  </div>`;
+}
+
 function closeSidebar(){if(A.sbOpen){A.sbOpen=false;draw();}}
 let INV={token:null,loading:true,error:'',email:'',role:'',company_name:'',busy:false};
 let RST={token:null,busy:false,done:false,error:''};
@@ -610,8 +1031,27 @@ async function api(method,path,body){
   const o={method,headers:{'Content-Type':'application/json'}};
   if(A.token)o.headers['Authorization']='Bearer '+A.token;
   if(body)o.body=JSON.stringify(body);
-  const r=await fetch(API+path,o);
-  return r.json();
+  let r;
+  try{
+    r=await fetch(API+path,o);
+  }catch(e){
+    return {error:'Network error — could not reach the server. '+(e&&e.message||'')};
+  }
+  let text='';
+  try{
+    text=await r.text();
+  }catch(e){
+    return {error:'Server error (status '+r.status+'): could not read the response.'};
+  }
+  if(!text)return {};
+  try{
+    return JSON.parse(text);
+  }catch(e){
+    // Response wasn't JSON at all -- almost always a Vercel timeout/error
+    // page (HTML) rather than the API actually responding. Surface enough
+    // of it to diagnose instead of throwing and leaving callers stuck.
+    return {error:'Server error (status '+r.status+'): '+text.slice(0,200)};
+  }
 }
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
@@ -673,10 +1113,93 @@ async function saveQuote(){
     quote_data:A.activeQuote.quote_data,terms_data:A.activeQuote.terms_data,vendor_data:A.activeQuote.vendor_data,
     total_sell:T.ts,total_gp:T.tg,margin:T.margin,
   });
-  if(r.quote){const i=A.quotes.findIndex(q=>q.id===A.activeQuote.id);if(i>=0)A.quotes[i]=r.quote;setStatus('saved');return true;}
+  if(r.quote){const i=A.quotes.findIndex(q=>q.id===A.activeQuote.id);if(i>=0)A.quotes[i]=r.quote;A.activeQuote.project_id=r.quote.project_id;setStatus('saved');if(r.quote.status==='awarded')draw();return true;}
   setStatus('error');
   A._lastSaveError=r.error||'Save failed';
   return false;
+}
+// ── Project Performance: explicit "Create Project" action from the quote
+// editor (appears once the quote is Awarded — see buildCstrip()). Freezes
+// the commercial baseline, then best-effort auto-links Zoho the same way
+// the old Projects-page "+ Zoho" button did.
+//
+// A.ppCreating / A.ppZohoError drive the visible status in the toolbar
+// (see ppCreateProjectBtnHTML) -- a Zoho link failure used to only go to
+// console.warn, so the user had no way to tell it hadn't actually worked.
+function ppCreateProjectBtnHTML(){
+  if(A.ppCreating){
+    return `<span style="color:var(--gray-500);font-size:12px;font-weight:600">⏳ Creating project…</span>`;
+  }
+  if(!A.activeQuote.project_id){
+    return `<button class="btn btn-green" style="font-size:12px;padding:4px 10px;font-weight:700" onclick="ppCreateProjectFromQuote()">Create Project</button>`;
+  }
+  const zohoNoVal=zohoNo(A.activeQuote);
+  const viewBtn=`<button class="btn btn-navy" style="font-size:12px;padding:4px 10px" onclick="openProjectPerformance('${A.activeQuote.project_id}')">View Project</button>`;
+  if(zohoNoVal){
+    return `${viewBtn}<span style="color:var(--green);font-size:12px;font-weight:600" title="Linked Zoho Books project">✓ Zoho ${esc(zohoNoVal)}</span>`;
+  }
+  return `${viewBtn}<span style="color:var(--red);font-size:12px;font-weight:600" title="${esc(A.ppZohoError||'The local project was created, but linking it to Zoho Books failed.')}">⚠ Not created in Zoho</span>`
+    +`<button class="btn btn-red" style="font-size:12px;padding:4px 10px" onclick="ppRetryZohoLink()">Retry Zoho</button>`;
+}
+async function ppCreateProjectFromQuote(wonOptionIndex){
+  if(!A.activeQuote)return;
+  const body={};
+  if(wonOptionIndex!=null)body.won_option_index=wonOptionIndex;
+  A.ppCreating=true;A.ppZohoError=null;draw();
+  try{
+    const r=await api('POST','/api/quotes/'+A.activeQuote.id+'/create-project',body);
+    if(r.needs_won_option_index){
+      const labels=(r.options||[]).map(o=>`${o.index+1}. ${o.label}`).join('\n');
+      const pick=prompt(`This quote has more than one pricing option. Which one was awarded?\n${labels}\n\nEnter the option number:`);
+      const idx=parseInt(pick,10)-1;
+      if(pick!==null&&!isNaN(idx)&&idx>=0){A.ppCreating=false;return ppCreateProjectFromQuote(idx);}
+      return;
+    }
+    if(r.error){alert(r.error);return;}
+    if(r.quote){A.activeQuote.project_id=r.quote.project_id;const i=A.quotes.findIndex(q=>q.id===A.activeQuote.id);if(i>=0)A.quotes[i]=r.quote;}
+    if(r.project_performance&&r.project_performance.needs_zoho_link){
+      await ppLinkZoho(r.project_performance.project_id);
+    }
+  }catch(e){
+    console.error('Create Project failed:',e);
+    alert('Create Project failed unexpectedly: '+(e&&e.message||e));
+  }finally{
+    A.ppCreating=false;
+    draw();
+  }
+}
+// Shared by the auto-link right after Create Project and the manual Retry
+// Zoho button (when the auto-link failed and project_id already exists).
+async function ppLinkZoho(projectId){
+  const zr=await api('POST','/api/integrations/zoho/create-project',{project_id:projectId});
+  if(zr.error){
+    A.ppZohoError=zr.error;
+    console.warn('Zoho project link failed:',zr.error);
+    return false;
+  }
+  A.ppZohoError=null;
+  if(zr.zoho_project_id){
+    A.activeQuote.zoho_project_id=zr.zoho_project_id;
+    A.activeQuote.zoho_project_no=zr.zoho_project_no||null;
+    const qi=A.quotes.findIndex(qq=>qq.id===A.activeQuote.id);
+    if(qi>=0){A.quotes[qi].zoho_project_id=zr.zoho_project_id;A.quotes[qi].zoho_project_no=zr.zoho_project_no||null;}
+  }
+  return true;
+}
+async function ppRetryZohoLink(){
+  if(!A.activeQuote||!A.activeQuote.project_id)return;
+  A.ppCreating=true;draw();
+  try{
+    const ok=await ppLinkZoho(A.activeQuote.project_id);
+    if(!ok)alert(A.ppZohoError||'Zoho project link failed.');
+  }catch(e){
+    console.error('Zoho retry failed:',e);
+    A.ppZohoError=(e&&e.message)||String(e);
+    alert(A.ppZohoError);
+  }finally{
+    A.ppCreating=false;
+    draw();
+  }
 }
 function schedSave(){if(A.reviewMode)return;if(_st)clearTimeout(_st);_st=setTimeout(saveQuote,3000);}
 // A quote is only editable while its status is Draft — once it's Sent (or
@@ -1504,6 +2027,8 @@ function draw(){
   if(A.page==='products')setTimeout(loadProducts,50);
   if(A.page==='customers')setTimeout(loadCustomersPage,50);
   if(A.page==='projects'&&A.projects==null)setTimeout(loadProjectsPage,50);
+  if(A.page==='projectPerformance'&&A.portfolio==null)setTimeout(loadPortfolioPage,50);
+  if(A.page==='projectPerformanceDetail'&&A.ppDetail==null)setTimeout(loadProjectPerformanceDetail,50);
   if(A.page==='vendorMaster')setTimeout(loadVendorsMaster,50);
   if(A.page==='reviewQueue')setTimeout(loadReviewQueue,50);
   if(A.page==='log')setTimeout(loadLog,50);
@@ -1653,7 +2178,7 @@ function resetPasswordHTML(){
 // ── App shell ─────────────────────────────────────────────────────────────────
 function appHTML(){
   const init=(A.user?.name||'U').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
-  const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',log:'Activity Log',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master',integrations:'Integrations',platform:'All Companies',companyProfile:'Company Profile',reviewQueue:'Review Queue'};
+  const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',log:'Activity Log',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master',integrations:'Integrations',platform:'All Companies',companyProfile:'Company Profile',reviewQueue:'Review Queue',projectPerformance:'Project Performance',projectPerformanceDetail:'Project Detail'};
   const inEditor=['editor','terms','summary','vendor','print','log'].includes(A.page);
 
   const nav=(page,cb)=>`A.page='${page}';${cb||''}closeSidebar();draw()`;
@@ -1669,6 +2194,7 @@ function appHTML(){
       <div class="sb-item ${A.page==='customers'?'active':''}" onclick="${nav('customers')}"><span class="sb-icon">👤</span>Customers</div>
       <div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="${nav('vendorMaster')}"><span class="sb-icon">🏭</span>Vendors</div>
       ${hasFeature('projects')?`<div class="sb-item ${A.page==='projects'?'active':''}" onclick="${nav('projects')}"><span class="sb-icon">📁</span>Projects</div>`:''}
+      ${hasFeature('project_performance')?`<div class="sb-item ${(A.page==='projectPerformance'||A.page==='projectPerformanceDetail')?'active':''}" onclick="${nav('projectPerformance')}"><span class="sb-icon">📊</span>Project Performance</div>`:''}
       <div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>
       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}
       ${A.user?.role==='admin'?`<div class="sb-sec">Settings</div>
@@ -1703,6 +2229,8 @@ function appHTML(){
   else if(A.page==='products')pageContent=productsHTML();
   else if(A.page==='customers')pageContent=customersHTML();
   else if(A.page==='projects')pageContent=projectsHTML();
+  else if(A.page==='projectPerformance')pageContent=portfolioHTML();
+  else if(A.page==='projectPerformanceDetail')pageContent=projectPerformanceDetailHTML();
   else if(A.page==='vendorMaster')pageContent=vendorsMasterHTML();
   else if(A.page==='team')pageContent=teamHTML();
   else if(A.page==='integrations')pageContent=integrationsHTML();
@@ -1802,6 +2330,7 @@ function buildCstrip(){
     <select onchange="A.activeQuote.status=this.value;schedSave()">
       ${['draft','sent','awarded','lost'].map(s=>`<option value="${s}" ${A.activeQuote.status===s?'selected':''}>${STATUS_LABELS[s]}</option>`).join('')}
     </select>
+    ${hasFeature('project_performance')&&A.activeQuote.status==='awarded'?ppCreateProjectBtnHTML():''}
     <span style="color:var(--gray-300)">|</span>
     <span class="cstrip-label" title="How each item's percentage is applied. Markup = Cost × (1+%). Margin = Cost ÷ (1-%), i.e. % of the selling price. Changing this recalculates every item's price immediately using its existing % — the % values themselves are not changed.">Pricing</span>
     <select ${locked?'disabled title="Locked — unlock the quote to change"':''} onchange="A.activeQuote.pricing_type=this.value;schedSave();draw()">
@@ -1914,7 +2443,7 @@ function editorHTML(){
       <div class="fld2"><label>Date</label><input type="date" value="${o.date||''}" oninput="opts()[A.activeOpt].date=this.value;schedSave()"></div>
       <div class="fld2"><label>Prepared by</label><input value="${esc(o.by||'')}" oninput="opts()[A.activeOpt].by=this.value;schedSave()"></div>
       <div class="fld2"><label>Title / Role</label><input value="${esc(o.title||'')}" oninput="opts()[A.activeOpt].title=this.value;schedSave()"></div>
-      <div></div>
+      <div class="fld2">${zohoNo(q)?`<label>Zoho Project No</label><input value="${esc(zohoNo(q))}" readonly title="Linked Zoho Books project">`:''}</div>
     </div>
   </div>`;
 
@@ -2010,6 +2539,7 @@ function editorHTML(){
     </div>
     <div class="gs-sep"></div>
     <div class="gs-item"><div class="gs-label">Grand Total</div><div class="gs-val big grand-val" id="gsGrand">${fmtC(T.grand)}</div></div>
+    ${zohoNo(q)?`<div class="gs-sep"></div><div class="gs-item"><div class="gs-label">Zoho Project No</div><div class="gs-val" style="font-size:13px" title="Linked Zoho Books project number">${esc(zohoNo(q))}</div></div>`:''}
   </div>`;
   return html;
 }

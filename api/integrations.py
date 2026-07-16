@@ -107,13 +107,240 @@ class ZohoAdapter:
             detail = e.read().decode('utf-8', 'ignore')[:300]
             raise RuntimeError(f'Zoho API error {e.code}: {detail}')
 
-    def create_project(self, creds, name, customer_id):
+    def create_project(self, creds, name, customer_id, rate=None, cost_budget=None, revenue_budget=None):
+        # billing_type='fixed_cost_for_project' requires Zoho's `rate` field
+        # at creation time (Zoho rejects the call with "Please enter rate for
+        # this project" -- code 20007 -- otherwise). `rate` is what Zoho later
+        # displays as "Total Project Cost", so this is the awarded quote's
+        # contract value (projects.original_selling_price / revenue_forecast).
+        #
+        # Cost Budget / Revenue Budget (Zoho's UI labels) are a separate
+        # concept from `rate`, confirmed against Zoho's own API reference:
+        #   budget_type='total_project_cost'  -- activates money-based budgeting
+        #   budget_amount        -- Revenue Budget (what you expect to earn)
+        #   cost_budget_amount   -- Cost Budget (what you expect to spend)
+        # (An earlier guess of cost_budget/revenue_budget as the field names
+        # was wrong -- Zoho silently ignored them rather than erroring.)
         body = {'project_name': str(name)[:100], 'customer_id': str(customer_id), 'billing_type': 'fixed_cost_for_project'}
+        if rate:
+            body['rate'] = float(rate)
+        if cost_budget or revenue_budget:
+            body['budget_type'] = 'total_project_cost'
+        if revenue_budget:
+            body['budget_amount'] = float(revenue_budget)
+        if cost_budget:
+            body['cost_budget_amount'] = float(cost_budget)
         r = self._post(creds, '/projects', body)
         proj = r.get('project') or {}
         if not proj.get('project_id'):
             raise RuntimeError('Zoho did not return a project id: ' + json.dumps(r)[:200])
+        # Zoho doesn't reliably have cf_project_no (the human-readable
+        # Project No, e.g. "PRJ100193") populated in the immediate create
+        # response -- it gets auto-assigned moments later on Zoho's side.
+        # Without this, the frontend was stuck showing the long internal
+        # project_id until someone ran a separate Sync later. Poll briefly
+        # (a few seconds, well inside Vercel's function budget) so the real
+        # Project No comes back in the same request whenever possible; a
+        # later sync still backfills it if Zoho is slower than this.
+        if not proj.get('cf_project_no'):
+            pid = proj['project_id']
+            for wait in (1, 2):
+                time.sleep(wait)
+                try:
+                    fresh = self._get(creds, f'/projects/{pid}', {})
+                    fresh_proj = fresh.get('project') or {}
+                    if fresh_proj.get('cf_project_no'):
+                        proj = fresh_proj
+                        break
+                except Exception:
+                    pass
         return proj
+
+    # ── Project Performance actuals fetch ───────────────────────────────────
+    # Everything below is scoped to one Zoho Books project at a time (via the
+    # zoho_project_id already stored on the local `projects` row) rather than
+    # pulling the whole organisation and matching after the fact -- matches
+    # what api/pp_sync.py needs per-project, and avoids pagination blowing up
+    # on companies with a large multi-year transaction history.
+    #
+    # Field names below follow Zoho Books API v3's documented shape
+    # (purchaseorder_id / bill_id / invoice_id / expense_id /
+    # customerpayment_id are the standard v3 identifiers). This has not yet
+    # been run against a live Zoho org from this environment -- no Zoho
+    # credentials are available here, and this is production business data
+    # that shouldn't be touched without Nish present. Treat the exact field
+    # mapping as provisional until the first real "Sync Now" run in Phase 1
+    # testing; _get()/_post() already surface the raw Zoho error body if a
+    # field or endpoint doesn't match what's returned, so a bad assumption
+    # here fails loudly rather than silently miscalculating cost.
+    def _fetch_paginated(self, creds, path, params, list_key, max_pages=25):
+        out, page = [], 1
+        while page <= max_pages:  # safety cap: 25 pages x 200 = 5000 records per resource per project
+            p = dict(params or {})
+            p.update({'per_page': 200, 'page': page})
+            data = self._get(creds, path, p)
+            out.extend(data.get(list_key, []) or [])
+            if not (data.get('page_context') or {}).get('has_more_page'):
+                break
+            page += 1
+        return out
+
+    def fetch_purchase_orders(self, creds, zoho_project_id):
+        """Returns (po_dicts, line_dicts). Zoho lets each PO *line item* be
+        assigned to a different project (line item -> More -> Project) --
+        confirmed in Zoho's own API docs, line_items[].project_id /
+        .project_name -- so a single PO can span multiple projects. Its
+        header-level `total` is the sum across ALL of them, not just this
+        one. When any line item carries a project_id, this scopes the PO's
+        total/billed_total and the stored lines down to just the lines that
+        belong to THIS project, instead of attributing the whole PO to
+        whichever project's sync happens to run first. Falls back to the
+        header total when no line carries a project_id at all (org isn't
+        using per-line project assignment). Kept in sync by hand with the
+        duplicate of this method in api/projects.py's _ZohoSync -- that one
+        is what the actual sync engine calls; this copy exists for the same
+        one-file-per-route reason as the rest of this adapter."""
+        rows = self._fetch_paginated(creds, '/purchaseorders', {'project_id': zoho_project_id}, 'purchaseorders')
+        pos, lines = [], []
+        for r in rows:
+            po_id = r.get('purchaseorder_id')
+            if not po_id: continue
+            try:
+                detail = self._get(creds, f'/purchaseorders/{po_id}', {})
+                all_lines = (detail.get('purchaseorder') or {}).get('line_items') or []
+            except Exception:
+                all_lines = []  # best-effort; PO header row still syncs on the fallback below
+
+            lines_with_project = [li for li in all_lines if li.get('project_id')]
+            if lines_with_project:
+                matching = [li for li in all_lines if str(li.get('project_id') or '') == str(zoho_project_id)]
+                po_total = sum(float(li.get('item_total') or 0) for li in matching)
+                header_total = float(r.get('total') or 0)
+                share = (po_total / header_total) if header_total else 0.0
+                billed_total = float(r.get('total_invoiced_amount') or r.get('billed_amount') or 0) * share
+            else:
+                matching = all_lines
+                po_total = r.get('total') or 0
+                billed_total = r.get('total_invoiced_amount') or r.get('billed_amount') or 0
+
+            pos.append({
+                'zoho_purchase_order_id': po_id,
+                'zoho_project_id': zoho_project_id,
+                'po_number': r.get('purchaseorder_number'),
+                'po_date': r.get('date'),
+                'vendor_name': r.get('vendor_name'),
+                'status': r.get('status'),
+                'total': po_total,
+                'billed_total': billed_total,
+                'raw': r,
+            })
+            for li in matching:
+                lines.append({
+                    'zoho_purchase_order_id': po_id,
+                    'zoho_purchase_order_line_id': li.get('line_item_id'),
+                    'zoho_item_id': li.get('item_id'),
+                    'item_name': li.get('name') or li.get('description'),
+                    'quantity': li.get('quantity') or 0,
+                    'rate': li.get('rate') or 0,
+                    'total': li.get('item_total') or 0,
+                    'raw': li,
+                })
+        return pos, lines
+
+    def fetch_bills(self, creds, zoho_project_id):
+        """Same rationale as fetch_purchase_orders above: Zoho lets each
+        bill line item be assigned to its own project too, so a bill can
+        span multiple projects. Scopes total/lines to just this project's
+        share when line items carry a project_id; falls back to the header
+        total otherwise. Kept in sync by hand with api/projects.py's
+        _ZohoSync copy, which is what the sync engine actually calls."""
+        rows = self._fetch_paginated(creds, '/bills', {'project_id': zoho_project_id}, 'bills')
+        bills, lines = [], []
+        for r in rows:
+            bill_id = r.get('bill_id')
+            if not bill_id: continue
+            try:
+                detail = self._get(creds, f'/bills/{bill_id}', {})
+                all_lines = (detail.get('bill') or {}).get('line_items') or []
+            except Exception:
+                all_lines = []
+
+            lines_with_project = [li for li in all_lines if li.get('project_id')]
+            if lines_with_project:
+                matching = [li for li in all_lines if str(li.get('project_id') or '') == str(zoho_project_id)]
+                bill_total = sum(float(li.get('item_total') or 0) for li in matching)
+            else:
+                matching = all_lines
+                bill_total = r.get('total') or 0
+
+            bills.append({
+                'zoho_bill_id': bill_id,
+                'zoho_purchase_order_id': r.get('purchaseorder_id') or r.get('purchase_order_id'),
+                'bill_number': r.get('bill_number'),
+                'bill_date': r.get('date'),
+                'vendor_name': r.get('vendor_name'),
+                'status': r.get('status'),
+                'total': bill_total,
+                'raw': r,
+            })
+            for li in matching:
+                lines.append({
+                    'zoho_bill_id': bill_id,
+                    'zoho_bill_line_id': li.get('line_item_id'),
+                    'zoho_item_id': li.get('item_id'),
+                    'item_name': li.get('name') or li.get('description'),
+                    'quantity': li.get('quantity') or 0,
+                    'rate': li.get('rate') or 0,
+                    'total': li.get('item_total') or 0,
+                    'raw': li,
+                })
+        return bills, lines
+
+    def fetch_expenses(self, creds, zoho_project_id):
+        rows = self._fetch_paginated(creds, '/expenses', {'project_id': zoho_project_id}, 'expenses')
+        return [{
+            'zoho_expense_id': r.get('expense_id'),
+            'expense_account': r.get('account_name'),
+            'vendor_name': r.get('vendor_name') or r.get('paid_through_account_name'),
+            'expense_date': r.get('date'),
+            'amount': r.get('total') or r.get('amount') or 0,
+            'description': r.get('description'),
+            'raw': r,
+        } for r in rows if r.get('expense_id')]
+
+    def fetch_invoices(self, creds, zoho_project_id):
+        rows = self._fetch_paginated(creds, '/invoices', {'project_id': zoho_project_id}, 'invoices')
+        return [{
+            'zoho_invoice_id': r.get('invoice_id'),
+            'invoice_number': r.get('invoice_number'),
+            'invoice_date': r.get('date'),
+            'due_date': r.get('due_date'),
+            'status': r.get('status'),
+            'total': r.get('total') or 0,
+            'balance': r.get('balance') or 0,
+            'raw': r,
+        } for r in rows if r.get('invoice_id')]
+
+    def fetch_payments(self, creds, invoice_ids):
+        """Zoho Books payments aren't project-scoped directly -- they're
+        applied to invoices. Called with the invoice IDs already synced for
+        this project (fetch_invoices output) and fetches each invoice's
+        applied-payments list."""
+        out = []
+        for inv_id in (invoice_ids or []):
+            try:
+                data = self._get(creds, f'/invoices/{inv_id}/payments', {})
+            except Exception:
+                continue
+            for p in data.get('payments', []) or []:
+                out.append({
+                    'zoho_payment_id': p.get('payment_id'),
+                    'zoho_invoice_id': inv_id,
+                    'payment_date': p.get('date'),
+                    'amount': p.get('amount_applied') or p.get('amount') or 0,
+                    'raw': p,
+                })
+        return out
 
 # ── Adapter registry ────────────────────────────────────────────────────────────
 # Each entry provides fetch_customers(creds), fetch_vendors(creds), and
@@ -392,7 +619,7 @@ def run_auto_sync():
 def zoho_create_project():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    if not (claims.get('features') or {}).get('projects'):
+    if not (claims.get('features') or {}).get('project_performance'):
         return jsonify({'error': 'Feature not enabled'}), 403
     pid = (request.json or {}).get('project_id')
     if not pid: return jsonify({'error': 'project_id is required'}), 400
@@ -411,9 +638,48 @@ def zoho_create_project():
     match = sb.table('customers').select('external_contact_id,name').eq('company_id', claims['company_id']).ilike('name', customer_name).execute()
     if not match.data or not match.data[0].get('external_contact_id'):
         return jsonify({'error': f'Customer "{customer_name}" not found in the synced Zoho customer list. Sync customers or check the exact name.'}), 400
-    zoho_proj = adapter.create_project(creds, proj['name'], match.data[0]['external_contact_id'])
-    sb.table('projects').update({'zoho_project_id': zoho_proj['project_id']}).eq('id', pid).eq('company_id', claims['company_id']).execute()
-    return jsonify({'ok': True, 'zoho_project_id': zoho_proj['project_id']})
+    # adapter.create_project() (and the _post()/_get() it calls) raise plain
+    # RuntimeErrors on any Zoho API failure (bad auth, expired token, invalid
+    # field, org mismatch, etc). Uncaught, that fell through to Flask's
+    # default error handler, which returns a generic HTML 500 page instead
+    # of JSON -- the frontend then choked trying to parse it as JSON, and
+    # the *actual* Zoho error message (which _post()/_get() already capture)
+    # never reached the user. Catching it here and returning it as JSON is
+    # the fix -- this endpoint should never 500 with an opaque HTML page.
+    # Zoho requires `rate` (-> "Total Project Cost") up front for a
+    # fixed_cost_for_project project. This project came from an awarded
+    # quote, so its contract value was already frozen onto the row by
+    # _freeze_commercial_baseline() -- original_selling_price is the primary
+    # source, revenue_forecast is the same figure kept as a fallback.
+    rate = proj.get('original_selling_price') or proj.get('revenue_forecast')
+    if not rate:
+        return jsonify({'error': 'This project has no value set (original_selling_price/revenue_forecast) -- Zoho requires a project cost/rate to create a fixed-cost project.'}), 400
+    # Cost Budget = what the baseline estimated we'd spend; Revenue Budget =
+    # the contract value (same figure as `rate`).
+    cost_budget = proj.get('original_estimated_cost')
+    try:
+        zoho_proj = adapter.create_project(creds, proj['name'], match.data[0]['external_contact_id'],
+                                            rate=rate, cost_budget=cost_budget, revenue_budget=rate)
+    except Exception as e:
+        return jsonify({'error': f'Zoho project creation failed: {str(e)[:400]}'}), 502
+    # zoho_project_id is Zoho's internal id (required for every subsequent
+    # Zoho API call -- POs/bills/expenses/invoices are all fetched by it).
+    # zoho_project_no is the human-readable number staff actually use,
+    # stored in Zoho as the cf_project_no custom field. It may not be set
+    # yet at creation time (it's often filled in inside Zoho afterward) --
+    # that's fine, a later sync/import picks it up once it exists.
+    zoho_project_no = zoho_proj.get('cf_project_no') or None
+    sb.table('projects').update({
+        'zoho_project_id': zoho_proj['project_id'], 'zoho_project_no': zoho_project_no,
+    }).eq('id', pid).eq('company_id', claims['company_id']).execute()
+    # Mirror the link onto the originating quote too (if this project came
+    # from an awarded quote) so the Zoho project number is visible right on
+    # the quote itself, not only via the linked project.
+    if proj.get('quotation_id'):
+        sb.table('quotes').update({
+            'zoho_project_id': zoho_proj['project_id'], 'zoho_project_no': zoho_project_no,
+        }).eq('id', proj['quotation_id']).eq('company_id', claims['company_id']).execute()
+    return jsonify({'ok': True, 'zoho_project_id': zoho_proj['project_id'], 'zoho_project_no': zoho_project_no})
 
 # Note: a live "/api/integrations/search-customers" route used to live here,
 # searching the connected provider (e.g. Zoho) directly on every keystroke.
