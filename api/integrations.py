@@ -114,22 +114,22 @@ class ZohoAdapter:
         # displays as "Total Project Cost", so this is the awarded quote's
         # contract value (projects.original_selling_price / revenue_forecast).
         #
-        # cost_budget / revenue_budget map to Zoho's "Cost Budget" (what you
-        # expect to spend) and "Revenue Budget" (what you expect to earn) --
-        # a separate concept from `rate`, per Zoho's own docs. Field names
-        # here (cost_budget/revenue_budget) are a best-effort guess -- the
-        # Books API reference for this endpoint is a JS-rendered page that
-        # couldn't be read to confirm the exact keys. If Zoho rejects or
-        # silently ignores them, that'll surface on the next attempt (this
-        # call already raises/returns Zoho's real error body instead of
-        # swallowing it) and the keys below should be corrected then.
+        # Cost Budget / Revenue Budget (Zoho's UI labels) are a separate
+        # concept from `rate`, confirmed against Zoho's own API reference:
+        #   budget_type='total_project_cost'  -- activates money-based budgeting
+        #   budget_amount        -- Revenue Budget (what you expect to earn)
+        #   cost_budget_amount   -- Cost Budget (what you expect to spend)
+        # (An earlier guess of cost_budget/revenue_budget as the field names
+        # was wrong -- Zoho silently ignored them rather than erroring.)
         body = {'project_name': str(name)[:100], 'customer_id': str(customer_id), 'billing_type': 'fixed_cost_for_project'}
         if rate:
             body['rate'] = float(rate)
-        if cost_budget:
-            body['cost_budget'] = float(cost_budget)
+        if cost_budget or revenue_budget:
+            body['budget_type'] = 'total_project_cost'
         if revenue_budget:
-            body['revenue_budget'] = float(revenue_budget)
+            body['budget_amount'] = float(revenue_budget)
+        if cost_budget:
+            body['cost_budget_amount'] = float(cost_budget)
         r = self._post(creds, '/projects', body)
         proj = r.get('project') or {}
         if not proj.get('project_id'):
