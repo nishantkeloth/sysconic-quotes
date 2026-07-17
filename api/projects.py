@@ -791,6 +791,7 @@ class _ZohoSync:
         for r in rows:
             bill_id = r.get('bill_id')
             if not bill_id: continue
+            detail = {}
             try:
                 detail = self._get(creds, f'/bills/{bill_id}', {})
                 all_lines = (detail.get('bill') or {}).get('line_items') or []
@@ -805,9 +806,18 @@ class _ZohoSync:
                 matching = all_lines
                 bill_total = r.get('total') or 0
 
+            # Zoho's bill detail payload carries the PO link as a 'purchaseorder_ids'
+            # array (confirmed via live API response), not a singular
+            # 'purchaseorder_id'/'purchase_order_id' field -- those never populate,
+            # which was silently sending every PO-linked bill into the non-PO
+            # cost bucket. Prefer the detail payload; fall back to the list-row
+            # fields in case an older org/API shape ever provides them instead.
+            po_ids = (detail.get('bill') or {}).get('purchaseorder_ids') or []
+            po_id = (po_ids[0] if po_ids else None) or r.get('purchaseorder_id') or r.get('purchase_order_id')
+
             bills.append({
                 'zoho_bill_id': bill_id,
-                'zoho_purchase_order_id': r.get('purchaseorder_id') or r.get('purchase_order_id'),
+                'zoho_purchase_order_id': po_id,
                 'bill_number': r.get('bill_number'), 'bill_date': r.get('date'),
                 'vendor_name': r.get('vendor_name'), 'status': r.get('status'),
                 'total': bill_total, 'raw': r,
