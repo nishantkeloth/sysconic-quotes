@@ -259,6 +259,7 @@ class ZohoAdapter:
         for r in rows:
             bill_id = r.get('bill_id')
             if not bill_id: continue
+            detail = {}
             try:
                 detail = self._get(creds, f'/bills/{bill_id}', {})
                 all_lines = (detail.get('bill') or {}).get('line_items') or []
@@ -273,9 +274,15 @@ class ZohoAdapter:
                 matching = all_lines
                 bill_total = r.get('total') or 0
 
+            # See api/projects.py's _ZohoSync.fetch_bills for the rationale --
+            # Zoho's bill detail carries the PO link as 'purchaseorder_ids'
+            # (array), not a singular field. Kept in sync by hand.
+            po_ids = (detail.get('bill') or {}).get('purchaseorder_ids') or []
+            po_id = (po_ids[0] if po_ids else None) or r.get('purchaseorder_id') or r.get('purchase_order_id')
+
             bills.append({
                 'zoho_bill_id': bill_id,
-                'zoho_purchase_order_id': r.get('purchaseorder_id') or r.get('purchase_order_id'),
+                'zoho_purchase_order_id': po_id,
                 'bill_number': r.get('bill_number'),
                 'bill_date': r.get('date'),
                 'vendor_name': r.get('vendor_name'),
