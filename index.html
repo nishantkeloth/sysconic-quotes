@@ -2880,7 +2880,8 @@ function printHTML(forExport){
         <td style="padding:${DP('10px 10px')};font-size:${SZ(13,'table')}px;font-weight:700;text-align:right;color:${TH.dark};border-bottom:1px solid #eef1f5">${fmt(c.tp)}</td>`}
       </tr>`;});
       const cellBhd='border-right:1px solid rgba(255,255,255,.18)';
-      sectionBlocks.push(`<div style="page-break-inside:avoid">
+      const shortSection=(s.items||[]).length<=5;
+      sectionBlocks.push(`<div style="${shortSection?'page-break-inside:avoid':''}">
       <div style="display:inline-block;background:${TH.dark};color:#fff;font-size:${SZ(12,'header')}px;font-weight:800;padding:7px 16px;border-radius:6px;margin:20px 0 12px;text-transform:uppercase;letter-spacing:.04em;page-break-after:avoid">${esc(s.name)}</div>
       <table style="width:100%;border-collapse:collapse;font-size:${SZ(12,'table')}px;margin-bottom:6px;border:1px solid #e2e6ec">
         <thead><tr style="background:${TH.dark}">
