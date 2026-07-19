@@ -2703,9 +2703,13 @@ async function ensurePrintCompany(){
 function printCoName(){return PRINTCO?.legal_name||A.company?.name||'Your Company';}
 function printAddrLines(){
   if(!PRINTCO)return[];
+  // Keep "TRN: X" and "Tel: Y" each glued together as one unbreakable chunk
+  // (using a non-breaking space instead of a normal one) so a long print
+  // line never wraps mid-phone-number or mid-TRN, which reads badly.
+  const nb=s=>String(s).replace(/ /g,'\u00A0');
   const lines=[];
   if(PRINTCO.address)lines.push(PRINTCO.address);
-  const trnTel=[PRINTCO.trn?`TRN: ${PRINTCO.trn}`:'',PRINTCO.phone?`Tel: ${PRINTCO.phone}`:''].filter(Boolean).join(' | ');
+  const trnTel=[PRINTCO.trn?`TRN:\u00A0${nb(PRINTCO.trn)}`:'',PRINTCO.phone?`Tel:\u00A0${nb(PRINTCO.phone)}`:''].filter(Boolean).join(' | ');
   if(trnTel)lines.push(trnTel);
   if(PRINTCO.website)lines.push(PRINTCO.website);
   return lines;
