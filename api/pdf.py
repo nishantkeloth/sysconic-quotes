@@ -375,12 +375,30 @@ def render_pdf():
     if not filename.lower().endswith('.pdf'):
         filename += '.pdf'
 
-    payload = json.dumps({
+    payload_dict = {
         'source': html,
         'use_print': True,   # apply the same @media print CSS rules the browser uses
         'format': 'A4',
         'sandbox': False,
-    }).encode('utf-8')
+    }
+
+    # Optional repeating per-page footer (e.g. company website), independent
+    # of the main document -- PDFShift renders it fresh on every page from
+    # `start_at` onward. The footer HTML must be self-contained (no external
+    # CSS/JS), which the frontend's pdfFooterHTML() already guarantees.
+    footer_html = (d.get('footer_html') or '').strip()
+    if footer_html:
+        try:
+            footer_start_at = int(d.get('footer_start_at') or 2)
+        except (TypeError, ValueError):
+            footer_start_at = 2
+        payload_dict['footer'] = {
+            'source': footer_html,
+            'height': '30px',
+            'start_at': max(1, footer_start_at),
+        }
+
+    payload = json.dumps(payload_dict).encode('utf-8')
 
     req = urllib.request.Request(
         'https://api.pdfshift.io/v3/convert/pdf',

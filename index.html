@@ -2654,6 +2654,19 @@ function buildExportHTML(){
   .print-doc{box-shadow:none;max-width:100%}
   </style></head><body>${body}</body></html>`;
 }
+// Repeating per-page footer for the downloaded PDF only (PDFShift renders
+// header/footer independently of the document, on every page from
+// `start_at` onward -- something a browser's own print/Ctrl+P can't do,
+// since Chromium only supports its native URL/date header-footer, not
+// custom repeating content). Page 1 already carries the full letterhead,
+// so this starts at page 2 as a lightweight "which company sent this"
+// reminder in case pages get separated after printing.
+function pdfFooterHTML(){
+  const web=PRINTCO?.website;
+  if(!web)return'';
+  const dark=getPrintTheme().dark;
+  return `<div style="width:100%;box-sizing:border-box;padding:6px 24px 0;border-top:1px solid #d8dce3;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:9px;color:${dark}">${esc(web)}</div>`;
+}
 async function downloadPDF(){
   const q=A.activeQuote;if(!q)return;
   const btns=document.querySelectorAll('button');let b=null;btns.forEach(x=>{if(x.textContent.includes('PDF'))b=x;});
@@ -2661,7 +2674,7 @@ async function downloadPDF(){
   try{
     const html=buildExportHTML();
     const r=await fetch('/api/pdf/render',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+A.token},
-      body:JSON.stringify({html, filename:'Quotation-'+(q.quote_data?.[0]?.ref||q.title||'quote').replace(/[^\w\-]+/g,'-')+'.pdf'})});
+      body:JSON.stringify({html, filename:'Quotation-'+(q.quote_data?.[0]?.ref||q.title||'quote').replace(/[^\w\-]+/g,'-')+'.pdf', footer_html:pdfFooterHTML(), footer_start_at:2})});
     if(!r.ok){const e=await r.json().catch(()=>({}));alert(e.error||'PDF generation failed');return;}
     const blob=await r.blob();
     const cd=r.headers.get('Content-Disposition')||'';
