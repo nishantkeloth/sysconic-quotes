@@ -2662,10 +2662,15 @@ function buildExportHTML(){
 // so this starts at page 2 as a lightweight "which company sent this"
 // reminder in case pages get separated after printing.
 function pdfFooterHTML(){
-  const web=PRINTCO?.website;
-  if(!web)return'';
+  const q=A.activeQuote;
+  const ref=q?.quote_data?.[0]?.ref||q?.title||'';
+  const web=PRINTCO?.website||'';
+  const left=[ref,web].filter(Boolean).join(' · ');
   const dark=getPrintTheme().dark;
-  return `<div style="width:100%;box-sizing:border-box;padding:6px 24px 0;border-top:1px solid #d8dce3;text-align:center;font-family:Arial,Helvetica,sans-serif;font-size:9px;color:${dark}">${esc(web)}</div>`;
+  return `<div style="width:100%;box-sizing:border-box;padding:6px 24px 0;border-top:1px solid #d8dce3;display:flex;justify-content:space-between;align-items:center;font-family:Arial,Helvetica,sans-serif;font-size:9px;color:${dark}">
+    <span>${esc(left)}</span>
+    <span>Page {{page}} of {{total}}</span>
+  </div>`;
 }
 async function downloadPDF(){
   const q=A.activeQuote;if(!q)return;
@@ -2863,7 +2868,7 @@ function printHTML(forExport){
         <td style="padding:${DP('10px 8px')};font-size:${SZ(11,'table')}px;color:#a8b0bd;text-align:center;${cellB};border-bottom:1px solid #eef1f5">${rn++}</td>
         <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;${cellB};border-bottom:1px solid #eef1f5">${esc(it.brand)}</td>
         <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;${cellB};border-bottom:1px solid #eef1f5">${esc(it.model)}</td>
-        <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#555;${cellB};border-bottom:1px solid #eef1f5">${esc(it.desc)}</td>
+        <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#555;white-space:pre-line;${cellB};border-bottom:1px solid #eef1f5">${esc(it.desc)}</td>
         ${hideP?'':`<td style="padding:${DP('10px 10px')};font-size:${SZ(13,'table')}px;font-weight:700;text-align:right;color:${TH.dark};${cellB};border-bottom:1px solid #eef1f5">${fmt(c.up)}</td>`}
         <td style="padding:${DP('10px 8px')};font-size:${SZ(12,'table')}px;text-align:center;color:#555;${cellB};border-bottom:1px solid #eef1f5">${it.qty||1}</td>
         <td style="padding:${DP('10px 8px')};font-size:${SZ(11,'table')}px;text-align:center;color:#a8b0bd;${cellB};border-bottom:1px solid #eef1f5">${esc(it.uom||'Pcs')}</td>
@@ -2937,10 +2942,10 @@ function printHTML(forExport){
           ${printBankRows().map(([l1,v1,l2,v2])=>`<tr><td style="color:#555;width:130px;padding:2px 0">${l1}</td><td style="font-weight:600">${esc(v1||'—')}</td><td style="width:20px"></td><td style="color:#555;width:130px;padding:2px 0">${l2}</td><td style="font-weight:600">${esc(v2||'—')}</td></tr>`).join('')}
         </table>
       </div>`:''}
-      <div class="print-footer-div" style="border-top:2px solid ${TH.dark};padding-top:8px;margin-top:16px;display:flex;justify-content:space-between;align-items:center;font-size:${SZ(10,'body')}px;color:#888">
+      ${forExport?'':`<div class="print-footer-div" style="border-top:2px solid ${TH.dark};padding-top:8px;margin-top:16px;display:flex;justify-content:space-between;align-items:center;font-size:${SZ(10,'body')}px;color:#888">
         <span>${esc(printAddrLines().slice(0,2).join(' | '))}</span>
         <span style="font-weight:700;color:${TH.dark};font-size:${SZ(11,'body')}px">${esc(PRINTCO?.website||'')}</span>
-      </div>`:''}
+      </div>`}`:''}
       </div>
     </div>`;
   });
