@@ -3898,6 +3898,7 @@ async function saveCompanyProfile(){
   };
   const r=await api('PUT','/api/auth/company-profile',body);
   if(r.error){alert(r.error);return;}
+  PRINTCO=null; // invalidate the Print tab's cached copy so it refetches fresh data
   alert('Company profile saved.');
 }
 
