@@ -2821,8 +2821,24 @@ function printTypographyControlsHTML(){
     </div>
   </div>`;
 }
+// ── Print pricing visibility ────────────────────────────────────────────────
+// Session-only (not persisted to localStorage like the theme/density/font
+// choices above) so a no-pricing copy never lingers silently into the next
+// quote or the next day -- it always resets to "prices shown" on reload.
+function togglePrintPricing(){A.printHidePrices=!A.printHidePrices;draw();}
+function printPricingToggleHTML(){
+  const hidden=!!A.printHidePrices;
+  return `<div class="print-controls" style="background:#fff;border:1.5px solid var(--gray-200);border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+    <div>
+      <div style="font-size:12px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px">Pricing</div>
+      <div style="font-size:12px;color:var(--gray-700)">${hidden?'Unit price, VAT, and totals are hidden on this printout.':'Unit price, VAT, and totals are shown on this printout.'}</div>
+    </div>
+    <button class="btn ${hidden?'':'btn-navy'}" onclick="togglePrintPricing()" style="white-space:nowrap">${hidden?'💰 Show prices':'🚫 Hide prices'}</button>
+  </div>`;
+}
 function printHTML(forExport){
   const q=A.activeQuote; if(!q)return'';
+  const hideP=!!A.printHidePrices;
   const which=printWhich();
   const os=which==='all'?q.quote_data||[]:[q.quote_data?.[+which]||q.quote_data?.[0]].filter(Boolean);
   const TERMS=q.terms_data&&q.terms_data.length?q.terms_data:DEFAULT_TERMS;
@@ -2832,6 +2848,7 @@ function printHTML(forExport){
   if(!forExport){
     html+=printThemeSwitcherHTML();
     html+=printTypographyControlsHTML();
+    html+=printPricingToggleHTML();
     html+=`<div class="print-controls" style="background:#fffbeb;border:1.5px solid #f59e0b;border-radius:8px;padding:10px 16px;margin-bottom:16px;font-size:13px;color:#92400e;display:flex;align-items:center;gap:10px">
       <span style="font-size:18px">💡</span>
       <span><strong>Before printing:</strong> In Chrome print dialog → <strong>More settings</strong> → uncheck <strong>"Headers and footers"</strong> to remove the URL and date from the printout.</span>
@@ -2847,11 +2864,11 @@ function printHTML(forExport){
         <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;${cellB};border-bottom:1px solid #eef1f5">${esc(it.brand)}</td>
         <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;${cellB};border-bottom:1px solid #eef1f5">${esc(it.model)}</td>
         <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#555;${cellB};border-bottom:1px solid #eef1f5">${esc(it.desc)}</td>
-        <td style="padding:${DP('10px 10px')};font-size:${SZ(13,'table')}px;font-weight:700;text-align:right;color:${TH.dark};${cellB};border-bottom:1px solid #eef1f5">${fmt(c.up)}</td>
+        ${hideP?'':`<td style="padding:${DP('10px 10px')};font-size:${SZ(13,'table')}px;font-weight:700;text-align:right;color:${TH.dark};${cellB};border-bottom:1px solid #eef1f5">${fmt(c.up)}</td>`}
         <td style="padding:${DP('10px 8px')};font-size:${SZ(12,'table')}px;text-align:center;color:#555;${cellB};border-bottom:1px solid #eef1f5">${it.qty||1}</td>
         <td style="padding:${DP('10px 8px')};font-size:${SZ(11,'table')}px;text-align:center;color:#a8b0bd;${cellB};border-bottom:1px solid #eef1f5">${esc(it.uom||'Pcs')}</td>
-        <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;text-align:right;color:#a8b0bd;${cellB};border-bottom:1px solid #eef1f5">${vatAmt!==null?fmt(vatAmt):'—'}</td>
-        <td style="padding:${DP('10px 10px')};font-size:${SZ(13,'table')}px;font-weight:700;text-align:right;color:${TH.dark};border-bottom:1px solid #eef1f5">${fmt(c.tp)}</td>
+        ${hideP?'':`<td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;text-align:right;color:#a8b0bd;${cellB};border-bottom:1px solid #eef1f5">${vatAmt!==null?fmt(vatAmt):'—'}</td>
+        <td style="padding:${DP('10px 10px')};font-size:${SZ(13,'table')}px;font-weight:700;text-align:right;color:${TH.dark};border-bottom:1px solid #eef1f5">${fmt(c.tp)}</td>`}
       </tr>`;});
       const cellBhd='border-right:1px solid rgba(255,255,255,.18)';
       sectionBlocks.push(`<div style="page-break-inside:avoid">
@@ -2862,11 +2879,11 @@ function printHTML(forExport){
           <th style="padding:${DP('10px')};text-align:left;width:75px;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Brand</th>
           <th style="padding:${DP('10px')};text-align:left;width:115px;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Model</th>
           <th style="padding:${DP('10px')};text-align:left;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Description</th>
-          <th style="padding:${DP('10px')};text-align:right;width:85px;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Unit (${sym()})</th>
+          ${hideP?'':`<th style="padding:${DP('10px')};text-align:right;width:85px;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Unit (${sym()})</th>`}
           <th style="padding:${DP('10px 8px')};text-align:center;width:45px;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Qty</th>
-          <th style="padding:${DP('10px 8px')};text-align:center;width:50px;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">UOM</th>
-          <th style="padding:${DP('10px')};text-align:right;width:75px;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">VAT</th>
-          <th style="padding:${DP('10px')};text-align:right;width:95px;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em">Total</th>
+          <th style="padding:${DP('10px 8px')};text-align:center;width:50px;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em${hideP?'':';'+cellBhd}">UOM</th>
+          ${hideP?'':`<th style="padding:${DP('10px')};text-align:right;width:75px;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">VAT</th>
+          <th style="padding:${DP('10px')};text-align:right;width:95px;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em">Total</th>`}
         </tr></thead>
         <tbody>${srows}</tbody>
       </table>
@@ -2893,7 +2910,7 @@ function printHTML(forExport){
         <div><div style="font-size:${SZ(10,'body')}px;font-weight:700;color:#8a93a3;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Prepared by</div><div style="font-size:${SZ(13,'body')}px;color:#333;line-height:1.6"><strong>${esc(o.by)}</strong>${o.title?` &middot; ${esc(o.title)}`:''}</div></div>
       </div>
       `:''}${multi?`<div style="display:inline-block;background:${TH.dark};color:#fff;padding:6px 16px;border-radius:20px;font-size:${SZ(12,'header')}px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;page-break-inside:avoid;page-break-after:avoid;margin-bottom:10px">${esc(o.label)}</div>`:''}${sectionBlocks.join('')}
-      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;margin:18px 0 24px;page-break-inside:avoid">
+      ${hideP?'':`<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;margin:18px 0 24px;page-break-inside:avoid">
         <div style="display:flex;justify-content:space-between;align-items:center;gap:24px;background:#f7f9fc;border-radius:8px;padding:10px 18px;min-width:230px">
             <div style="font-size:${SZ(11,'body')}px;font-weight:700;color:#8a93a3;text-transform:uppercase;letter-spacing:.05em">Subtotal</div>
             <div style="font-size:${SZ(15,'body')}px;font-weight:800;color:${TH.dark}">${sym()} ${fmt(T.ts)}</div>
@@ -2906,7 +2923,7 @@ function printHTML(forExport){
             <div style="font-size:${SZ(12,'body')}px;font-weight:700;color:rgba(255,255,255,.6);text-transform:uppercase;letter-spacing:.05em">Grand total</div>
             <div style="font-size:${SZ(19,'body')}px;font-weight:800;color:#fff">${sym()} ${fmt(T.grand)}</div>
           </div>
-      </div>
+      </div>`}
       ${(!multi||oi===os.length-1)?`<div style="display:inline-block;background:${TH.dark};color:#fff;font-size:${SZ(12,'header')}px;font-weight:800;padding:7px 16px;border-radius:6px;margin-bottom:12px;text-transform:uppercase;letter-spacing:.04em">Terms &amp; conditions</div>
       <div style="margin-bottom:20px">
         ${TERMS.map((t,i)=>`<div style="display:flex;gap:10px;padding:7px 2px;border-bottom:0.5px solid #eef1f5;font-size:${SZ(12,'body')}px">
