@@ -2650,7 +2650,7 @@ function buildExportHTML(){
   const css=document.querySelector('style')?.textContent||'';
   const body=printHTML(true);
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${css}
-  body{background:#fff;margin:0;padding:16px}
+  body{background:#fff;margin:0;padding:0}
   .print-doc{box-shadow:none;max-width:100%}
   </style></head><body>${body}</body></html>`;
 }
