@@ -1085,7 +1085,9 @@ async function doLogin(e){
   const err=document.getElementById('loginErr');err.style.display='none';
   const r=await api('POST','/api/auth/login',{email:document.getElementById('lEmail').value,password:document.getElementById('lPass').value});
   if(r.error){err.textContent=r.error;err.style.display='block';return;}
-  setAuth(r);await loadQuotes();A.page='dashboard';draw();
+  setAuth(r);
+  if(r.user&&r.user.is_platform_admin){A.page='platform';draw();return;}
+  await loadQuotes();A.page='dashboard';draw();
 }
 async function doRegister(e){
   e.preventDefault();
@@ -1100,7 +1102,9 @@ async function checkAuth(){
   if(!A.token){A.screen='login';draw();return;}
   const r=await api('GET','/api/auth/me');
   if(r.error){A.screen='login';draw();return;}
-  A.user=r.user;A.company=r.company;A.screen='app';await loadQuotes();draw();
+  A.user=r.user;A.company=r.company;A.screen='app';
+  if(A.user&&A.user.is_platform_admin){A.page='platform';draw();return;}
+  await loadQuotes();draw();
 }
 
 // ── Quotes CRUD ───────────────────────────────────────────────────────────────
