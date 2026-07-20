@@ -240,26 +240,14 @@ def register():
                 'company': {'id': co['id'], 'name': co['name'], 'slug': co['slug']}
             })
 
-        slug = slugify(company)
-        slug_check = sb.table('companies').select('id').eq('slug', slug).execute()
-        if slug_check.data:
-            slug = slug + '-' + str(uuid.uuid4())[:4]
-
-        co = sb.table('companies').insert({'name': company, 'slug': slug}).execute().data[0]
-        user = sb.table('users').insert({
-            'company_id': co['id'], 'email': email, 'name': name,
-            'role': 'admin', 'password_hash': pw_hash
-        }).execute().data[0]
-
-        # Self-service signups are never platform admins — that flag can only be
-        # set directly by an existing platform admin (or, for the very first one,
-        # directly in the database).
-        token = make_token(user['id'], co['id'], 'admin', is_platform_admin=False, features=co.get('features') or {})
-        return jsonify({
-            'token': token,
-            'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'role': 'admin', 'is_platform_admin': False, 'ms365_email': user.get('ms365_email')},
-            'company': {'id': co['id'], 'name': co['name'], 'slug': co['slug']}
-        })
+        # Onboarding model change: self-service sign-up (spinning up a brand-new
+        # company for anyone who submits this form) is intentionally disabled.
+        # The only supported onboarding path is now: Global Admin creates/invites
+        # a Company Admin -> Company Admin invites End Users, both via the
+        # invites table + /api/auth/accept-invite. The pending-invite branch
+        # above still works (it's invite-driven, not self-service) -- this only
+        # blocks the "no invite at all, just create my own company" path.
+        return jsonify({'error': 'Self-service sign-up is disabled. Please contact your administrator for an invite.'}), 403
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
