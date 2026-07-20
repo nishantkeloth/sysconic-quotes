@@ -138,12 +138,15 @@ def list_companies():
     if not require_platform_admin(claims): return jsonify(PLATFORM_ADMIN_ONLY), 403
 
     companies = sb.table('companies').select('*').eq('is_internal', False).order('created_at', desc=True).execute().data or []
-    users = sb.table('users').select('id,company_id').execute().data or []
+    users = sb.table('users').select('id,name,email,role,company_id').execute().data or []
     quotes = sb.table('quotes').select('id,company_id').execute().data or []
 
     user_counts = {}
+    admins_by_company = {}
     for u in users:
         user_counts[u['company_id']] = user_counts.get(u['company_id'], 0) + 1
+        if u.get('role') == 'admin':
+            admins_by_company.setdefault(u['company_id'], []).append({'name': u.get('name'), 'email': u.get('email')})
     quote_counts = {}
     for q in quotes:
         quote_counts[q['company_id']] = quote_counts.get(q['company_id'], 0) + 1
@@ -156,6 +159,7 @@ def list_companies():
             'created_at': co.get('created_at'),
             'user_count': user_counts.get(co['id'], 0),
             'quote_count': quote_counts.get(co['id'], 0),
+            'admins': admins_by_company.get(co['id'], []),
         })
     return jsonify({'companies': out})
 
@@ -243,9 +247,10 @@ def invite_to_company(cid):
 
         d = request.json or {}
         email = (d.get('email') or '').strip().lower()
-        role = (d.get('role') or 'admin').strip().lower()
-        if role not in ('admin', 'user'):
-            return jsonify({'error': 'Role must be admin or user'}), 400
+        # Platform admins may only onboard Company Admins -- end users are
+        # invited by the Company Admin themselves afterwards, not by the
+        # Global Admin. Ignore any role the client sends; always admin.
+        role = 'admin'
         if not email:
             return jsonify({'error': 'Email required'}), 400
 
