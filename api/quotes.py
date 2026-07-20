@@ -623,8 +623,13 @@ def list_versions(qid):
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
 
-    q = sb.table('quotes').select('id').eq('id', qid).eq('company_id', claims['company_id']).execute()
+    q = sb.table('quotes').select('id,created_by').eq('id', qid).eq('company_id', claims['company_id']).execute()
     if not q.data: return jsonify({'error': 'Not found'}), 404
+    # AUTH-001 fix: this endpoint was company-scoped but not visibility-scoped --
+    # any teammate could list another user's private quote's review history.
+    # Same permission rule as get_quote()/quote_activity() elsewhere in this file.
+    if not _can_view_quote(qid, q.data[0], claims):
+        return jsonify({'error': 'Forbidden'}), 403
 
     rows = sb.table('quote_versions').select(
         'id,version_number,status,submitted_by,submitted_at,reviewed_by,reviewed_at,review_comment,title,customer'
@@ -642,8 +647,13 @@ def get_version(qid, vid):
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
 
-    q = sb.table('quotes').select('id').eq('id', qid).eq('company_id', claims['company_id']).execute()
+    q = sb.table('quotes').select('id,created_by').eq('id', qid).eq('company_id', claims['company_id']).execute()
     if not q.data: return jsonify({'error': 'Not found'}), 404
+    # AUTH-001 fix: same reasoning as list_versions() above -- this exposes a
+    # full pricing/terms snapshot and must be visibility-scoped, not just
+    # company-scoped.
+    if not _can_view_quote(qid, q.data[0], claims):
+        return jsonify({'error': 'Forbidden'}), 403
 
     v = sb.table('quote_versions').select('*').eq('id', vid).eq('quote_id', qid).execute()
     if not v.data: return jsonify({'error': 'Not found'}), 404

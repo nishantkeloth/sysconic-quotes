@@ -22,6 +22,33 @@ def verify_token(req):
     except:
         return None
 
+# AUTH-001 fix: duplicated from api/quotes.py (same one-file-per-route
+# constraint as every other cross-file duplication in this codebase -- see
+# e.g. calc_item/calc_opt, the Zoho adapter). quote_pdf() below was
+# company-scoped but not visibility-scoped, letting any teammate download
+# another user's private quote as a PDF. Keep these three in sync by hand
+# with api/quotes.py if the visibility rules ever change there.
+def _can_view_all_quotes(claims):
+    if claims['role'] == 'admin':
+        return True
+    u = sb.table('users').select('can_view_all_quotes').eq('id', claims['user_id']).execute()
+    return bool(u.data and u.data[0].get('can_view_all_quotes'))
+
+def _is_assigned_reviewer_on_quote(qid, user_id):
+    q = sb.table('quotes').select('current_version').eq('id', qid).execute()
+    if not q.data: return False
+    vrows = sb.table('quote_versions').select('id').eq('quote_id', qid)\
+        .eq('version_number', q.data[0].get('current_version')).execute()
+    if not vrows.data: return False
+    vid = vrows.data[0]['id']
+    mine = sb.table('quote_version_reviewers').select('id').eq('version_id', vid).eq('user_id', user_id).execute()
+    return bool(mine.data)
+
+def _can_view_quote(qid, quote, claims):
+    if quote.get('created_by') == claims['user_id'] or _can_view_all_quotes(claims):
+        return True
+    return _is_assigned_reviewer_on_quote(qid, claims['user_id'])
+
 
 # ══ PDF builder (mirrors the app print design) ══════════════════════════════
 import io, base64
@@ -328,6 +355,8 @@ def quote_pdf(qid):
     row = sb.table('quotes').select('*').eq('id', qid).eq('company_id', claims['company_id']).execute()
     if not row.data: return jsonify({'error': 'Not found'}), 404
     quote = row.data[0]
+    if not _can_view_quote(qid, quote, claims):
+        return jsonify({'error': 'Forbidden'}), 403
     for f in ('quote_data','terms_data','vendor_data'):
         if isinstance(quote.get(f), str):
             try: quote[f] = _json.loads(quote[f])
