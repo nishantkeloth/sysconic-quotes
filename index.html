@@ -2085,7 +2085,6 @@ function authHTML(){
       <button class="auth-btn" type="submit">${isReg?'Create account →':'Sign in →'}</button>
     </form>
     ${!isReg?`<div class="auth-link"><a onclick="A.screen='forgotPassword';draw()">Forgot password?</a></div>`:''}
-    <div class="auth-link">${isReg?'Already have an account?':'Don\'t have an account?'} <a onclick="A.screen='${isReg?'login':'register'}';draw()">${isReg?'Sign in':'Create one'}</a></div>
   </div></div>`;
 }
 
