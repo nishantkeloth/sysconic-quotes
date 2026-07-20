@@ -468,7 +468,7 @@ const DEFAULT_TERMS=[
 
 // ── App state ────────────────────────────────────────────────────────────────
 let _n=1; const uid=()=>'i'+ _n++;
-const A={screen:'login',token:localStorage.getItem('sq_token')||null,user:null,company:null,
+const A={screen:'login',token:null,user:null,company:null,
   page:'dashboard',quotes:[],activeQuote:null,view:'internal',cur:'AED',rate:1,
   activeOpt:0,saveStatus:'',searchQ:'',filterStatus:'all',sbOpen:false,
   portfolio:null,ppFilters:{},ppDetail:null,ppDetailId:null,ppDetailTab:'overview'};
@@ -1052,8 +1052,10 @@ function onUnitPriceChange(si,ii,newUp){
 }
 
 // ── API ──────────────────────────────────────────────────────────────────────
-async function api(method,path,body){
-  const o={method,headers:{'Content-Type':'application/json'}};
+async function api(method,path,body,_retried){
+  // AUTH-002: credentials:'same-origin' so the httpOnly sq_refresh cookie
+  // (set only on /api/auth/*) actually gets sent/received by the browser.
+  const o={method,headers:{'Content-Type':'application/json'},credentials:'same-origin'};
   if(A.token)o.headers['Authorization']='Bearer '+A.token;
   if(body)o.body=JSON.stringify(body);
   let r;
@@ -1061,6 +1063,21 @@ async function api(method,path,body){
     r=await fetch(API+path,o);
   }catch(e){
     return {error:'Network error — could not reach the server. '+(e&&e.message||'')};
+  }
+  // AUTH-002: the access token is short-lived (1hr) now instead of 30 days,
+  // so a 401 mid-session is expected/routine, not exceptional. Silently
+  // trade the httpOnly refresh cookie for a new access token and retry the
+  // original call once, instead of surfacing an error or booting the user
+  // back to the login screen. Excludes the refresh/login endpoints
+  // themselves to avoid recursion.
+  if(r.status===401&&!_retried&&path!=='/api/auth/refresh'&&path!=='/api/auth/login'){
+    const ref=await api('POST','/api/auth/refresh');
+    if(ref&&ref.token){
+      A.token=ref.token;A.user=ref.user;A.company=ref.company;
+      return api(method,path,body,true);
+    }
+    A.token=null;A.user=null;A.company=null;A.screen='login';draw();
+    return {error:'Session expired. Please sign in again.'};
   }
   let text='';
   try{
@@ -1096,13 +1113,25 @@ async function doRegister(e){
   if(r.error){err.textContent=r.error;err.style.display='block';return;}
   setAuth(r);await loadQuotes();A.page='dashboard';draw();
 }
-function setAuth(r){A.token=r.token;A.user=r.user;A.company=r.company;localStorage.setItem('sq_token',A.token);A.screen='app';}
-function doLogout(){A.token=null;A.user=null;A.company=null;A.quotes=[];localStorage.removeItem('sq_token');A.screen='login';draw();}
+// AUTH-002: the access token now lives only in memory (A.token), never in
+// localStorage -- the long-lived side of the session is the httpOnly
+// sq_refresh cookie the server sets, which JS can't read even if it wanted
+// to. That's what checkAuth()/boot() calls on page load to get a fresh
+// access token back into memory without ever having persisted it client-side.
+function setAuth(r){A.token=r.token;A.user=r.user;A.company=r.company;A.screen='app';}
+function doLogout(){
+  api('POST','/api/auth/logout'); // best-effort server-side revoke; don't block the UI on it
+  A.token=null;A.user=null;A.company=null;A.quotes=[];A.screen='login';draw();
+}
 async function checkAuth(){
-  if(!A.token){A.screen='login';draw();return;}
-  const r=await api('GET','/api/auth/me');
-  if(r.error){A.screen='login';draw();return;}
-  A.user=r.user;A.company=r.company;A.screen='app';
+  // AUTH-002: no access token is ever persisted client-side, so there's
+  // nothing in A.token to check on a fresh page load/refresh. Instead,
+  // always attempt a refresh first -- the httpOnly sq_refresh cookie (if
+  // there's a still-valid, non-revoked session) gets sent automatically,
+  // and this returns a fresh short-lived access token straight into memory.
+  const r=await api('POST','/api/auth/refresh');
+  if(r.error||!r.token){A.screen='login';draw();return;}
+  A.token=r.token;A.user=r.user;A.company=r.company;A.screen='app';
   if(A.user&&A.user.is_platform_admin){A.page='platform';draw();return;}
   await loadQuotes();draw();
 }

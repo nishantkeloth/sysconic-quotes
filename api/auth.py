@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import os, jwt, bcrypt, uuid, re, traceback, requests, base64, time
+import os, jwt, bcrypt, uuid, re, traceback, requests, base64, time, secrets, hashlib
 import urllib.request
 from datetime import datetime, timedelta
 from supabase import create_client
@@ -31,14 +31,52 @@ def get_sb():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def make_token(user_id, company_id, role, is_platform_admin=False, features=None):
+    # AUTH-002: shortened from 30 days to 1 hour. This is now just the
+    # stateless access token; long-lived sessions live in the `sessions`
+    # table via a separate, revocable refresh token (see create_session()/
+    # set_refresh_cookie()/the /api/auth/refresh and /api/auth/logout routes
+    # below). A short exp here means a leaked access token is only useful
+    # for up to an hour, instead of up to 30 days.
     return jwt.encode({
         'user_id': str(user_id),
         'company_id': str(company_id),
         'role': role,
         'is_platform_admin': bool(is_platform_admin),
         'features': features or {},
-        'exp': datetime.utcnow() + timedelta(days=30)
+        'exp': datetime.utcnow() + timedelta(hours=1)
     }, JWT_SECRET, algorithm='HS256')
+
+# ── Sessions (refresh tokens) ──────────────────────────────────────────────────
+# AUTH-002 remediation. The refresh token is an opaque random string (not a
+# JWT -- nothing decodable in it), stored server-side as a sessions row so it
+# can be revoked. Only its SHA-256 hash is stored, never the raw value, same
+# reasoning as password_hash: a DB read/leak should not hand out usable
+# session tokens. It's delivered as an httpOnly, Secure, SameSite=Strict
+# cookie scoped to /api/auth, so client-side JS (including an XSS payload)
+# can never read it, and it's never sent to any other route.
+SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days, sliding (renewed on each refresh)
+REFRESH_COOKIE_NAME = 'sq_refresh'
+
+def _hash_refresh_token(raw):
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+def create_session(sb, user_id, req):
+    raw = secrets.token_urlsafe(48)
+    sb.table('sessions').insert({
+        'user_id': user_id,
+        'refresh_token_hash': _hash_refresh_token(raw),
+        'expires_at': (datetime.utcnow() + timedelta(seconds=SESSION_MAX_AGE_SECONDS)).isoformat(),
+        'user_agent': (req.headers.get('User-Agent') or '')[:300],
+    }).execute()
+    return raw
+
+def set_refresh_cookie(resp, raw_refresh_token):
+    resp.set_cookie(
+        REFRESH_COOKIE_NAME, raw_refresh_token,
+        httponly=True, secure=True, samesite='Strict',
+        max_age=SESSION_MAX_AGE_SECONDS, path='/api/auth'
+    )
+    return resp
 
 def verify_token(req):
     auth = req.headers.get('Authorization', '')
@@ -234,11 +272,13 @@ def register():
             }).execute().data[0]
             sb.table('invites').update({'accepted': True}).eq('token', invite['token']).execute()
             token = make_token(user['id'], co['id'], user['role'], is_platform_admin=False, features=co.get('features') or {})
-            return jsonify({
+            refresh_raw = create_session(sb, user['id'], request)
+            resp = jsonify({
                 'token': token,
                 'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'role': user['role'], 'is_platform_admin': False, 'ms365_email': user.get('ms365_email')},
                 'company': {'id': co['id'], 'name': co['name'], 'slug': co['slug']}
             })
+            return set_refresh_cookie(resp, refresh_raw)
 
         # Onboarding model change: self-service sign-up (spinning up a brand-new
         # company for anyone who submits this form) is intentionally disabled.
@@ -278,12 +318,89 @@ def login():
             return jsonify({'error': "This company's account has been suspended. Contact your administrator."}), 403
 
         token = make_token(user['id'], co['id'], user['role'], user.get('is_platform_admin', False), features=co.get('features') or {})
+        refresh_raw = create_session(sb, user['id'], request)
 
-        return jsonify({
+        resp = jsonify({
             'token': token,
             'user': {'id': user['id'], 'name': user.get('name', ''), 'email': user['email'], 'role': user['role'], 'is_platform_admin': bool(user.get('is_platform_admin')), 'ms365_email': user.get('ms365_email')},
             'company': {'id': co['id'], 'name': co['name'], 'slug': co['slug']}
         })
+        return set_refresh_cookie(resp, refresh_raw)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# ── Refresh (AUTH-002) ──────────────────────────────────────────────────────────
+# Exchanges the httpOnly refresh-token cookie for a new short-lived access
+# token. Rotates the refresh token on every use (old one is revoked, a new
+# one issued) so a stolen-and-replayed refresh token is detectable: if a
+# refresh token that's already been revoked is ever presented again, that's
+# a strong signal it was copied/stolen, so every session for that user is
+# killed as a precaution rather than just denying the one request.
+@app.route('/api/auth/refresh', methods=['POST'])
+def refresh():
+    try:
+        sb = get_sb()
+        raw = request.cookies.get(REFRESH_COOKIE_NAME)
+        if not raw:
+            return jsonify({'error': 'No session'}), 401
+
+        h = _hash_refresh_token(raw)
+        row = sb.table('sessions').select('*').eq('refresh_token_hash', h).execute()
+        if not row.data:
+            return jsonify({'error': 'Invalid session'}), 401
+        session = row.data[0]
+
+        if session.get('revoked_at'):
+            sb.table('sessions').update({'revoked_at': datetime.utcnow().isoformat()})\
+                .eq('user_id', session['user_id']).is_('revoked_at', 'null').execute()
+            resp = jsonify({'error': 'Session revoked, please sign in again'})
+            resp.delete_cookie(REFRESH_COOKIE_NAME, path='/api/auth')
+            return resp, 401
+
+        still_valid = sb.table('sessions').select('id').eq('id', session['id'])\
+            .gt('expires_at', datetime.utcnow().isoformat()).execute()
+        if not still_valid.data:
+            return jsonify({'error': 'Session expired, please sign in again'}), 401
+
+        user_rows = sb.table('users').select('*').eq('id', session['user_id']).execute()
+        if not user_rows.data:
+            return jsonify({'error': 'Unauthorized'}), 401
+        user = user_rows.data[0]
+        co = sb.table('companies').select('*').eq('id', user['company_id']).execute().data[0]
+        if co.get('status') == 'suspended':
+            return jsonify({'error': "This company's account has been suspended. Contact your administrator."}), 403
+
+        sb.table('sessions').update({'revoked_at': datetime.utcnow().isoformat()}).eq('id', session['id']).execute()
+        new_raw = create_session(sb, user['id'], request)
+
+        access_token = make_token(user['id'], co['id'], user['role'], user.get('is_platform_admin', False), features=co.get('features') or {})
+        resp = jsonify({
+            'token': access_token,
+            'user': {'id': user['id'], 'name': user.get('name', ''), 'email': user['email'], 'role': user['role'], 'is_platform_admin': bool(user.get('is_platform_admin')), 'ms365_email': user.get('ms365_email')},
+            'company': {'id': co['id'], 'name': co['name'], 'slug': co['slug']}
+        })
+        return set_refresh_cookie(resp, new_raw)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# ── Logout (AUTH-002) ───────────────────────────────────────────────────────────
+# Actually kills the session server-side (revokes the sessions row behind the
+# refresh-token cookie), instead of the old behavior of only clearing
+# localStorage client-side while the token stayed valid until its natural
+# 30-day expiry.
+@app.route('/api/auth/logout', methods=['POST'])
+def logout():
+    try:
+        sb = get_sb()
+        raw = request.cookies.get(REFRESH_COOKIE_NAME)
+        if raw:
+            h = _hash_refresh_token(raw)
+            sb.table('sessions').update({'revoked_at': datetime.utcnow().isoformat()}).eq('refresh_token_hash', h).execute()
+        resp = jsonify({'ok': True})
+        resp.delete_cookie(REFRESH_COOKIE_NAME, path='/api/auth')
+        return resp
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
@@ -400,12 +517,14 @@ def accept_invite():
         sb.table('invites').update({'accepted': True}).eq('token', token).execute()
         co  = sb.table('companies').select('*').eq('id', invite['company_id']).execute().data[0]
         tok = make_token(user['id'], co['id'], user['role'], is_platform_admin=False, features=co.get('features') or {})
+        refresh_raw = create_session(sb, user['id'], request)
 
-        return jsonify({
+        resp = jsonify({
             'token': tok,
             'user': {'id': user['id'], 'name': user['name'], 'email': user['email'], 'role': user['role'], 'is_platform_admin': False},
             'company': {'id': co['id'], 'name': co['name']}
         })
+        return set_refresh_cookie(resp, refresh_raw)
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
