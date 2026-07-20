@@ -28,6 +28,23 @@ sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 BUCKET = 'proposals'
 MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024  # 8 MB
 
+# TEN-002 fix: proposals is a PRIVATE bucket now (or about to become one --
+# see docs/saas-audit/REMEDIATION-ROADMAP.md). Unlike product images/logos,
+# a generated proposal is normally downloaded once shortly after generation
+# rather than embedded long-term into another record, so a shorter (but
+# still generous) expiry is used here. Same response-shape caveat as
+# api/products.py's _signed_url() -- verify once against a real upload.
+PROPOSAL_SIGNED_URL_EXPIRES_SECONDS = 7 * 24 * 60 * 60  # 7 days
+
+def _signed_url(bucket, path, expires_in=PROPOSAL_SIGNED_URL_EXPIRES_SECONDS):
+    res = sb.storage.from_(bucket).create_signed_url(path, expires_in)
+    url = res.get('signedURL') or res.get('signedUrl') or res.get('signed_url') or res.get('url')
+    if not url:
+        raise RuntimeError(f'Unexpected create_signed_url() response shape: {res!r}')
+    if url.startswith('http://') or url.startswith('https://'):
+        return url
+    return f"{SUPABASE_URL}/storage/v1{url}"
+
 def verify_token(req):
     auth = req.headers.get('Authorization', '')
     if not auth.startswith('Bearer '): return None
@@ -710,8 +727,7 @@ def render_proposal():
     path = f"{claims['company_id']}/{safe_title}-{label_map[kind]}-{ts}.pdf"
     try:
         sb.storage.from_(BUCKET).upload(path, pdf_bytes, {'content-type': 'application/pdf'})
-        url = sb.storage.from_(BUCKET).get_public_url(path)
-        if isinstance(url, str): url = url.rstrip('?')
+        url = _signed_url(BUCKET, path)
     except Exception as e:
         return jsonify({'error': f'Could not save the generated proposal: {str(e)[:250]}'}), 502
 

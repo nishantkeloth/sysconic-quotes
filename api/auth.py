@@ -698,6 +698,22 @@ COMPANY_PROFILE_FIELDS = [
 LOGO_BUCKET = 'company-assets'
 MAX_LOGO_BYTES = 4 * 1024 * 1024  # 4 MB
 
+# TEN-002 fix: company-assets is a PRIVATE bucket now (or about to become one --
+# see docs/saas-audit/REMEDIATION-ROADMAP.md). Mirrors the same long-lived
+# signed-URL pattern used in api/products.py -- see that file's comments for
+# the full rationale and the response-shape caveat worth verifying once live.
+SIGNED_URL_EXPIRES_SECONDS = 10 * 365 * 24 * 60 * 60  # ~10 years
+
+def _signed_url(bucket, path, expires_in=SIGNED_URL_EXPIRES_SECONDS):
+    sb = get_sb()
+    res = sb.storage.from_(bucket).create_signed_url(path, expires_in)
+    url = res.get('signedURL') or res.get('signedUrl') or res.get('signed_url') or res.get('url')
+    if not url:
+        raise RuntimeError(f'Unexpected create_signed_url() response shape: {res!r}')
+    if url.startswith('http://') or url.startswith('https://'):
+        return url
+    return f"{SUPABASE_URL}/storage/v1{url}"
+
 @app.route('/api/auth/company-profile', methods=['GET'])
 def get_company_profile():
     try:
@@ -759,13 +775,15 @@ def upload_company_logo():
         try:
             sb.storage.from_(LOGO_BUCKET).upload(path, data, {'content-type': ctype})
         except Exception:
-            return jsonify({'error': 'Could not save logo to storage. Check that the company-assets bucket exists and is public.'}), 502
+            return jsonify({'error': 'Could not save logo to storage. Check that the company-assets bucket exists.'}), 502
 
-        public_url = sb.storage.from_(LOGO_BUCKET).get_public_url(path)
-        if isinstance(public_url, str): public_url = public_url.rstrip('?')
+        try:
+            signed_url = _signed_url(LOGO_BUCKET, path)
+        except Exception as e:
+            return jsonify({'error': f'Logo uploaded but could not generate its access URL: {str(e)[:200]}'}), 502
 
-        sb.table('companies').update({'logo_url': public_url}).eq('id', claims['company_id']).execute()
-        return jsonify({'logo_url': public_url})
+        sb.table('companies').update({'logo_url': signed_url}).eq('id', claims['company_id']).execute()
+        return jsonify({'logo_url': signed_url})
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
