@@ -14,7 +14,7 @@ Go to Supabase → SQL Editor → paste contents of `schema.sql` → Run
 
 ### 2. Set environment variables in Vercel
 ```
-SUPABASE_URL=https://idcvzoqcmgwgqcpnpcuz.supabase.co
+SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_SERVICE_KEY=your_service_key
 JWT_SECRET=your_long_random_secret
 ```

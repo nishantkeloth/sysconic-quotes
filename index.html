@@ -355,6 +355,31 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 /* ── Responsive: hamburger + off-canvas sidebar for tablet/phone ── */
 .sb-toggle{display:none;background:none;border:none;font-size:22px;color:var(--navy);cursor:pointer;padding:4px 8px;line-height:1;flex-shrink:0}
 .sb-overlay{display:none}
+
+/* ── Contextual Help drawer ── */
+.help-fab{position:fixed;bottom:22px;right:22px;width:46px;height:46px;border-radius:50%;background:#f59e0b;color:#1e3a5f;border:none;font-size:19px;font-weight:700;cursor:pointer;box-shadow:var(--shadow-lg);z-index:400;display:flex;align-items:center;justify-content:center;line-height:1;transition:filter .15s}
+.help-fab:hover{filter:brightness(1.06)}
+.help-overlay{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:900;display:flex;justify-content:flex-end}
+.help-drawer{width:440px;max-width:92vw;height:100%;background:var(--white);box-shadow:var(--shadow-lg);display:flex;flex-direction:column;animation:helpSlideIn .18s ease}
+@keyframes helpSlideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}
+.help-drawer-hd{display:flex;justify-content:space-between;align-items:flex-start;padding:20px 20px 14px;border-bottom:1px solid var(--gray-200);flex-shrink:0}
+.help-drawer-eyebrow{font-size:11px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.06em}
+.help-drawer-title{font-size:19px;font-weight:700;margin-top:2px}
+.help-close{background:none;border:none;font-size:20px;color:var(--gray-500);cursor:pointer;padding:2px 4px;line-height:1}
+.help-close:hover{color:var(--gray-900)}
+.help-drawer-jump{display:flex;align-items:center;gap:8px;padding:12px 20px;border-bottom:1px solid var(--gray-100);flex-wrap:wrap;flex-shrink:0}
+.help-drawer-jump label{font-size:12px;color:var(--gray-500);font-weight:600;white-space:nowrap}
+.help-drawer-jump select{flex:1;min-width:140px;padding:6px 8px;font-size:13px;border:1.5px solid var(--gray-200);border-radius:6px;font-family:inherit}
+.help-follow-btn{font-size:11px;padding:4px 9px;border-radius:14px;border:1.5px solid var(--gray-200);background:#fff;cursor:pointer;color:var(--navy);white-space:nowrap}
+.help-drawer-body{flex:1;overflow-y:auto;padding:18px 20px 36px}
+.help-drawer-body h4{font-size:12.5px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.04em;margin:22px 0 8px}
+.help-drawer-body h4:first-child{margin-top:0}
+.help-drawer-body p{font-size:13.5px;line-height:1.55;color:var(--gray-700);margin:0 0 10px}
+.help-drawer-body ul{margin:0 0 12px;padding-left:18px}
+.help-drawer-body li{font-size:13.5px;line-height:1.55;color:var(--gray-700);margin-bottom:6px}
+.help-drawer-body strong{color:var(--gray-900)}
+.help-drawer-body .help-tip{background:var(--navy-light);border-radius:8px;padding:10px 12px;font-size:12.5px;color:var(--navy);margin-top:2px;margin-bottom:12px}
+@media (max-width:640px){.help-drawer{width:100%;max-width:100%}}
 @media (max-width:900px){
   .shell{position:relative}
   .sidebar{position:fixed;top:0;left:0;bottom:0;z-index:300;transform:translateX(-100%);transition:transform .25s ease;box-shadow:var(--shadow-lg)}
@@ -410,7 +435,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 
 @media print{
   @page{margin:12mm 10mm 15mm 10mm;size:A4}
-  .sidebar,.topbar,.cstrip,.sec-hd>div:last-child,.opt-pills,.grand-strip,.btn,.idel,.term-del,.print-controls,.sb-overlay{display:none!important}
+  .sidebar,.topbar,.cstrip,.sec-hd>div:last-child,.opt-pills,.grand-strip,.btn,.idel,.term-del,.print-controls,.sb-overlay,.help-fab,.help-overlay{display:none!important}
   .shell{display:block;height:auto}.main{overflow:visible;height:auto}.content{padding:0;overflow:visible;height:auto}
   .print-doc{box-shadow:none;border:none;padding:0;max-width:100%;border-radius:14px;overflow:hidden}
   .pcard-body{padding:16px 22px 22px}
@@ -2175,6 +2200,216 @@ function resetPasswordHTML(){
   </div></div>`;
 }
 
+// ── Contextual Help ──────────────────────────────────────────────────────────
+// One content block per app section, keyed by the exact same A.page values
+// used everywhere else (nav, PAGE_TITLES, buildTopbarRight) so the drawer
+// always shows help for whatever the user is actually looking at, with zero
+// extra mapping logic. Doubles as a jump-to-topic index for browsing any
+// other section's help without leaving the current page.
+const HELP_CONTENT={
+  dashboard:{title:'Quotes',body:`
+    <p>This is your home page — every quote your company has created, in one list.</p>
+    <h4>Metrics</h4>
+    <p><strong>Total quotes</strong>, <strong>Pipeline value</strong> (sum of every quote's grand total), <strong>Total GP</strong> and <strong>Win rate</strong> (Awarded ÷ Total).</p>
+    <h4>Working the list</h4>
+    <ul>
+      <li>Search by title or customer, filter by status (Draft / Sent / Awarded / Lost), switch between grid and list view.</li>
+      <li>Each quote card has ✏️ Edit, ⧉ Copy (duplicate as a new editable quote) and — admins only — 🗑 Delete.</li>
+      <li><strong>+ New quote</strong> (top right) starts a blank one.</li>
+    </ul>
+    <div class="help-tip">💡 Duplicating a similar past quote is usually faster than starting from scratch.</div>
+  `},
+  editor:{title:'Quote Editor',body:`
+    <p>Where a quote actually gets built: customer details, one or more pricing <strong>options</strong>, and the item sections inside each option.</p>
+    <h4>Quote details</h4>
+    <p>Title, Customer (type freely or search your Zoho Books customers), Option label, Quote ref, Date, Prepared by, Title/Role.</p>
+    <h4>Options</h4>
+    <p>The pill tabs above the details card. Use these when you want to offer the customer real alternatives (e.g. "Standard" vs "Premium") priced side by side — see them compared on the <strong>Summary</strong> tab. Most quotes only need one.</p>
+    <h4>Sections &amp; items</h4>
+    <p>Group items under a section (e.g. "LED Screen", "Installation"). Add/remove items, drag the ⠿ handle or use ▲▼ to reorder.</p>
+    <h4>Internal vs Client view</h4>
+    <p>Toggle top-right. <strong>Internal</strong> shows your cost, discount, markup/margin % and vendor — for your team only. <strong>Client</strong> shows only what a customer would see. This is a screen-only toggle; the actual Print/PDF output is controlled separately from the Print tab.</p>
+    <h4>Pricing</h4>
+    <p>Set Currency, Rate to AED, and Pricing method (Markup or Margin) in the strip above the tabs. Unit Price is editable directly — typing a price back-calculates the markup/margin automatically. VAT is enabled and rated per option, shown in the totals strip at the bottom.</p>
+    <h4>Toolbar</h4>
+    <ul>
+      <li><strong>💾 Save</strong> — autosaves as you type too, this just forces it immediately.</li>
+      <li><strong>📤 Send to Review</strong> — snapshot this quote and route it to chosen reviewers before it goes to a customer.</li>
+      <li><strong>📑 Generate Proposal</strong> — AI drafts a Technical/Commercial proposal document from this quote.</li>
+      <li><strong>🔍 AI Review</strong> — an advisory completeness check (missing pricing, thin descriptions, etc.); nothing is changed automatically.</li>
+      <li><strong>✨ Auto-BOM</strong> — describe a project in plain language and AI suggests a bill of materials, matching your Product Catalog where it can.</li>
+      <li><strong>📄 Template / 📥 Import Excel</strong> — download a blank item template or bulk-import items from a spreadsheet.</li>
+      <li><strong>⋯ More</strong> — 📜 History (past review submissions), 🔍 Compare (diff any two saved versions), 🖼 Images toggle (product photos + catalog assist), ⧉ Duplicate quote, ⬇ Export PDF.</li>
+    </ul>
+    <div class="help-tip">💡 An Awarded or Sent quote locks editing — use "Unlock — set to Draft" at the top if you need to change it.</div>
+  `},
+  terms:{title:'Terms & Conditions',body:`
+    <p>The T&amp;C list that prints at the end of this quotation — payment terms, delivery, warranty, exclusions, whatever applies.</p>
+    <ul>
+      <li><strong>+ Add term</strong> adds a new numbered line; edit any line directly; remove ones you don't need.</li>
+      <li>These are per-quote, so you can tailor them each time rather than being stuck with one fixed set of boilerplate.</li>
+    </ul>
+  `},
+  summary:{title:'Summary',body:`
+    <p>A read-only rollup of the numbers — useful for a final sanity check before sending.</p>
+    <ul>
+      <li>If the quote has more than one <strong>option</strong>, an Options Comparison card shows Subtotal / Total GP / Margin / VAT / Grand Total side by side.</li>
+      <li>Below that, one detail card per option with the same figures plus Total Cost.</li>
+    </ul>
+  `},
+  vendor:{title:'Vendor Payments',body:`
+    <p>Internal tracking for what you owe your suppliers on this quote — separate from what the customer sees.</p>
+    <ul>
+      <li>Top metrics: PO Value incl. VAT (this quote's grand total), Total Vendor Payable, and the resulting Net Profit.</li>
+      <li><strong>Vendor payment tracker</strong>: add each vendor, their payable amount (VAT at 5% is calculated automatically), two payment installments, a date and a status (pending / partial / paid).</li>
+      <li><strong>Client payment schedule</strong> is a fixed 25% / 25% / 50% reference split of the grand total — informational only, it doesn't connect to actual invoicing.</li>
+    </ul>
+  `},
+  print:{title:'Print / PDF',body:`
+    <p>The exact document your customer receives — preview it here, then download, email, or print it.</p>
+    <h4>Layout controls (screen only — never printed)</h4>
+    <ul>
+      <li><strong>Color theme</strong> — 10 palette choices for the whole document.</li>
+      <li><strong>Layout density</strong> — Compact / Standard / Spacious, affects item table row padding only.</li>
+      <li><strong>Font</strong> and independent <strong>text size</strong> for three zones — Headers &amp; titles, Body &amp; totals, Item table.</li>
+      <li>These four choices are remembered in your browser (not per-quote), so they carry over to the next quote you print.</li>
+    </ul>
+    <h4>Pricing</h4>
+    <p><strong>Hide prices</strong> strips Unit price, VAT and every total for a technical/BOQ-only copy. It resets automatically — it never silently carries into your next quote or the next day.</p>
+    <h4>Getting it out</h4>
+    <ul>
+      <li><strong>⬇ PDF</strong> — server-rendered so it matches this on-screen preview exactly, including a repeating footer with page numbers from page 2 onward.</li>
+      <li><strong>✉️ Email to Customer</strong> — sends from your own Microsoft 365 mailbox with the quote attached as a PDF; automatically moves the quote to "Sent" and logs a customer-facing version.</li>
+      <li><strong>🖨️ Print / PDF</strong> — your browser's native print dialog.</li>
+    </ul>
+    <p>The letterhead (logo, address, TRN, phone, website, bank details) comes from Settings → Company Profile — set it up once, admin only.</p>
+  `},
+  log:{title:'Activity Log',body:`
+    <p>A timeline of everything that's happened to this quote: created, status changes, sent for review, approved / changes requested, admin overrides, emailed to customer — each with who did it and when.</p>
+    <div class="help-tip">🔍 Compare versions lets you diff any two saved snapshots side by side, not just consecutive ones.</div>
+  `},
+  reviewQueue:{title:'Review Queue',body:`
+    <p>The internal approval workflow that sits between "building a quote" and "sending it to a customer."</p>
+    <ul>
+      <li>From the editor, <strong>📤 Send to Review</strong> snapshots the quote and assigns it to chosen reviewers.</li>
+      <li>Reviewers see it under <strong>Assigned to me</strong>; admins can also see <strong>All company reviews</strong>.</li>
+      <li>Opening a review shows the print preview (read-only) plus a decision box: <strong>Approve</strong>, or <strong>Request changes</strong> (a comment is required).</li>
+      <li>Admins get override actions on any review: reassign reviewers, cancel the review, or force-approve / force-request-changes.</li>
+    </ul>
+  `},
+  products:{title:'Product Catalog',body:`
+    <p>Your company-wide item master — brand, model, SKU, category, description, specs, default cost (with currency) and default margin %, linked vendor + their part number, lead time, and a datasheet link, plus a product image.</p>
+    <ul>
+      <li>Search, download the Excel <strong>Template</strong>, or <strong>Import Excel</strong> to bulk-load products.</li>
+      <li><strong>+ Add product</strong> to create one manually.</li>
+      <li>Mark a product inactive instead of deleting it if you don't want it showing up in search/quoting anymore but want to keep the history.</li>
+    </ul>
+    <div class="help-tip">💡 New brand/model combos typed straight into a quote get added to the catalog automatically — but keeping cost and margin current here is what makes reuse on future quotes fast and consistent.</div>
+  `},
+  customers:{title:'Customer Master',body:`
+    <p>The contact list a quote's Customer field pulls from (or you can always just type a new one directly on a quote).</p>
+    <ul>
+      <li>Name, Company, Email, Phone, Address, TRN.</li>
+      <li>Search, Excel Template/Import, or add/edit/delete manually.</li>
+      <li>Admins can <strong>🔄 Sync</strong> to pull contacts from whatever integration is connected in Settings → Integrations, instead of entering them by hand.</li>
+      <li>The <strong>Source</strong> column shows Manual vs. the integration a contact synced from.</li>
+    </ul>
+  `},
+  vendorMaster:{title:'Vendor Master',body:`
+    <p>The supplier equivalent of the Customer Master — name, category, contact/email, phone. Feeds the Vendor field on both the item editor (Internal view) and the Product Catalog.</p>
+    <ul>
+      <li>Search, Excel Template/Import, manual add/edit/delete.</li>
+      <li>Admins can <strong>🔄 Sync</strong> from a connected integration, same as customers.</li>
+    </ul>
+  `},
+  projects:{title:'Projects',body:`
+    <p>A lightweight, manually-maintained project register — name, customer, site/location, PO number, and status (active / on hold / completed / cancelled).</p>
+    <p>Each project can optionally be linked to a Zoho Books project.</p>
+    <div class="help-tip">This is a simple list, not the financial tracking module — see <strong>Project Performance</strong> for margin, cost and cash tracking, which is created automatically when a quote is Awarded.</div>
+  `},
+  projectPerformance:{title:'Project Performance',body:`
+    <p>Financial tracking for every Awarded quote — a project row appears here automatically the moment a quote's status is set to Awarded. Nothing to create manually.</p>
+    <h4>Portfolio metrics</h4>
+    <p>Active Projects, Total Active Value, Portfolio Forecast GP%, Projects At Risk, Critical Projects, Total Unbilled, Outstanding Receivables, Cash Exposure.</p>
+    <h4>The table</h4>
+    <p>Hover any column header for its exact definition — each one has a built-in tooltip (e.g. Erosion = Original GP% − Forecast GP%; EAC = Actual + Committed + Forecast Remaining cost). Use <strong>Columns ▾</strong> to show/hide columns, and the search/health/status/date filters to narrow the list.</p>
+    <h4>Syncing from Zoho</h4>
+    <ul>
+      <li><strong>🔄 Sync Now</strong> — refreshes actuals (bills, invoices, POs) for the whole portfolio.</li>
+      <li><strong>Sync Selected</strong> / <strong>Sync Range</strong> — target specific Zoho Project IDs or a Project No range, useful for testing or a quick refresh of one project.</li>
+    </ul>
+    <p>Click any row to open the full project detail.</p>
+  `},
+  projectPerformanceDetail:{title:'Project Detail',body:`
+    <p>Five tabs for one project:</p>
+    <ul>
+      <li><strong>Overview</strong> — KPI cards, the Health Score breakdown, and open alerts.</li>
+      <li><strong>Financial Performance</strong> — original vs. current profitability, plus a margin trend table that builds up with every sync.</li>
+      <li><strong>Cost Control</strong> — cost by category (Actual / Committed / Forecast Remaining / EAC), and your own manually-added Forecast Remaining Cost entries.</li>
+      <li><strong>Billing &amp; Collection</strong> — Invoice % and Collection %, plus the invoice list.</li>
+      <li><strong>Cash Position</strong> — cash received from the customer vs. paid to vendors/expenses, and the net position.</li>
+    </ul>
+    <h4>Actions</h4>
+    <ul>
+      <li><strong>Update Completion %</strong> — manually record progress with an optional comment.</li>
+      <li><strong>+ Forecast Cost</strong> — add an expected future cost that isn't in Zoho yet.</li>
+      <li><strong>🔄 Sync Now</strong> — refreshes this project only.</li>
+    </ul>
+    <p>The <strong>Health Score</strong> (0–100) is a weighted average of margin, cost control, billing, collection, cash and commitment-exposure health, and drives the Healthy / At Risk / Critical badge.</p>
+  `},
+  team:{title:'Team & Settings',body:`
+    <p>Admin only. Your company's users and their roles.</p>
+    <p><strong>+ Invite member</strong> sends an email invite — the person sets their own password via the link, nothing to configure on their behalf beyond the invite itself.</p>
+  `},
+  integrations:{title:'Integrations',body:`
+    <p>Admin only. Connect an accounting/CRM system (e.g. Zoho Books) so Customers and Vendors sync in automatically instead of manual entry, and so Zoho Projects, Bills and Invoices feed the Project Performance module.</p>
+    <p>Each company's credentials are kept completely separate — nothing here is shared with other companies on this platform.</p>
+    <p><strong>Sync configuration</strong> lets you choose which connected integration feeds each data type, and whether it should also sync automatically once a day.</p>
+  `},
+  companyProfile:{title:'Company Profile',body:`
+    <p>Admin only. The branding shown on every Quotation PDF and generated proposal: logo, legal company name, address, TRN, phone, website, and bank details (used in the payment section).</p>
+    <div class="help-tip">💡 Saving here updates the Print tab immediately — no reload needed, and no separate step to "apply" it to existing quotes.</div>
+  `},
+  platform:{title:'All Companies',body:`
+    <p>Platform-admin only. Every company using this SaaS instance in one list.</p>
+    <p><strong>+ Onboard company</strong> creates a new tenant. Suspending a company blocks that team from logging in (existing sessions may remain valid briefly) until it's reactivated.</p>
+  `},
+};
+const HELP_ORDER=['dashboard','editor','terms','summary','vendor','print','log','reviewQueue','products','customers','vendorMaster','projects','projectPerformance','projectPerformanceDetail','team','integrations','companyProfile','platform'];
+function currentHelpKey(){
+  if(A.helpViewTopic&&HELP_CONTENT[A.helpViewTopic])return A.helpViewTopic;
+  return HELP_CONTENT[A.page]?A.page:'dashboard';
+}
+function toggleHelp(){A.helpOpen=!A.helpOpen;if(!A.helpOpen)A.helpViewTopic=null;draw();}
+function setHelpTopic(key){A.helpViewTopic=key;draw();}
+function helpFabHTML(){
+  return `<button class="help-fab" onclick="toggleHelp()" title="Help for this section">?</button>`;
+}
+function helpDrawerHTML(){
+  if(!A.helpOpen)return'';
+  const key=currentHelpKey();
+  const h=HELP_CONTENT[key]||{title:'Help',body:'<p>No help available for this section yet.</p>'};
+  return `<div class="help-overlay" onclick="if(event.target===this)toggleHelp()">
+    <div class="help-drawer">
+      <div class="help-drawer-hd">
+        <div>
+          <div class="help-drawer-eyebrow">Help</div>
+          <div class="help-drawer-title">${esc(h.title)}</div>
+        </div>
+        <button class="help-close" onclick="toggleHelp()" aria-label="Close">✕</button>
+      </div>
+      <div class="help-drawer-jump">
+        <label>Jump to topic</label>
+        <select onchange="setHelpTopic(this.value)">
+          ${HELP_ORDER.map(k=>`<option value="${k}" ${k===key?'selected':''}>${esc(HELP_CONTENT[k].title)}</option>`).join('')}
+        </select>
+        ${A.helpViewTopic?`<button class="help-follow-btn" onclick="A.helpViewTopic=null;draw()" title="Follow whatever page you're on">↺ Current page</button>`:''}
+      </div>
+      <div class="help-drawer-body">${h.body}</div>
+    </div>
+  </div>`;
+}
+
 // ── App shell ─────────────────────────────────────────────────────────────────
 function appHTML(){
   const init=(A.user?.name||'U').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
@@ -2246,7 +2481,7 @@ function appHTML(){
     </div><div style="pointer-events:none;opacity:.55;user-select:none">${pageContent}</div>`;
   }
 
-  return`<div class="shell">${sidebar}${sbOverlay}<div class="main">
+  return`<div class="shell">${sidebar}${sbOverlay}${helpFabHTML()}${helpDrawerHTML()}<div class="main">
     <div class="topbar"><div style="display:flex;align-items:center;gap:6px;min-width:0"><button class="sb-toggle" onclick="toggleSidebar()" aria-label="Menu">☰</button><div class="topbar-title">${PAGE_TITLES[A.page]||''}</div></div><div class="topbar-right">${topbarRight}</div></div>
     ${cstrip}
     <div class="content">${pageContent}</div>

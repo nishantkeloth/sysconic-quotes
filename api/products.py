@@ -23,6 +23,44 @@ BRAVE_API_KEY  = os.environ.get('BRAVE_API_KEY')  # Brave Search API (replaced G
 BUCKET = 'product-images'
 MAX_IMAGE_BYTES = 4 * 1024 * 1024  # 4 MB
 
+# TEN-002 fix: product-images is a PRIVATE bucket now (or about to become one --
+# see docs/saas-audit/REMEDIATION-ROADMAP.md). We no longer hand out permanent,
+# unauthenticated get_public_url() links. Instead we mint a signed URL at
+# upload time with a very long expiry (~10 years) -- long enough to behave like
+# "permanent" for how this app actually uses the link (embedded directly into
+# products.image_url and copied into quote_data line items, so it needs to
+# keep working indefinitely once saved), while still requiring the signed
+# token instead of being a guessable, world-readable path.
+SIGNED_URL_EXPIRES_SECONDS = 10 * 365 * 24 * 60 * 60  # ~10 years
+
+def _signed_url(bucket, path, expires_in=SIGNED_URL_EXPIRES_SECONDS):
+    """Wraps sb.storage.from_(bucket).create_signed_url(). The supabase-py
+    storage client's response shape has varied across versions ('signedURL'
+    in most releases, occasionally 'signedUrl'/'signed_url'), and the value
+    itself is sometimes a full URL and sometimes a path that still needs the
+    project's storage host prefixed -- this defensively handles both. Verify
+    once against your actual installed supabase-py version after deploying
+    (upload one test image and confirm it loads) before relying on this."""
+    res = sb.storage.from_(bucket).create_signed_url(path, expires_in)
+    url = res.get('signedURL') or res.get('signedUrl') or res.get('signed_url') or res.get('url')
+    if not url:
+        raise RuntimeError(f'Unexpected create_signed_url() response shape: {res!r}')
+    if url.startswith('http://') or url.startswith('https://'):
+        return url
+    return f"{SUPABASE_URL}/storage/v1{url}"
+
+def _extract_storage_path(url, bucket):
+    """Best-effort recovery of the object path from an already-stored
+    image_url, whether it's an old-style public URL or a new-style signed
+    URL -- both contain '/<bucket>/<path>' somewhere before an optional '?'
+    query string. Used so remove_image() can actually delete the underlying
+    file (REL-005) without needing a dedicated path column (a cleaner,
+    longer-term fix -- track this in the REL-001 schema cleanup)."""
+    if not url:
+        return None
+    m = re.search(rf'/{re.escape(bucket)}/([^?]+)', url)
+    return m.group(1) if m else None
+
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def is_safe_public_url(url):
@@ -390,12 +428,14 @@ def set_image(pid):
     try:
         sb.storage.from_(BUCKET).upload(path, data, {'content-type': ctype})
     except Exception as e:
-        return jsonify({'error': 'Could not save image to storage. Check that the product-images bucket exists and is public.'}), 502
+        return jsonify({'error': 'Could not save image to storage. Check that the product-images bucket exists.'}), 502
 
-    public_url = sb.storage.from_(BUCKET).get_public_url(path)
-    if isinstance(public_url, str): public_url = public_url.rstrip('?')
+    try:
+        signed_url = _signed_url(BUCKET, path)
+    except Exception as e:
+        return jsonify({'error': f'Image uploaded but could not generate its access URL: {str(e)[:200]}'}), 502
 
-    row = sb.table('products').update({'image_url': public_url, 'updated_at': 'now()'}).eq('id', pid).execute()
+    row = sb.table('products').update({'image_url': signed_url, 'updated_at': 'now()'}).eq('id', pid).execute()
     return jsonify({'product': row.data[0]})
 
 # ── Remove product image ───────────────────────────────────────────────────────
@@ -404,8 +444,17 @@ def remove_image(pid):
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
 
-    existing = sb.table('products').select('id').eq('id', pid).eq('company_id', claims['company_id']).execute()
+    existing = sb.table('products').select('id,image_url').eq('id', pid).eq('company_id', claims['company_id']).execute()
     if not existing.data: return jsonify({'error': 'Not found'}), 404
+
+    # REL-005 fix: actually delete the underlying storage object instead of
+    # only nulling the DB column, so removed images don't linger indefinitely.
+    old_path = _extract_storage_path(existing.data[0].get('image_url'), BUCKET)
+    if old_path:
+        try:
+            sb.storage.from_(BUCKET).remove([old_path])
+        except Exception:
+            pass  # best-effort -- don't block the DB update if storage cleanup fails
 
     row = sb.table('products').update({'image_url': None, 'updated_at': 'now()'}).eq('id', pid).execute()
     return jsonify({'product': row.data[0]})
