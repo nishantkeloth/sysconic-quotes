@@ -239,6 +239,16 @@ def heading(text, S):
                   style=TableStyle([('BACKGROUND',(0,0),(-1,-1),GOLD)])),
             Spacer(1, 3*mm)]
 
+def _stat_val_size(v):
+    # Shrinks the stat-card value font as text length grows, so longer
+    # values (e.g. "4 Key Areas", "Maxhub & Sysconic") fit their column
+    # instead of ReportLab hard-breaking mid-word (e.g. "4 Key Ar").
+    L = len(str(v))
+    if L <= 6: return 16
+    if L <= 10: return 13
+    if L <= 14: return 11
+    return 9
+
 def stat_row(stats, CW):
     n = max(1, len(stats))
     gap = 3*mm
@@ -251,7 +261,8 @@ def stat_row(stats, CW):
     # Build as a single table with n columns, each cell a mini stacked Table
     inner_cells = []
     for s in stats:
-        cell_tbl = Table([[Paragraph(f"<font color='#f4b400' size='16'><b>{esc_p(str(s.get('value','')))}</b></font>", ParagraphStyle('sv2', alignment=TA_CENTER, leading=19))],
+        vsize = _stat_val_size(str(s.get('value','')))
+        cell_tbl = Table([[Paragraph(f"<font color='#f4b400' size='{vsize}'><b>{esc_p(str(s.get('value','')))}</b></font>", ParagraphStyle('sv2', alignment=TA_CENTER, leading=vsize+3))],
                            [Paragraph(f"<font color='#c7d3ea' size='6.5'><b>{esc_p(str(s.get('label','')).upper())}</b></font>", ParagraphStyle('sl2', alignment=TA_CENTER, leading=8))]],
                           colWidths=[cw])
         cell_tbl.setStyle(TableStyle([('ALIGN',(0,0),(-1,-1),'CENTER'),('TOPPADDING',(0,0),(-1,-1),2),('BOTTOMPADDING',(0,0),(-1,-1),2)]))
