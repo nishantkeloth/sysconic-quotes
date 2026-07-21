@@ -3182,7 +3182,7 @@ function printHTML(forExport){
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0 18px">
         <div style="background:${TH.bg};color:${TH.text};font-size:${SZ(11,'body')}px;font-weight:700;padding:5px 14px;border-radius:20px">${esc(o.ref)}</div>
         <div style="background:#f2f6fc;color:#5a6475;font-size:${SZ(11,'body')}px;font-weight:600;padding:5px 14px;border-radius:20px">${o.date}</div>
-        <div style="background:#f2f6fc;color:#5a6475;font-size:${SZ(11,'body')}px;font-weight:600;padding:5px 14px;border-radius:20px">${esc((o.sections||[])[0]?.name||'—')}</div>
+        
         ${!multi&&(q.quote_data||[]).length>1?`<div style="background:#fef3c7;color:#92400e;font-size:${SZ(11,'body')}px;font-weight:700;padding:5px 14px;border-radius:20px">${esc(o.label)}</div>`:''}
       </div>
       <div style="display:flex;gap:28px;margin-bottom:20px;flex-wrap:wrap">
