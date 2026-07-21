@@ -3794,7 +3794,7 @@ function proposalReviewHTML(){
     <div class="fld2" style="margin-bottom:10px"><label>Subtitle</label><input value="${esc(c.subtitle||'')}" oninput="PROP.content.subtitle=this.value"></div>
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500)">Stat highlights</label>
-    <div class="field-grid g4" style="margin:6px 0 12px">
+    <div class="field-grid g4" style="margin:6px 0 12px;grid-template-columns:1fr 1fr">
       ${c.stats.map((s,i)=>`<div><input placeholder="Value" value="${esc(s.value)}" oninput="PROP.content.stats[${i}].value=this.value" style="margin-bottom:4px;text-align:center;font-weight:700;width:100%"><input placeholder="Label" value="${esc(s.label)}" oninput="PROP.content.stats[${i}].label=this.value" style="font-size:11px;text-align:center;width:100%"></div>`).join('')}
     </div>
 
