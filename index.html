@@ -1957,6 +1957,8 @@ function addSec(){const name=prompt('Section name:','New Section');if(!name)retu
 function delSec(si){if(!confirm('Remove this section?'))return;opt().sections.splice(si,1);draw();}
 function addItem(si){sec(si).items.push(mkItem());draw();}
 function delItem(si,ii){sec(si).items.splice(ii,1);draw();}
+function copyItem(si,ii){A.itemClipboard=JSON.parse(JSON.stringify(sec(si).items[ii]));draw();}
+function pasteItem(si){if(!A.itemClipboard)return;sec(si).items.push(JSON.parse(JSON.stringify(A.itemClipboard)));draw();}
 // Reorder within a section only — swaps two entries of sec(si).items, the
 // same array delItem/addItem already operate on, so an item can never cross
 // into another section. No item is copied or recreated: only array position
@@ -2715,7 +2717,7 @@ function editorHTML(){
           <input class="iinput editable-calc" type="number" id="unitprice-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="unitprice" value="${c.up}" oninput="liveCalc(this)" title="Edit to auto-adjust markup" placeholder="0">
           <div class="icalc" id="vat-${si}-${ii}" style="color:var(--gray-500)" title="Read-only — set VAT % at the option level">${o.vatEnabled?fmtC(c.tp*(o.vatRate||5)/100):'—'}</div>
           <div class="icalc total" id="total-${si}-${ii}">${fmtC(c.tp)}</div>
-          <button class="idel" onclick="delItem(${si},${ii})">×</button>
+          <button class="idel" title="Copy line" style="font-size:14px" onclick="copyItem(${si},${ii})">⧉</button><button class="idel" onclick="delItem(${si},${ii})">×</button>
         </div>`;
       } else {
         rows+=`<div class="item-row cli${IMG?' img':''}">
@@ -2742,7 +2744,7 @@ function editorHTML(){
         </div>
         <div style="display:flex;gap:8px">
           <button class="btn btn-sm" onclick="addItem(${si})">+ Add item</button>
-          <button class="btn btn-sm btn-red" onclick="delSec(${si})">Remove</button>
+          ${A.itemClipboard?`<button class="btn btn-sm" onclick="pasteItem(${si})" title="Paste copied line into this section">📋 Paste</button>`:''}<button class="btn btn-sm btn-red" onclick="delSec(${si})">Remove</button>
         </div>
       </div>
       <div class="grid-scroll" onwheel="gridWheelScroll(event,this)">
