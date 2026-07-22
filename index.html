@@ -491,7 +491,7 @@ function projectsHTML(){
     </select></td>
     <td style="padding:8px">${esc(p.po_number||'')}</td>
     <td style="padding:8px">${p.zoho_project_id?`<span style="color:#16a34a;font-weight:600" title="Linked to Zoho Books">&#10003; Zoho</span>`:`<span style="color:var(--gray-500)">—</span>`}</td>
-    <td style="padding:8px;text-align:right"><button class="idel" onclick="deleteProject('${p.id}')" title="Delete project">✕</button></td>
+    <td style="padding:8px;text-align:right"><button class="btn btn-green" style="font-size:11px;padding:3px 8px;font-weight:700;margin-right:6px" onclick="requestFeedback('${p.id}')" title="Generate a client feedback link">Request Feedback</button><button class="idel" onclick="deleteProject('${p.id}')" title="Delete project">✕</button></td>
   </tr>`).join('');
   return `<div style="padding:24px">
     <h2 style="margin:0 0 16px">Projects</h2>
@@ -536,6 +536,7 @@ async function createZohoProject(id){
   if(r.error){alert(r.error);return;}
   A.projects=null;draw();loadProjectsPage();
 }
+async function requestFeedback(pid){const r=await api('POST','/api/testimonials/request',{project_id:pid});if(r.error){alert('Could not create feedback link: '+r.error);return;}const link=location.origin+location.pathname+'?feedback='+encodeURIComponent(r.feedback_token);prompt('Share this link with your client to collect feedback (valid 60 days, single use):',link);}
 async function deleteProject(id){
   if(!confirm('Delete this project? Linked quotes are kept but unlinked.'))return;
   const r=await api('DELETE','/api/projects/'+id);
@@ -1650,6 +1651,68 @@ function cmpVendorHTML(va,vb){
 }
 
 // ── Review Queue page ─────────────────────────────────────────────────────────
+
+// ── Testimonials review queue ────────────────────────────────────────────────
+const TESTI_STATUS_STYLE={
+  pending:{t:'Pending review',bg:'#fef3c7',c:'#92400e'},
+  approved:{t:'Approved',bg:'#dbeafe',c:'#1e40af'},
+  published:{t:'Published',bg:'#d1fae5',c:'#047857'},
+  rejected:{t:'Rejected',bg:'#fee2e2',c:'#b91c1c'},
+  draft:{t:'Awaiting client',bg:'#f2f6fc',c:'#5a6475'},
+};
+function testiStarsReadOnly(n){
+  let out='';
+  for(let i=1;i<=5;i++){out+=`<span style="color:${i<=(n||0)?'#f4b400':'#e2e6eb'}">★</span>`;}
+  return out;
+}
+function testimonialsHTML(){
+  const scope=A.testiScope||'pending';
+  return `<div class="card" style="padding:0">
+    <div style="display:flex;gap:8px;padding:14px 20px;border-bottom:1px solid var(--gray-200);flex-wrap:wrap">
+      ${['pending','approved','published','rejected'].map(s=>`<button class="tab-btn ${scope===s?'active':''}" onclick="A.testiScope='${s}';loadTestimonials()">${TESTI_STATUS_STYLE[s].t}</button>`).join('')}
+    </div>
+    <div id="testiList"></div>
+  </div>`;
+}
+async function loadTestimonials(){
+  const el=document.getElementById('testiList');if(!el)return;
+  el.innerHTML='<div style="text-align:center;padding:30px;color:var(--gray-500)">Loading…</div>';
+  const scope=A.testiScope||'pending';
+  const r=await api('GET','/api/testimonials?status='+scope);
+  if(r.error){el.innerHTML='<div class="auth-err" style="margin:16px">'+esc(r.error)+'</div>';return;}
+  const list=r.testimonials||[];
+  if(!list.length){el.innerHTML='<div style="text-align:center;padding:40px;color:var(--gray-500)">Nothing here right now.</div>';return;}
+  el.innerHTML=list.map(t=>{
+    const st=TESTI_STATUS_STYLE[t.status]||{t:t.status,bg:'#f2f6fc',c:'#5a6475'};
+    const canPublish=t.status==='approved'&&t.consent_to_publish;
+    return `<div style="padding:16px 20px;border-bottom:1px solid var(--gray-200)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+        <div>
+          <div style="font-weight:700">${esc(t.client_name||'Anonymous')}${t.client_title?' · '+esc(t.client_title):''}</div>
+          <div style="font-size:16px;margin:2px 0">${testiStarsReadOnly(t.rating)}</div>
+          <div style="font-size:13px;color:#333;margin-top:6px;max-width:520px">${esc(t.testimonial||'')}</div>
+          <div style="font-size:11px;color:var(--gray-500);margin-top:6px">
+            ${t.consent_to_publish?'✓ Consented to publish':'✗ Did not consent to publish'}
+            ${t.submitted_at?' · '+new Date(t.submitted_at).toLocaleDateString():''}
+          </div>
+        </div>
+        <span style="background:${st.bg};color:${st.c};font-size:11px;font-weight:700;padding:4px 10px;border-radius:20px;white-space:nowrap">${st.t}</span>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        ${t.status==='pending'?`<button class="btn btn-navy" style="font-size:12px;padding:5px 12px" onclick="setTestimonialStatus('${t.id}','approved')">Approve</button>
+          <button class="btn" style="font-size:12px;padding:5px 12px" onclick="setTestimonialStatus('${t.id}','rejected')">Reject</button>`:''}
+        ${canPublish?`<button class="btn btn-green" style="font-size:12px;padding:5px 12px" onclick="setTestimonialStatus('${t.id}','published')">Publish</button>`:''}
+        ${t.status==='approved'&&!t.consent_to_publish?`<span style="font-size:12px;color:var(--gray-500);align-self:center">Cannot publish — client did not consent</span>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+async function setTestimonialStatus(id,status){
+  const r=await api('PUT','/api/testimonials/'+id,{status});
+  if(r.error){alert('❌ '+r.error);return;}
+  loadTestimonials();
+}
+
 function reviewQueueHTML(){
   const isAdmin=A.user?.role==='admin';
   const scope=A.reviewQueueScope||'mine';
@@ -2074,7 +2137,7 @@ function gridWheelScroll(e,el){
 function draw(){
   document.getElementById('app').innerHTML='';
   if(A.screen==='login'||A.screen==='register'){document.getElementById('app').innerHTML=authHTML();return;}
-  if(A.screen==='acceptInvite'){document.getElementById('app').innerHTML=acceptInviteHTML();return;}
+  if(A.screen==='feedbackForm'){document.getElementById('app').innerHTML=feedbackFormHTML();return;}if(A.screen==='acceptInvite'){document.getElementById('app').innerHTML=acceptInviteHTML();return;}
   if(A.screen==='forgotPassword'){document.getElementById('app').innerHTML=forgotPasswordHTML();return;}
   if(A.screen==='resetPassword'){document.getElementById('app').innerHTML=resetPasswordHTML();return;}
   document.getElementById('app').innerHTML=appHTML();
@@ -2091,6 +2154,7 @@ function draw(){
   if(A.page==='projectPerformanceDetail'&&A.ppDetail==null)setTimeout(loadProjectPerformanceDetail,50);
   if(A.page==='vendorMaster')setTimeout(loadVendorsMaster,50);
   if(A.page==='reviewQueue')setTimeout(loadReviewQueue,50);
+  if(A.page==='testimonials')setTimeout(loadTestimonials,50);
   if(A.page==='log')setTimeout(loadLog,50);
 }
 function initTA(){document.querySelectorAll('textarea.iinput').forEach(el=>{el.style.height='auto';el.style.height=el.scrollHeight+'px';el.addEventListener('input',()=>{el.style.height='auto';el.style.height=el.scrollHeight+'px';});});}
@@ -2465,9 +2529,7 @@ function appHTML(){
       <div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="${nav('vendorMaster')}"><span class="sb-icon">🏭</span>Vendors</div>
       ${hasFeature('projects')?`<div class="sb-item ${A.page==='projects'?'active':''}" onclick="${nav('projects')}"><span class="sb-icon">📁</span>Projects</div>`:''}
       ${hasFeature('project_performance')?`<div class="sb-item ${(A.page==='projectPerformance'||A.page==='projectPerformanceDetail')?'active':''}" onclick="${nav('projectPerformance')}"><span class="sb-icon">📊</span>Project Performance</div>`:''}
-      <div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>
-      ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}`}
-      ${(A.user?.role==='admin'&&!A.user?.is_platform_admin)?`<div class="sb-sec">Settings</div>
+      <div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>       ${hasFeature('testimonials')?`<div class="sb-item ${A.page==='testimonials'?'active':''}" onclick="${nav('testimonials')}"><span class="sb-icon">⭐</span>Testimonials</div>`:''}       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}`}       ${(A.user?.role==='admin'&&!A.user?.is_platform_admin)?`<div class="sb-sec">Settings</div>
       <div class="sb-item ${A.page==='team'?'active':''}" onclick="${nav('team')}"><span class="sb-icon">👥</span>Team</div>
       <div class="sb-item ${A.page==='integrations'?'active':''}" onclick="${nav('integrations')}"><span class="sb-icon">🔌</span>Integrations</div>
       <div class="sb-item ${A.page==='companyProfile'?'active':''}" onclick="${nav('companyProfile')}"><span class="sb-icon">🏢</span>Company Profile</div>`:''}
@@ -2507,6 +2569,7 @@ function appHTML(){
   else if(A.page==='platform')pageContent=platformHTML();
   else if(A.page==='companyProfile')pageContent=companyProfileHTML();
   else if(A.page==='reviewQueue')pageContent=reviewQueueHTML();
+  else if(A.page==='testimonials')pageContent=testimonialsHTML();
 
   if(['editor','terms','vendor'].includes(A.page)&&isQuoteLocked()&&!A.reviewMode){
     pageContent=`<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
@@ -4561,11 +4624,89 @@ function importExcel(event){
 
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
+
+// ── Public client feedback form (no login required) ─────────────────────────
+const FB={loading:true,error:null,token:null,project_name:null,company_name:null,submitted:false,rating:0,busy:false};
+
+async function loadFeedbackDetails(){
+  let r;
+  try{r=await api('GET','/api/testimonials/verify?token='+encodeURIComponent(FB.token));}
+  catch(err){FB.loading=false;FB.error='Could not reach the server. Please try again.';draw();return;}
+  FB.loading=false;
+  if(r.error){FB.error=r.error;}
+  else{FB.project_name=r.project_name;FB.company_name=r.company_name;}
+  draw();
+}
+
+function fbSetRating(n){FB.rating=n;draw();}
+
+async function submitFeedbackForm(e){
+  e.preventDefault();
+  if(FB.busy)return;
+  if(!FB.rating){alert('Please select a star rating.');return;}
+  const testimonial=(document.getElementById('fbText')?.value||'').trim();
+  if(!testimonial){alert('Please write a short testimonial.');return;}
+  FB.busy=true;
+  const btn=document.getElementById('fbBtn');if(btn){btn.disabled=true;btn.textContent='Submitting…';}
+  const body={
+    token:FB.token,
+    rating:FB.rating,
+    testimonial,
+    client_name:(document.getElementById('fbName')?.value||'').trim(),
+    client_title:(document.getElementById('fbTitle')?.value||'').trim(),
+    consent_to_publish:!!document.getElementById('fbConsent')?.checked,
+  };
+  let r;
+  try{r=await api('POST','/api/testimonials/submit',body);}
+  catch(err){FB.busy=false;if(btn){btn.disabled=false;btn.textContent='Submit feedback →';}alert('Could not reach the server. Please try again.');return;}
+  FB.busy=false;
+  if(r.error){if(btn){btn.disabled=false;btn.textContent='Submit feedback →';}alert('❌ '+r.error);return;}
+  FB.submitted=true;draw();
+}
+
+function feedbackStarsHTML(){
+  let out='<div style="display:flex;gap:6px;margin:6px 0 2px;font-size:32px;line-height:1">';
+  for(let i=1;i<=5;i++){
+    out+=`<span style="cursor:pointer;color:${i<=FB.rating?'#f4b400':'#e2e6eb'}" onclick="fbSetRating(${i})">★</span>`;
+  }
+  return out+'</div>';
+}
+
+function feedbackFormHTML(){
+  if(FB.loading)return`<div class="auth-shell"><div class="auth-card"><div class="auth-desc">Loading…</div></div></div>`;
+  if(FB.error)return`<div class="auth-shell"><div class="auth-card">
+    <img src="${QTCAL_LOGO_SRC}" class="auth-logo" alt="QTcal AI">
+    <div class="auth-title">This link isn't available</div>
+    <div class="auth-desc">${esc(FB.error)}</div>
+  </div></div>`;
+  if(FB.submitted)return`<div class="auth-shell"><div class="auth-card">
+    <img src="${QTCAL_LOGO_SRC}" class="auth-logo" alt="QTcal AI">
+    <div class="auth-title">Thank you!</div>
+    <div class="auth-desc">Your feedback has been received. We appreciate you taking the time.</div>
+  </div></div>`;
+  return`<div class="auth-shell"><div class="auth-card">
+    <img src="${QTCAL_LOGO_SRC}" class="auth-logo" alt="QTcal AI">
+    <div class="auth-title">How did we do?</div>
+    <div class="auth-desc">Feedback for: ${esc(FB.project_name)} — ${esc(FB.company_name)}</div>
+    <form onsubmit="submitFeedbackForm(event)">
+      <div class="fld"><label>Your rating</label>${feedbackStarsHTML()}</div>
+      <div class="fld"><label>Your feedback</label><textarea id="fbText" rows="4" required placeholder="Tell us about your experience…" style="width:100%;padding:8px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px"></textarea></div>
+      <div class="fld"><label>Your name (optional)</label><input id="fbName" placeholder="Your name"></div>
+      <div class="fld"><label>Your title (optional)</label><input id="fbTitle" placeholder="e.g. IT Manager"></div>
+      <div class="fld" style="display:flex;align-items:flex-start;gap:8px;margin-top:4px">
+        <input type="checkbox" id="fbConsent" style="margin-top:3px">
+        <label style="font-weight:400;font-size:13px" for="fbConsent">I agree that Sysconic Technologies may publish this feedback publicly (e.g. on their website), optionally with my name and title.</label>
+      </div>
+      <button class="auth-btn" type="submit" id="fbBtn">Submit feedback →</button>
+    </form>
+  </div></div>`;
+}
+
 (function boot(){
   const params=new URLSearchParams(window.location.search);
   const inviteToken=params.get('invite');
   const resetToken=params.get('reset');
-  if(inviteToken){
+  const feedbackToken=params.get('feedback');if(feedbackToken){A.screen='feedbackForm';FB.token=feedbackToken;draw();loadFeedbackDetails();}else if(inviteToken){
     A.screen='acceptInvite';INV.token=inviteToken;draw();loadInviteDetails();
   }else if(resetToken){
     A.screen='resetPassword';RST.token=resetToken;draw();
