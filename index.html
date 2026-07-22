@@ -2041,7 +2041,7 @@ function gridWheelScroll(e,el){
 function draw(){
   document.getElementById('app').innerHTML='';
   if(A.screen==='login'||A.screen==='register'){document.getElementById('app').innerHTML=authHTML();return;}
-  if(A.screen==='acceptInvite'){document.getElementById('app').innerHTML=acceptInviteHTML();return;}
+  if(A.screen==='feedbackForm'){document.getElementById('app').innerHTML=feedbackFormHTML();return;}if(A.screen==='acceptInvite'){document.getElementById('app').innerHTML=acceptInviteHTML();return;}
   if(A.screen==='forgotPassword'){document.getElementById('app').innerHTML=forgotPasswordHTML();return;}
   if(A.screen==='resetPassword'){document.getElementById('app').innerHTML=resetPasswordHTML();return;}
   document.getElementById('app').innerHTML=appHTML();
@@ -4532,11 +4532,89 @@ function importExcel(event){
 
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
+
+// ── Public client feedback form (no login required) ─────────────────────────
+const FB={loading:true,error:null,token:null,project_name:null,company_name:null,submitted:false,rating:0,busy:false};
+
+async function loadFeedbackDetails(){
+  let r;
+  try{r=await api('GET','/api/testimonials/verify?token='+encodeURIComponent(FB.token));}
+  catch(err){FB.loading=false;FB.error='Could not reach the server. Please try again.';draw();return;}
+  FB.loading=false;
+  if(r.error){FB.error=r.error;}
+  else{FB.project_name=r.project_name;FB.company_name=r.company_name;}
+  draw();
+}
+
+function fbSetRating(n){FB.rating=n;draw();}
+
+async function submitFeedbackForm(e){
+  e.preventDefault();
+  if(FB.busy)return;
+  if(!FB.rating){alert('Please select a star rating.');return;}
+  const testimonial=(document.getElementById('fbText')?.value||'').trim();
+  if(!testimonial){alert('Please write a short testimonial.');return;}
+  FB.busy=true;
+  const btn=document.getElementById('fbBtn');if(btn){btn.disabled=true;btn.textContent='Submitting…';}
+  const body={
+    token:FB.token,
+    rating:FB.rating,
+    testimonial,
+    client_name:(document.getElementById('fbName')?.value||'').trim(),
+    client_title:(document.getElementById('fbTitle')?.value||'').trim(),
+    consent_to_publish:!!document.getElementById('fbConsent')?.checked,
+  };
+  let r;
+  try{r=await api('POST','/api/testimonials/submit',body);}
+  catch(err){FB.busy=false;if(btn){btn.disabled=false;btn.textContent='Submit feedback →';}alert('Could not reach the server. Please try again.');return;}
+  FB.busy=false;
+  if(r.error){if(btn){btn.disabled=false;btn.textContent='Submit feedback →';}alert('❌ '+r.error);return;}
+  FB.submitted=true;draw();
+}
+
+function feedbackStarsHTML(){
+  let out='<div style="display:flex;gap:6px;margin:6px 0 2px;font-size:32px;line-height:1">';
+  for(let i=1;i<=5;i++){
+    out+=`<span style="cursor:pointer;color:${i<=FB.rating?'#f4b400':'#e2e6eb'}" onclick="fbSetRating(${i})">★</span>`;
+  }
+  return out+'</div>';
+}
+
+function feedbackFormHTML(){
+  if(FB.loading)return`<div class="auth-shell"><div class="auth-card"><div class="auth-desc">Loading…</div></div></div>`;
+  if(FB.error)return`<div class="auth-shell"><div class="auth-card">
+    <img src="${QTCAL_LOGO_SRC}" class="auth-logo" alt="QTcal AI">
+    <div class="auth-title">This link isn't available</div>
+    <div class="auth-desc">${esc(FB.error)}</div>
+  </div></div>`;
+  if(FB.submitted)return`<div class="auth-shell"><div class="auth-card">
+    <img src="${QTCAL_LOGO_SRC}" class="auth-logo" alt="QTcal AI">
+    <div class="auth-title">Thank you!</div>
+    <div class="auth-desc">Your feedback has been received. We appreciate you taking the time.</div>
+  </div></div>`;
+  return`<div class="auth-shell"><div class="auth-card">
+    <img src="${QTCAL_LOGO_SRC}" class="auth-logo" alt="QTcal AI">
+    <div class="auth-title">How did we do?</div>
+    <div class="auth-desc">Feedback for: ${esc(FB.project_name)} — ${esc(FB.company_name)}</div>
+    <form onsubmit="submitFeedbackForm(event)">
+      <div class="fld"><label>Your rating</label>${feedbackStarsHTML()}</div>
+      <div class="fld"><label>Your feedback</label><textarea id="fbText" rows="4" required placeholder="Tell us about your experience…" style="width:100%;padding:8px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px"></textarea></div>
+      <div class="fld"><label>Your name (optional)</label><input id="fbName" placeholder="Your name"></div>
+      <div class="fld"><label>Your title (optional)</label><input id="fbTitle" placeholder="e.g. IT Manager"></div>
+      <div class="fld" style="display:flex;align-items:flex-start;gap:8px;margin-top:4px">
+        <input type="checkbox" id="fbConsent" style="margin-top:3px">
+        <label style="font-weight:400;font-size:13px" for="fbConsent">I agree that Sysconic Technologies may publish this feedback publicly (e.g. on their website), optionally with my name and title.</label>
+      </div>
+      <button class="auth-btn" type="submit" id="fbBtn">Submit feedback →</button>
+    </form>
+  </div></div>`;
+}
+
 (function boot(){
   const params=new URLSearchParams(window.location.search);
   const inviteToken=params.get('invite');
   const resetToken=params.get('reset');
-  if(inviteToken){
+  const feedbackToken=params.get('feedback');if(feedbackToken){A.screen='feedbackForm';FB.token=feedbackToken;draw();loadFeedbackDetails();}else if(inviteToken){
     A.screen='acceptInvite';INV.token=inviteToken;draw();loadInviteDetails();
   }else if(resetToken){
     A.screen='resetPassword';RST.token=resetToken;draw();
