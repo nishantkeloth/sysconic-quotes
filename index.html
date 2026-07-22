@@ -2602,6 +2602,7 @@ function buildTopbarRight(){
     <span class="tb-sep"></span>
     <button class="btn" onclick="reviewQuote()">🔍 AI Review</button>
     ${!isQuoteLocked()?`<button class="btn" onclick="openBomModal()" title="Generate a bill of materials from a project description using AI">✨ Auto-BOM</button>`:''}
+    <button class="btn" onclick="openPriceCheckModal()" title="Sum cost x qty by vendor per option, to cross-check against distributor pricing">Price Check</button>
     <span class="tb-sep"></span>
     <button class="btn" onclick="downloadTemplate()" title="Download Excel template">📄 Template</button>
     ${!isQuoteLocked()?`<label class="btn" style="cursor:pointer" title="Import from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importExcel(event)"></label>`:''}
@@ -3714,6 +3715,39 @@ function importProducts(event){
 // ── Auto-BOM (AI bill of materials generator) ─────────────────────────────────
 let BOM={sections:[],busy:false};
 
+function openPriceCheckModal(){
+  if(!A.activeQuote)return;
+  const opts=A.activeQuote.quote_data||[];
+  const sections=opts.map((o,oi)=>{
+    const vendorMap={};
+    (o.sections||[]).forEach(s=>(s.items||[]).forEach(it=>{
+      const vname=(it.vendor||'').trim()||'(No vendor)';
+      const cost=(+it.cost||0)*(+it.qty||1);
+      if(!vendorMap[vname])vendorMap[vname]={count:0,total:0};
+      vendorMap[vname].count++;
+      vendorMap[vname].total+=cost;
+    }));
+    const vendors=Object.keys(vendorMap).sort();
+    const grand=vendors.reduce((s,v)=>s+vendorMap[v].total,0);
+    const rows=vendors.map(v=>`<tr><td style="padding:6px 10px;border-bottom:1px solid var(--gray-100)">${esc(v)}</td><td style="padding:6px 10px;text-align:center;border-bottom:1px solid var(--gray-100)">${vendorMap[v].count}</td><td style="padding:6px 10px;text-align:right;font-weight:700;border-bottom:1px solid var(--gray-100)">${fmt(vendorMap[v].total)}</td></tr>`).join('');
+    return `<div style="margin-bottom:18px">
+      <div style="font-weight:700;color:var(--navy);margin-bottom:6px">${esc(o.label||('Option '+(oi+1)))}</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:var(--gray-50);text-align:left"><th style="padding:6px 10px">Vendor</th><th style="padding:6px 10px;text-align:center">Items</th><th style="padding:6px 10px;text-align:right">Total Cost</th></tr></thead>
+        <tbody>${rows||'<tr><td colspan="3" style="padding:10px;color:var(--gray-500)">No items</td></tr>'}</tbody>
+        <tfoot><tr style="border-top:2px solid var(--gray-200)"><td style="padding:6px 10px;font-weight:700">Option total</td><td></td><td style="padding:6px 10px;text-align:right;font-weight:700;color:var(--navy)">${fmt(grand)}</td></tr></tfoot>
+      </table>
+    </div>`;
+  }).join('');
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="priceCheckOverlay" onclick="if(event.target===this)closePriceCheckModal()">
+    <div class="modal" style="max-width:560px;max-height:85vh;overflow-y:auto">
+      <div class="modal-title">Price Check - Cost by Vendor</div>
+      <div class="modal-sub">Raw cost price x qty, grouped by vendor per option. Compare against the distributor's quoted totals to catch entry errors before sending.</div>
+      ${sections||'<div style="color:var(--gray-500)">No options in this quote yet.</div>'}
+      <div class="modal-actions"><button class="btn" onclick="closePriceCheckModal()">Close</button></div>
+    </div></div>`);
+}
+function closePriceCheckModal(){const el=document.getElementById('priceCheckOverlay');if(el)el.remove();}
 function openBomModal(){
   if(!A.activeQuote)return;
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="bomOverlay" onclick="if(event.target===this)closeBomModal()">
