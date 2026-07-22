@@ -209,7 +209,7 @@ def draft_proposal_content(brief, attachment_text, equipment_summary, currency, 
             'temperature': 0.4,
             'maxOutputTokens': 8000,
             'responseMimeType': 'application/json',
-            'thinkingConfig': {'thinkingBudget': 0},
+            'thinkingConfig': {'thinkingLevel': 'minimal'},
         },
     }).encode('utf-8')
 
