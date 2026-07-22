@@ -117,7 +117,7 @@ def calc_opt(o):
     return ts, vat_on, rate, vat, ts + vat
 
 def fmt(n):
-    return f"{n:,.0f}"
+    return f"{n:,.2f}"
 
 # ── Attachment text extraction (PDF / DOCX / plain text) ────────────────────────
 def extract_attachment_text(filename, data):

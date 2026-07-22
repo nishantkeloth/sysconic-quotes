@@ -960,7 +960,7 @@ let RST={token:null,busy:false,done:false,error:''};
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 const esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-const fmt=n=>isNaN(n)?'0':Math.round(n).toLocaleString();
+const fmt=n=>isNaN(n)?'0.00':(+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtP=n=>(n*100).toFixed(1)+'%';
 const fmtC=n=>A.cur+' '+fmt(n);
 const sym=()=>A.cur;
