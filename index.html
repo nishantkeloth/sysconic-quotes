@@ -4205,6 +4205,12 @@ async function loadCompanyProfile(){
       <div class="fld" style="flex:1"><label>Swift code</label><input id="cpBankSwift" value="${esc(p.bank_swift||'')}"></div>
       <div class="fld" style="flex:1"><label>Branch</label><input id="cpBankBranch" value="${esc(p.bank_branch||'')}"></div>
     </div>
+    <div style="font-weight:600;font-size:14px;margin:18px 0 10px;border-top:1px solid var(--gray-100);padding-top:16px">Credentials (shown on proposals)</div>
+    <div class="fld"><label>Certifications</label><input id="cpCertifications" value="${esc(p.certifications||'')}" placeholder="ISO 9001, Maxhub Certified Partner, Crestron DMC"></div>
+    <div style="display:flex;gap:12px">
+      <div class="fld" style="flex:1"><label>Founded year</label><input id="cpFoundedYear" type="number" value="${esc(p.founded_year||'')}" placeholder="2015"></div>
+      <div class="fld" style="flex:2"><label>Notable clients</label><input id="cpNotableClients" value="${esc(p.notable_clients||'')}" placeholder="ADNOC, Etihad Rail, Yokogawa"></div>
+    </div>
     <button class="btn btn-navy" onclick="saveCompanyProfile()">Save</button>
   `;
 }
@@ -4233,6 +4239,9 @@ async function saveCompanyProfile(){
     bank_iban:         document.getElementById('cpBankIban').value,
     bank_swift:        document.getElementById('cpBankSwift').value,
     bank_branch:       document.getElementById('cpBankBranch').value,
+    certifications:    document.getElementById('cpCertifications').value,
+    founded_year:      document.getElementById('cpFoundedYear').value,
+    notable_clients:   document.getElementById('cpNotableClients').value,
   };
   const r=await api('PUT','/api/auth/company-profile',body);
   if(r.error){alert(r.error);return;}
