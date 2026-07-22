@@ -162,6 +162,31 @@ Return ONLY valid JSON matching exactly this shape (no markdown fences, no comme
 
 Ground every claim in the real equipment summary provided — never invent brands/models that aren't in it. Keep tone professional and concise, matching enterprise AV/IT proposal writing."""
 
+def _gemini_request_with_retry(req):
+    # Gemini occasionally returns 503 (overloaded) or 429 (rate-limited) even
+    # under normal load. Retry a couple of times with a short backoff before
+    # surfacing an error, instead of failing on the very first transient hiccup.
+    last_err = None
+    for attempt in range(3):
+        try:
+            return urllib.request.urlopen(req, timeout=55)
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 503) and attempt < 2:
+                last_err = e
+                time.sleep(2 * (attempt + 1))
+                continue
+            if e.code == 429:
+                raise RuntimeError('AI is rate-limited right now. Please wait a minute and try again.')
+            detail = e.read().decode('utf-8', 'ignore')[:200]
+            raise RuntimeError(f'AI service error ({e.code}). {detail}')
+        except Exception as e:
+            if attempt < 2:
+                last_err = e
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise RuntimeError('AI service is unreachable right now. Please try again.')
+    raise RuntimeError('AI service is currently overloaded. Please try again in a minute.')
+
 def draft_proposal_content(brief, attachment_text, equipment_summary, currency):
     if not GEMINI_API_KEY:
         raise RuntimeError('Proposal generation is not configured yet (GEMINI_API_KEY is missing)')
@@ -188,16 +213,8 @@ def draft_proposal_content(brief, attachment_text, equipment_summary, currency):
         'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY,
     }, method='POST')
 
-    try:
-        with urllib.request.urlopen(req, timeout=55) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-    except urllib.error.HTTPError as e:
-        if e.code == 429:
-            raise RuntimeError('AI is rate-limited right now. Please wait a minute and try again.')
-        detail = e.read().decode('utf-8', 'ignore')[:200]
-        raise RuntimeError(f'AI service error ({e.code}). {detail}')
-    except Exception:
-        raise RuntimeError('AI service is unreachable right now. Please try again.')
+    resp = _gemini_request_with_retry(req)
+    data = json.loads(resp.read().decode('utf-8'))
 
     try:
         parts = data['candidates'][0]['content']['parts']
