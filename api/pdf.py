@@ -126,7 +126,7 @@ def calc_opt(o):
     return ts, vat_on, rate, vat, ts + vat
 
 def fmt(n):
-    return f"{n:,.0f}"
+    return f"{n:,.2f}"
 
 S = {
     'base':   ParagraphStyle('base', fontName='Helvetica', fontSize=8.5, leading=11, textColor=TXT),
