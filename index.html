@@ -491,7 +491,7 @@ function projectsHTML(){
     </select></td>
     <td style="padding:8px">${esc(p.po_number||'')}</td>
     <td style="padding:8px">${p.zoho_project_id?`<span style="color:#16a34a;font-weight:600" title="Linked to Zoho Books">&#10003; Zoho</span>`:`<span style="color:var(--gray-500)">—</span>`}</td>
-    <td style="padding:8px;text-align:right"><button class="idel" onclick="deleteProject('${p.id}')" title="Delete project">✕</button></td>
+    <td style="padding:8px;text-align:right"><button class="btn btn-green" style="font-size:11px;padding:3px 8px;font-weight:700;margin-right:6px" onclick="requestFeedback('${p.id}')" title="Generate a client feedback link">Request Feedback</button><button class="idel" onclick="deleteProject('${p.id}')" title="Delete project">✕</button></td>
   </tr>`).join('');
   return `<div style="padding:24px">
     <h2 style="margin:0 0 16px">Projects</h2>
@@ -536,6 +536,7 @@ async function createZohoProject(id){
   if(r.error){alert(r.error);return;}
   A.projects=null;draw();loadProjectsPage();
 }
+async function requestFeedback(pid){const r=await api('POST','/api/testimonials/request',{project_id:pid});if(r.error){alert('Could not create feedback link: '+r.error);return;}const link=location.origin+location.pathname+'?feedback='+encodeURIComponent(r.feedback_token);prompt('Share this link with your client to collect feedback (valid 60 days, single use):',link);}
 async function deleteProject(id){
   if(!confirm('Delete this project? Linked quotes are kept but unlinked.'))return;
   const r=await api('DELETE','/api/projects/'+id);
