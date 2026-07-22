@@ -3783,7 +3783,7 @@ function applyBom(){
 // ── Proposal generator ───────────────────────────────────────────────────────────
 // Two-step flow: draft the AI content first (no PDF yet) so it can be reviewed
 // and edited, then generate Technical / Commercial / Combined independently.
-let PROP={busy:false,file:null,step:'input',content:null,brief:'',which:'all'};
+let PROP={busy:false,file:null,step:'input',content:null,brief:'',which:'all',model:'gemini-3.5-flash'};
 
 function openProposalModal(){
   if(!A.activeQuote)return;
@@ -3833,6 +3833,14 @@ function renderProposalModal(){
       <select id="propWhich" onchange="PROP.which=this.value">
         ${opts_.map((op,i)=>`<option value="${i}" ${String(i)===PROP.which?'selected':''}>${esc(op.label)}</option>`).join('')}
         <option value="all" ${PROP.which==='all'?'selected':''}>All options</option>
+      </select>
+    </div>
+    <div class="fld2" style="margin-bottom:6px"><label>AI model</label>
+      <select id="propModel" onchange="PROP.model=this.value">
+        <option value="gemini-3.5-flash" ${PROP.model==='gemini-3.5-flash'?'selected':''}>Gemini 3.5 Flash (default)</option>
+        <option value="gemini-3.5-flash-lite" ${PROP.model==='gemini-3.5-flash-lite'?'selected':''}>Gemini 3.5 Flash-Lite (fast, low-cost)</option>
+        <option value="gemini-3.1-flash-lite" ${PROP.model==='gemini-3.1-flash-lite'?'selected':''}>Gemini 3.1 Flash-Lite (cost-sensitive)</option>
+        <option value="gemini-3.6-flash" ${PROP.model==='gemini-3.6-flash'?'selected':''}>Gemini 3.6 Flash (newer, higher quality)</option>
       </select>
     </div>
     <div id="propBody"></div>
@@ -3907,7 +3915,7 @@ async function draftProposal(){
   if(body)body.innerHTML='<div style="text-align:center;padding:26px;color:var(--gray-500)">⏳ Drafting proposal content… this can take up to a minute</div>';
   let r;
   try{
-    r=await api('POST','/api/proposal/draft',{quote_id:A.activeQuote.id,brief,which:PROP.which,attachment:PROP.file});
+    r=await api('POST','/api/proposal/draft',{quote_id:A.activeQuote.id,brief,which:PROP.which,attachment:PROP.file,model:PROP.model});
   }catch(e){
     PROP.busy=false;
     if(wasReview){alert('Could not reach the proposal service. Please try again.');if(btn){btn.disabled=false;btn.textContent='🔄 Redraft with AI';}}

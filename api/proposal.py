@@ -22,6 +22,10 @@ JWT_SECRET   = os.environ.get('JWT_SECRET')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 GEMINI_MODEL   = 'gemini-3.5-flash'
 GEMINI_URL     = f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent'
+ALLOWED_GEMINI_MODELS = ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.6-flash']
+def _gemini_url_for(model):
+    m = model if model in ALLOWED_GEMINI_MODELS else GEMINI_MODEL
+    return f'https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent'
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -187,7 +191,7 @@ def _gemini_request_with_retry(req):
             raise RuntimeError('AI service is unreachable right now. Please try again.')
     raise RuntimeError('AI service is currently overloaded. Please try again in a minute.')
 
-def draft_proposal_content(brief, attachment_text, equipment_summary, currency):
+def draft_proposal_content(brief, attachment_text, equipment_summary, currency, model=None):
     if not GEMINI_API_KEY:
         raise RuntimeError('Proposal generation is not configured yet (GEMINI_API_KEY is missing)')
 
@@ -209,7 +213,7 @@ def draft_proposal_content(brief, attachment_text, equipment_summary, currency):
         },
     }).encode('utf-8')
 
-    req = urllib.request.Request(GEMINI_URL, data=body, headers={
+    req = urllib.request.Request(_gemini_url_for(model), data=body, headers={
         'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY,
     }, method='POST')
 
@@ -705,7 +709,9 @@ def draft_proposal():
     cur = quote.get('currency') or 'AED'
 
     try:
-        content = draft_proposal_content(brief, attachment_text, equipment_summary, cur)
+        requested_model = d.get('model')
+        model = requested_model if requested_model in ALLOWED_GEMINI_MODELS else None
+        content = draft_proposal_content(brief, attachment_text, equipment_summary, cur, model)
     except RuntimeError as e:
         return jsonify({'error': str(e)}), 502
 
