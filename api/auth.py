@@ -801,6 +801,7 @@ def update_invite_can_view_all_quotes(token):
 COMPANY_PROFILE_FIELDS = [
     'legal_name', 'address', 'trn', 'phone', 'website', 'logo_url',
     'bank_name', 'bank_account_name', 'bank_account_no', 'bank_iban', 'bank_swift', 'bank_branch',
+    'certifications', 'founded_year', 'notable_clients',
 ]
 LOGO_BUCKET = 'company-assets'
 MAX_LOGO_BYTES = 4 * 1024 * 1024  # 4 MB
