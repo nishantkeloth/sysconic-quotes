@@ -22,6 +22,10 @@ JWT_SECRET   = os.environ.get('JWT_SECRET')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 GEMINI_MODEL   = 'gemini-3.5-flash'
 GEMINI_URL     = f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent'
+ALLOWED_GEMINI_MODELS = ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.6-flash']
+def _gemini_url_for(model):
+    m = model if model in ALLOWED_GEMINI_MODELS else GEMINI_MODEL
+    return f'https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent'
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -162,7 +166,32 @@ Return ONLY valid JSON matching exactly this shape (no markdown fences, no comme
 
 Ground every claim in the real equipment summary provided — never invent brands/models that aren't in it. Keep tone professional and concise, matching enterprise AV/IT proposal writing."""
 
-def draft_proposal_content(brief, attachment_text, equipment_summary, currency):
+def _gemini_request_with_retry(req):
+    # Gemini occasionally returns 503 (overloaded) or 429 (rate-limited) even
+    # under normal load. Retry a couple of times with a short backoff before
+    # surfacing an error, instead of failing on the very first transient hiccup.
+    last_err = None
+    for attempt in range(3):
+        try:
+            return urllib.request.urlopen(req, timeout=55)
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 503) and attempt < 2:
+                last_err = e
+                time.sleep(2 * (attempt + 1))
+                continue
+            if e.code == 429:
+                raise RuntimeError('AI is rate-limited right now. Please wait a minute and try again.')
+            detail = e.read().decode('utf-8', 'ignore')[:200]
+            raise RuntimeError(f'AI service error ({e.code}). {detail}')
+        except Exception as e:
+            if attempt < 2:
+                last_err = e
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise RuntimeError('AI service is unreachable right now. Please try again.')
+    raise RuntimeError('AI service is currently overloaded. Please try again in a minute.')
+
+def draft_proposal_content(brief, attachment_text, equipment_summary, currency, model=None):
     if not GEMINI_API_KEY:
         raise RuntimeError('Proposal generation is not configured yet (GEMINI_API_KEY is missing)')
 
@@ -180,24 +209,16 @@ def draft_proposal_content(brief, attachment_text, equipment_summary, currency):
             'temperature': 0.4,
             'maxOutputTokens': 8000,
             'responseMimeType': 'application/json',
-            'thinkingConfig': {'thinkingBudget': 0},
+            'thinkingConfig': {'thinkingLevel': 'minimal'},
         },
     }).encode('utf-8')
 
-    req = urllib.request.Request(GEMINI_URL, data=body, headers={
+    req = urllib.request.Request(_gemini_url_for(model), data=body, headers={
         'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY,
     }, method='POST')
 
-    try:
-        with urllib.request.urlopen(req, timeout=55) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-    except urllib.error.HTTPError as e:
-        if e.code == 429:
-            raise RuntimeError('AI is rate-limited right now. Please wait a minute and try again.')
-        detail = e.read().decode('utf-8', 'ignore')[:200]
-        raise RuntimeError(f'AI service error ({e.code}). {detail}')
-    except Exception:
-        raise RuntimeError('AI service is unreachable right now. Please try again.')
+    resp = _gemini_request_with_retry(req)
+    data = json.loads(resp.read().decode('utf-8'))
 
     try:
         parts = data['candidates'][0]['content']['parts']
@@ -688,7 +709,9 @@ def draft_proposal():
     cur = quote.get('currency') or 'AED'
 
     try:
-        content = draft_proposal_content(brief, attachment_text, equipment_summary, cur)
+        requested_model = d.get('model')
+        model = requested_model if requested_model in ALLOWED_GEMINI_MODELS else None
+        content = draft_proposal_content(brief, attachment_text, equipment_summary, cur, model)
     except RuntimeError as e:
         return jsonify({'error': str(e)}), 502
 
