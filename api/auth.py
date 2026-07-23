@@ -78,6 +78,37 @@ def set_refresh_cookie(resp, raw_refresh_token):
     )
     return resp
 
+# ── Rate limiting (AUTH-003) ────────────────────────────────────────────────────
+# DB-backed, not in-memory: Vercel Python functions are stateless per
+# invocation, so an in-memory counter would reset constantly instead of
+# actually limiting anything. Every attempt (successful or not) is logged to
+# auth_attempts and counted within a sliding window before the request is
+# allowed to proceed.
+RATE_LIMITS = {
+    'login':            {'window_minutes': 15, 'max_attempts': 5},
+    'register':         {'window_minutes': 60, 'max_attempts': 10},
+    'forgot_password':  {'window_minutes': 60, 'max_attempts': 5},
+    'accept_invite':     {'window_minutes': 60, 'max_attempts': 10},
+}
+
+def _client_ip(req):
+    fwd = req.headers.get('X-Forwarded-For', '')
+    if fwd:
+        return fwd.split(',')[0].strip()
+    return req.remote_addr or 'unknown'
+
+def _rate_limit_ok(sb, action, identifier):
+    """Records this attempt and returns False if this identifier has already
+    hit the limit for `action` within its configured window."""
+    cfg = RATE_LIMITS[action]
+    window_start = (datetime.utcnow() - timedelta(minutes=cfg['window_minutes'])).isoformat()
+    recent = sb.table('auth_attempts').select('id', count='exact')\
+        .eq('action', action).eq('identifier', identifier)\
+        .gt('created_at', window_start).execute()
+    count = recent.count or 0
+    sb.table('auth_attempts').insert({'action': action, 'identifier': identifier}).execute()
+    return count < cfg['max_attempts']
+
 def verify_token(req):
     auth = req.headers.get('Authorization', '')
     if not auth.startswith('Bearer '): return None
@@ -247,6 +278,9 @@ def register():
         if len(password) < 8:
             return jsonify({'error': 'Password must be at least 8 characters'}), 400
 
+        if not _rate_limit_ok(sb, 'register', _client_ip(request)):
+            return jsonify({'error': 'Too many attempts. Please try again later.'}), 429
+
         existing = sb.table('users').select('id').eq('email', email).execute()
         if existing.data:
             return jsonify({'error': 'Email already registered'}), 409
@@ -303,6 +337,15 @@ def login():
 
         if not email or not password:
             return jsonify({'error': 'Email and password required'}), 400
+
+        # Two independent rate-limit keys: per-email (stops targeted credential
+        # stuffing against one account regardless of source IP) and per-IP
+        # (stops one source hammering many accounts). Both are checked before
+        # the password is even looked at.
+        if not _rate_limit_ok(sb, 'login', email):
+            return jsonify({'error': 'Too many attempts. Please try again later.'}), 429
+        if not _rate_limit_ok(sb, 'login', _client_ip(request)):
+            return jsonify({'error': 'Too many attempts. Please try again later.'}), 429
 
         rows = sb.table('users').select('*').eq('email', email).execute()
         if not rows.data:
@@ -501,11 +544,26 @@ def accept_invite():
         name     = d.get('name', '')
         password = d.get('password', '')
 
+        if not _rate_limit_ok(sb, 'accept_invite', _client_ip(request)):
+            return jsonify({'error': 'Too many attempts. Please try again later.'}), 429
+
         inv = sb.table('invites').select('*').eq('token', token).eq('accepted', False).execute()
         if not inv.data:
             return jsonify({'error': 'Invalid or expired invite'}), 400
 
         invite = inv.data[0]
+
+        # SUB-001: plumbing only, no real enforcement yet (per product decision)
+        # unless a plan actually sets max_users. Companies without a limit set
+        # (the default for everyone today) are unaffected.
+        co_for_limit = sb.table('companies').select('plan_limits').eq('id', invite['company_id']).execute().data
+        limits = (co_for_limit[0].get('plan_limits') if co_for_limit else None) or {}
+        max_users = limits.get('max_users')
+        if max_users is not None:
+            existing_count = sb.table('users').select('id', count='exact').eq('company_id', invite['company_id']).execute()
+            if (existing_count.count or 0) >= max_users:
+                return jsonify({'error': "This company has reached its plan's user limit. Contact your administrator."}), 403
+
         pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
         user = sb.table('users').insert({
             'company_id': invite['company_id'], 'email': invite['email'],
@@ -554,6 +612,11 @@ def forgot_password():
         sb = get_sb()
         email = ((request.json or {}).get('email') or '').strip().lower()
         if email:
+            if not _rate_limit_ok(sb, 'forgot_password', email):
+                # Same generic response either way -- rate-limited or not, this
+                # endpoint never reveals whether the email exists or whether a
+                # limit was hit.
+                return jsonify({'message': "If that email is registered, we've sent a password reset link."})
             rows = sb.table('users').select('id,name,email').eq('email', email).execute()
             if rows.data:
                 user = rows.data[0]
