@@ -494,6 +494,9 @@ def _content_footer(canvas, doc):
     canvas.restoreState()
 
 # ── Full document builder ────────────────────────────────────────────────────────
+def _section_on(content, key):
+    return (content.get('sections_enabled') or {}).get(key, True)
+
 def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc_label):
     """kind: 'technical' | 'commercial' | 'combined'"""
     buf = io.BytesIO()
@@ -520,6 +523,7 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
     E = [NextPageTemplate('content'), Spacer(1, 1), PageBreak()]
 
     if kind in ('technical', 'combined'):
+        _ov_start = len(E)
         E += [section_badge('OVERVIEW')] + heading('Executive Summary', S)
         E.append(Paragraph(content.get('executive_summary') or '', S['body']))
         cred_bits = []
@@ -537,10 +541,13 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
             E.append(card_grid(content['feature_cards'], CW))
 
         E.append(PageBreak())
+        if not _section_on(content, 'overview'): del E[_ov_start:]
+        _sc_start = len(E)
         E += [section_badge('DELIVERY')] + heading('Scope of Work', S)
         if content.get('scope_cards'):
             E.append(card_grid(content['scope_cards'], CW))
-        if content.get('control_testing'):
+        if not _section_on(content, 'scope'): del E[_sc_start:]
+        if _section_on(content, 'quality') and content.get('control_testing'):
             E += [section_badge('QUALITY')] + heading('Control, Testing & Documentation', S)
             cells = []
             for ct in content['control_testing'][:2]:
@@ -551,7 +558,7 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
             t.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('RIGHTPADDING',(0,0),(0,0),8)]))
             E.append(t)
 
-        if content.get('architecture_items'):
+        if _section_on(content, 'system_design') and content.get('architecture_items'):
             E.append(PageBreak())
             E += [section_badge('SYSTEM DESIGN')] + heading('Solution Architecture', S)
             items = content['architecture_items'][:6]
@@ -598,12 +605,13 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
                                          ('BOTTOMPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(0,0),(-1,-1),10)]))
                 E.append(KeepTogether(tot)); E.append(Spacer(1, 5*mm))
 
-        if content.get('mobilization_phases'):
+        if _section_on(content, 'rollout') and content.get('mobilization_phases'):
             E.append(PageBreak())
             E += [section_badge('ROLLOUT PLAN')] + heading('Mobilization Plan', S)
             E.append(numbered_phases(content['mobilization_phases'], CW))
 
         E.append(PageBreak())
+        _wr_start = len(E)
         E += [section_badge('ASSURANCE')] + heading('Warranty, Support & General Notes', S)
         left_bits = [Paragraph(f"<b>Warranty Coverage — {esc_p(content.get('warranty_years') or '1 Year')}</b>", ParagraphStyle('wc', fontName='Helvetica-Bold', fontSize=9.5, textColor=white))]
         left_bits.append(Spacer(1, 2*mm))
@@ -633,6 +641,8 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
         footer_bits = [b for b in footer_bits if b]
         if footer_bits:
             E.append(Paragraph(' · '.join(footer_bits), S['small']))
+
+    if not _section_on(content, 'warranty'): del E[_wr_start:]
 
     if kind in ('commercial', 'combined') and kind != 'combined':
         # standalone commercial-only document: pricing table + totals (BOM already
