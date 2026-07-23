@@ -87,6 +87,9 @@ def build_company_dict(co, fallback_name):
         'address': co.get('address') or '',
         'trn': co.get('trn') or '',
         'email': co.get('email') or '',
+        'certifications': co.get('certifications') or '',
+        'founded_year': co.get('founded_year') or '',
+        'notable_clients': co.get('notable_clients') or '',
     }
 
 def _fetch_bytes(url, timeout=15):
@@ -519,6 +522,13 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
     if kind in ('technical', 'combined'):
         E += [section_badge('OVERVIEW')] + heading('Executive Summary', S)
         E.append(Paragraph(content.get('executive_summary') or '', S['body']))
+        cred_bits = []
+        if company.get('founded_year'): cred_bits.append(f"Founded {company['founded_year']}")
+        if company.get('certifications'): cred_bits.append(company['certifications'])
+        if company.get('notable_clients'): cred_bits.append(f"Trusted by {company['notable_clients']}")
+        if cred_bits:
+            E.append(Spacer(1, 2*mm))
+            E.append(Paragraph(' &nbsp;|&nbsp; '.join(esc_p(b) for b in cred_bits), ParagraphStyle('cred', fontName='Helvetica-Oblique', fontSize=8, textColor=GRAY)))
         E.append(Spacer(1, 4*mm))
         stats2 = content.get('stats') or []
         if stats2:
@@ -667,7 +677,7 @@ def _load_quote(claims, quote_id):
     return quote
 
 def _load_company(claims):
-    co_row = sb.table('companies').select('name,legal_name,address,trn,phone,website,logo_url').eq('id', claims['company_id']).execute()
+    co_row = sb.table('companies').select('name,legal_name,address,trn,phone,website,logo_url,certifications,founded_year,notable_clients').eq('id', claims['company_id']).execute()
     co_raw = co_row.data[0] if co_row.data else {}
     company = build_company_dict(co_raw, co_raw.get('name'))
     logo_bytes = _fetch_bytes(co_raw.get('logo_url'))
