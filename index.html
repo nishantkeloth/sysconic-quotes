@@ -3898,7 +3898,10 @@ function proposalReviewHTML(){
     <div class="fld2" style="margin-bottom:10px"><label>Title</label><input value="${esc(c.title||'')}" oninput="PROP.content.title=this.value"></div>
     <div class="fld2" style="margin-bottom:10px"><label>Subtitle</label><input value="${esc(c.subtitle||'')}" oninput="PROP.content.subtitle=this.value"></div>
 
-    <label style="font-size:12px;font-weight:700;color:var(--gray-500)">Stat highlights</label>
+    <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Sections to include</label>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+      ${[['overview','Overview'],['scope','Scope of Work'],['quality','Quality/Testing'],['system_design','System Design'],['rollout','Rollout Plan'],['warranty','Warranty']].map(([key,lbl])=>`<label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;cursor:pointer"><input type="checkbox" ${(c.sections_enabled||(c.sections_enabled={}))[key]!==false?'checked':''} onchange="PROP.content.sections_enabled=PROP.content.sections_enabled||{};PROP.content.sections_enabled['${key}']=this.checked">${lbl}</label>`).join('')}
+    </div><label style="font-size:12px;font-weight:700;color:var(--gray-500)">Stat highlights</label>
     <div class="field-grid g4" style="margin:6px 0 12px;grid-template-columns:1fr 1fr">
       ${c.stats.map((s,i)=>`<div><input placeholder="Value" value="${esc(s.value)}" oninput="PROP.content.stats[${i}].value=this.value" style="margin-bottom:4px;text-align:center;font-weight:700;width:100%"><input placeholder="Label" value="${esc(s.label)}" oninput="PROP.content.stats[${i}].label=this.value" style="font-size:11px;text-align:center;width:100%"></div>`).join('')}
     </div>
