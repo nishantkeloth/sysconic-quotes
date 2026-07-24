@@ -280,6 +280,11 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .role-admin{background:var(--navy-light);color:var(--navy)}
 .role-user{background:var(--gray-100);color:var(--gray-500)}
 .team-member{display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--gray-100)}
+.tm-slot{flex-shrink:0}
+.tm-slot-sm{width:90px}
+.tm-slot-md{width:130px}
+.tm-slot-role{width:100px}
+.tm-slot-lg{width:180px}
 .team-avatar{width:42px;height:42px;border-radius:50%;background:var(--navy-light);color:var(--navy);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;flex-shrink:0}
 
 .prod-thumb{width:36px;height:36px;border-radius:6px;border:1.5px solid var(--gray-200);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;background:var(--white);font-size:15px;margin-top:2px}
@@ -4501,26 +4506,20 @@ async function loadTeam(){
   const isAdmin=A.user?.role==='admin';
   let html=members.map(m=>`<div class="team-member">
     <div class="team-avatar">${(m.name||m.email)[0].toUpperCase()}</div>
-    <div style="flex:1"><div style="font-size:15px;font-weight:600">${esc(m.name||'—')}</div><div style="font-size:13px;color:var(--gray-500)">${esc(m.email)}</div></div>
-    ${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;margin-right:10px" title="Eligible to be picked as a quote reviewer">
-      <input type="checkbox" ${m.can_review?'checked':''} onchange="toggleCanReview('${m.id}',this.checked)"> Reviewer
-    </label>`:(m.can_review?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600);margin-right:10px">Reviewer</span>`:'')}
-    ${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;margin-right:10px" title="Sees every quote in the company on the dashboard, not just their own">
-      <input type="checkbox" ${m.can_view_all_quotes?'checked':''} onchange="toggleCanViewAllQuotes('${m.id}',this.checked)"> View all quotes
-    </label>`:(m.can_view_all_quotes?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600);margin-right:10px">Views all quotes</span>`:'')}
-    ${isAdmin?roleSelectHTML(m.role,`changeMemberRole('${m.id}',this.value,'${esc(m.email).replace(/'/g,"&#39;")}')`):`<span class="role-badge role-${m.role}">${m.role}</span>`}
-    ${isAdmin?customRoleSelectHTML(m.role_id,customRoles,`assignCustomRole('${m.id}',this.value)`):''}
-    ${isAdmin?`<button class="btn btn-sm" style="margin-left:10px" onclick="adminResetPassword('${m.id}','${esc(m.email).replace(/'/g,"&#39;")}')">Reset password</button>`:''}
+    <div style="flex:1;min-width:0"><div style="font-size:15px;font-weight:600">${esc(m.name||'—')}</div><div style="font-size:13px;color:var(--gray-500)">${esc(m.email)}</div></div>
+    <div class="tm-slot tm-slot-sm">${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;white-space:nowrap" title="Eligible to be picked as a quote reviewer"><input type="checkbox" ${m.can_review?'checked':''} onchange="toggleCanReview('${m.id}',this.checked)">Reviewer</label>`:(m.can_review?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600)">Reviewer</span>`:'')}</div>
+    <div class="tm-slot tm-slot-md">${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;white-space:nowrap" title="Sees every quote in the company on the dashboard, not just their own"><input type="checkbox" ${m.can_view_all_quotes?'checked':''} onchange="toggleCanViewAllQuotes('${m.id}',this.checked)">View all quotes</label>`:(m.can_view_all_quotes?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600)">Views all quotes</span>`:'')}</div>
+    <div class="tm-slot tm-slot-role">${isAdmin?roleSelectHTML(m.role,`changeMemberRole('${m.id}',this.value,'${esc(m.email).replace(/'/g,"&#39;")}')`):`<span class="role-badge role-${m.role}">${m.role}</span>`}</div>
+    <div class="tm-slot tm-slot-lg">${isAdmin?customRoleSelectHTML(m.role_id,customRoles,`assignCustomRole('${m.id}',this.value)`):''}</div>
+    <div class="tm-slot tm-slot-lg">${isAdmin?`<button class="btn btn-sm" onclick="adminResetPassword('${m.id}','${esc(m.email).replace(/'/g,"&#39;")}')">Reset password</button>`:''}</div>
   </div>`).join('');
   if(pending.length){html+=`<div style="font-size:12px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px">Pending invites</div>`;
-    html+=pending.map(p=>`<div class="team-member"><div class="team-avatar" style="background:var(--amber-light);color:var(--amber)">✉</div><div style="flex:1"><div style="font-size:15px;font-weight:600">${esc(p.email)}</div><div style="font-size:13px;color:var(--gray-500)">Pending</div></div>
-    ${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;margin-right:10px" title="Eligible to be picked as a quote reviewer once they join">
-      <input type="checkbox" ${p.can_review?'checked':''} onchange="toggleInviteCanReview('${p.token}',this.checked)"> Reviewer
-    </label>`:(p.can_review?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600);margin-right:10px">Reviewer</span>`:'')}
-    ${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;margin-right:10px" title="Sees every company quote once they join, not just their own">
-      <input type="checkbox" ${p.can_view_all_quotes?'checked':''} onchange="toggleInviteCanViewAllQuotes('${p.token}',this.checked)"> View all quotes
-    </label>`:(p.can_view_all_quotes?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600);margin-right:10px">Views all quotes</span>`:'')}
-    ${isAdmin?roleSelectHTML(p.role,`changeInviteRole('${p.token}',this.value,'${esc(p.email).replace(/'/g,"&#39;")}')`):`<span class="role-badge role-${p.role}">${p.role}</span>`}
+    html+=pending.map(p=>`<div class="team-member"><div class="team-avatar" style="background:var(--amber-light);color:var(--amber)">✉</div><div style="flex:1;min-width:0"><div style="font-size:15px;font-weight:600">${esc(p.email)}</div><div style="font-size:13px;color:var(--gray-500)">Pending</div></div>
+    <div class="tm-slot tm-slot-sm">${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;white-space:nowrap" title="Eligible to be picked as a quote reviewer once they join"><input type="checkbox" ${p.can_review?'checked':''} onchange="toggleInviteCanReview('${p.token}',this.checked)">Reviewer</label>`:(p.can_review?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600)">Reviewer</span>`:'')}</div>
+    <div class="tm-slot tm-slot-md">${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;white-space:nowrap" title="Sees every company quote once they join, not just their own"><input type="checkbox" ${p.can_view_all_quotes?'checked':''} onchange="toggleInviteCanViewAllQuotes('${p.token}',this.checked)">View all quotes</label>`:(p.can_view_all_quotes?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600)">Views all quotes</span>`:'')}</div>
+    <div class="tm-slot tm-slot-role">${isAdmin?roleSelectHTML(p.role,`changeInviteRole('${p.token}',this.value,'${esc(p.email).replace(/'/g,"&#39;")}')`):`<span class="role-badge role-${p.role}">${p.role}</span>`}</div>
+    <div class="tm-slot tm-slot-lg"></div>
+    <div class="tm-slot tm-slot-lg"></div>
     </div>`).join('');}
   el.innerHTML=html||'<div style="color:var(--gray-500)">No team members yet</div>';
 }
