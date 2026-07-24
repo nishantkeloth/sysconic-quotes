@@ -2146,6 +2146,11 @@ function draw(){
   if(A.screen==='feedbackForm'){document.getElementById('app').innerHTML=feedbackFormHTML();return;}if(A.screen==='acceptInvite'){document.getElementById('app').innerHTML=acceptInviteHTML();return;}
   if(A.screen==='forgotPassword'){document.getElementById('app').innerHTML=forgotPasswordHTML();return;}
   if(A.screen==='resetPassword'){document.getElementById('app').innerHTML=resetPasswordHTML();return;}
+  const PAGE_KEY_MAP={dashboard:'quotes',products:'products',customers:'customers',vendorMaster:'vendors',projects:'projects',projectPerformance:'projectPerformance',projectPerformanceDetail:'projectPerformance',reviewQueue:'reviewQueue',testimonials:'testimonials'};
+  if(PAGE_KEY_MAP[A.page]&&!hasPageAccess(PAGE_KEY_MAP[A.page])){
+    const fallbackOrder=['dashboard','products','customers','vendorMaster','projects','projectPerformance','reviewQueue','testimonials'];
+    A.page=fallbackOrder.find(p=>hasPageAccess(PAGE_KEY_MAP[p]))||'dashboard';
+  }
   document.getElementById('app').innerHTML=appHTML();
   setTimeout(initTA,30);
   if(A.page==='team'){setTimeout(loadTeam,50);}
