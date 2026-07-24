@@ -4475,6 +4475,17 @@ async function saveNewCompany(){
   loadPlatformCompanies();
 }
 
+function customRoleSelectHTML(currentRoleId,roles,onchange){
+  const opts=roles.map(rl=>`<option value="${rl.id}" ${currentRoleId===rl.id?'selected':''}>${esc(rl.name)}</option>`).join('');
+  return `<select class="input" style="width:auto;padding:4px 8px;font-size:13px;margin-left:10px" onchange="${onchange}" title="Custom role controlling which pages this person can see">
+    <option value="">No restriction (default)</option>
+    ${opts}
+  </select>`;
+}
+async function assignCustomRole(userId,roleId){
+  const r=await api('PUT',`/api/auth/users/${userId}/role`,{role_id:roleId||null});
+  if(r.error){alert('Error: '+r.error);loadTeam();return;}
+}
 function roleSelectHTML(currentRole,onchange){
   return `<select class="input" style="width:auto;padding:4px 8px;font-size:13px;margin-left:10px" onchange="${onchange}">
     <option value="user"${currentRole==='user'?' selected':''}>User</option>
@@ -4484,6 +4495,8 @@ function roleSelectHTML(currentRole,onchange){
 async function loadTeam(){
   const el=document.getElementById('teamList'); if(!el)return;
   const r=await api('GET','/api/auth/team');
+  const rolesRes=await api('GET','/api/auth/roles');
+  const customRoles=rolesRes.roles||[];
   const members=r.members||[], pending=r.pending||[];
   const isAdmin=A.user?.role==='admin';
   let html=members.map(m=>`<div class="team-member">
@@ -4496,6 +4509,7 @@ async function loadTeam(){
       <input type="checkbox" ${m.can_view_all_quotes?'checked':''} onchange="toggleCanViewAllQuotes('${m.id}',this.checked)"> View all quotes
     </label>`:(m.can_view_all_quotes?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600);margin-right:10px">Views all quotes</span>`:'')}
     ${isAdmin?roleSelectHTML(m.role,`changeMemberRole('${m.id}',this.value,'${esc(m.email).replace(/'/g,"&#39;")}')`):`<span class="role-badge role-${m.role}">${m.role}</span>`}
+    ${isAdmin?customRoleSelectHTML(m.role_id,customRoles,`assignCustomRole('${m.id}',this.value)`):''}
     ${isAdmin?`<button class="btn btn-sm" style="margin-left:10px" onclick="adminResetPassword('${m.id}','${esc(m.email).replace(/'/g,"&#39;")}')">Reset password</button>`:''}
   </div>`).join('');
   if(pending.length){html+=`<div style="font-size:12px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px">Pending invites</div>`;
