@@ -53,6 +53,29 @@ def verify_token(req):
     except:
         return None
 
+_REVIEW_QUEUE_SUFFIXES = ('/approve', '/request-changes', '/admin-decide', '/cancel-review', '/reassign-reviewers')
+
+@app.before_request
+def _rbac_page_gate():
+    claims = verify_token(request)
+    if not claims:
+        return None
+    path = request.path
+    if path == '/api/quotes/review-queue' or path.endswith(_REVIEW_QUEUE_SUFFIXES):
+        page_key = 'reviewQueue'
+    else:
+        page_key = 'quotes'
+    if not has_page_access(claims, page_key):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
+    return None
+def has_page_access(claims, page_key):
+    if claims.get('role') == 'admin':
+        return True
+    rp = claims.get('role_permissions')
+    if rp is None:
+        return True
+    return bool(rp.get(page_key))
+
 def _can_view_all_quotes(claims):
     """Admins always see every quote in their company. A plain User only
     gets that too if a Company Admin has flagged can_view_all_quotes for
