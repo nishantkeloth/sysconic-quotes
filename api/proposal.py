@@ -519,6 +519,10 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
         'body': ParagraphStyle('body', fontName='Helvetica', fontSize=9, textColor=TXT, leading=13),
         'small': ParagraphStyle('small', fontName='Helvetica', fontSize=8, textColor=GRAY, leading=11),
     }
+    # Right-aligned variant of 'body', used for the Subtotal/VAT amount column in
+    # the totals box so those figures line up with the right-aligned Total (AED)
+    # column above them in the BOM table, instead of sitting flush-left in their cell.
+    S['body_r'] = ParagraphStyle('body_r', parent=S['body'], alignment=TA_RIGHT)
 
     E = [NextPageTemplate('content'), Spacer(1, 1), PageBreak()]
 
@@ -594,11 +598,11 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
         if kind == 'combined':
             for o in opts:
                 ts, vat_on, rate, vat, grand = calc_opt(o)
-                trows = [[Paragraph('Subtotal', S['body']), Paragraph(f"{cur} {fmt(ts)}", S['body'])],
+                trows = [[Paragraph('Subtotal', S['body']), Paragraph(f"{cur} {fmt(ts)}", S['body_r'])],
                          [Paragraph(f"VAT {rate:g}%" if vat_on else "VAT", S['body']),
-                          Paragraph(f"{cur} {fmt(vat)}" if vat_on else "Not applied", S['body'])],
+                          Paragraph(f"{cur} {fmt(vat)}" if vat_on else "Not applied", S['body_r'])],
                          [Paragraph('<b>Grand Total</b>', ParagraphStyle('gt', parent=S['body'], textColor=white, fontSize=10.5)),
-                          Paragraph(f"<b>{cur} {fmt(grand)}</b>", ParagraphStyle('gt2', parent=S['body'], textColor=white, fontSize=10.5))]]
+                          Paragraph(f"<b>{cur} {fmt(grand)}</b>", ParagraphStyle('gt2', parent=S['body_r'], textColor=white, fontSize=10.5))]]
                 tot = Table(trows, colWidths=[CW*0.72, CW*0.28])
                 tot.setStyle(TableStyle([('BOX',(0,0),(-1,1),0.6,GRAYB),('LINEBELOW',(0,0),(-1,1),0.4,GRAYB),
                                          ('BACKGROUND',(0,2),(-1,2),NAVY),('TOPPADDING',(0,0),(-1,-1),6),
@@ -656,11 +660,11 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
                 E.append(Spacer(1, 2*mm))
             E += bom_table(secs, CW, cur, with_price=True)
             ts, vat_on, rate, vat, grand = calc_opt(o)
-            trows = [[Paragraph('Subtotal', S['body']), Paragraph(f"{cur} {fmt(ts)}", S['body'])],
+            trows = [[Paragraph('Subtotal', S['body']), Paragraph(f"{cur} {fmt(ts)}", S['body_r'])],
                      [Paragraph(f"VAT {rate:g}%" if vat_on else "VAT", S['body']),
-                      Paragraph(f"{cur} {fmt(vat)}" if vat_on else "Not applied", S['body'])],
+                      Paragraph(f"{cur} {fmt(vat)}" if vat_on else "Not applied", S['body_r'])],
                      [Paragraph('<b>Grand Total</b>', ParagraphStyle('gt3', parent=S['body'], textColor=white, fontSize=10.5)),
-                      Paragraph(f"<b>{cur} {fmt(grand)}</b>", ParagraphStyle('gt4', parent=S['body'], textColor=white, fontSize=10.5))]]
+                      Paragraph(f"<b>{cur} {fmt(grand)}</b>", ParagraphStyle('gt4', parent=S['body_r'], textColor=white, fontSize=10.5))]]
             tot = Table(trows, colWidths=[CW*0.72, CW*0.28])
             tot.setStyle(TableStyle([('BOX',(0,0),(-1,1),0.6,GRAYB),('LINEBELOW',(0,0),(-1,1),0.4,GRAYB),
                                      ('BACKGROUND',(0,2),(-1,2),NAVY),('TOPPADDING',(0,0),(-1,-1),6),
