@@ -2146,6 +2146,7 @@ function draw(){
   if(A.page==='integrations'){setTimeout(loadIntegrations,50);setTimeout(loadSyncConfig,50);}
   if(A.page==='platform'){setTimeout(loadPlatformCompanies,50);}
   if(A.page==='companyProfile'){setTimeout(loadCompanyProfile,50);}
+  if(A.page==='rolesPermissions'){setTimeout(loadRolesPermissions,50);}
   if(A.page==='print'){ensurePrintCompany();}
   if(A.page==='products')setTimeout(loadProducts,50);
   if(A.page==='customers')setTimeout(loadCustomersPage,50);
@@ -2521,7 +2522,7 @@ function helpDrawerHTML(){
 // ── App shell ─────────────────────────────────────────────────────────────────
 function appHTML(){
   const init=(A.user?.name||'U').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
-  const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',log:'Activity Log',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master',integrations:'Integrations',platform:'All Companies',companyProfile:'Company Profile',reviewQueue:'Review Queue',projectPerformance:'Project Performance',projectPerformanceDetail:'Project Detail'};
+  const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',log:'Activity Log',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master',integrations:'Integrations',platform:'All Companies',companyProfile:'Company Profile',rolesPermissions:'Roles & Permissions',reviewQueue:'Review Queue',projectPerformance:'Project Performance',projectPerformanceDetail:'Project Detail'};
   const inEditor=['editor','terms','summary','vendor','print','log'].includes(A.page);
 
   const nav=(page,cb)=>`A.page='${page}';${cb||''}closeSidebar();draw()`;
@@ -2542,7 +2543,8 @@ function appHTML(){
       <div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>       ${hasFeature('testimonials')?`<div class="sb-item ${A.page==='testimonials'?'active':''}" onclick="${nav('testimonials')}"><span class="sb-icon">⭐</span>Testimonials</div>`:''}       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}`}       ${(A.user?.role==='admin'&&!A.user?.is_platform_admin)?`<div class="sb-sec">Settings</div>
       <div class="sb-item ${A.page==='team'?'active':''}" onclick="${nav('team')}"><span class="sb-icon">👥</span>Team</div>
       <div class="sb-item ${A.page==='integrations'?'active':''}" onclick="${nav('integrations')}"><span class="sb-icon">🔌</span>Integrations</div>
-      <div class="sb-item ${A.page==='companyProfile'?'active':''}" onclick="${nav('companyProfile')}"><span class="sb-icon">🏢</span>Company Profile</div>`:''}
+      <div class="sb-item ${A.page==='companyProfile'?'active':''}" onclick="${nav('companyProfile')}"><span class="sb-icon">🏢</span>Company Profile</div>
+      <div class="sb-item ${A.page==='rolesPermissions'?'active':''}" onclick="${nav('rolesPermissions')}"><span class="sb-icon">🔐</span>Roles & Permissions</div>`:''}
       ${A.user?.is_platform_admin?`<div class="sb-sec">Platform</div><div class="sb-item ${A.page==='platform'?'active':''}" onclick="${nav('platform')}"><span class="sb-icon">🌐</span>All Companies</div>`:''}
     </nav>
     <div class="sb-foot">
@@ -2578,6 +2580,7 @@ function appHTML(){
   else if(A.page==='integrations')pageContent=integrationsHTML();
   else if(A.page==='platform')pageContent=platformHTML();
   else if(A.page==='companyProfile')pageContent=companyProfileHTML();
+  else if(A.page==='rolesPermissions')pageContent=rolesPermissionsHTML();
   else if(A.page==='reviewQueue')pageContent=reviewQueueHTML();
   else if(A.page==='testimonials')pageContent=testimonialsHTML();
 
@@ -4220,6 +4223,71 @@ function importVendorsMaster(event){
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────
+const RBAC_PAGE_LABELS = {quotes:'Quotes',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile'};
+let RBAC_PAGE_KEYS_FE = [];
+let RBAC_ROLES_CACHE = [];
+
+function rolesPermissionsHTML(){return`<div class="card" style="max-width:820px">
+  <div class="card-title">Roles &amp; Permissions</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Create custom roles and choose which pages each one can see. A team member with no role assigned keeps full access, same as today — restriction only applies once you assign them a role on the Team page.</div>
+  <div style="display:flex;gap:8px;margin-bottom:16px">
+    <input class="input" id="newRoleName" placeholder="New role name, e.g. Sales" style="flex:1">
+    <button class="btn btn-navy" onclick="addRole()">+ Add role</button>
+  </div>
+  <div id="rolesList"><div style="color:var(--gray-500)">Loading…</div></div>
+</div>`;}
+
+async function loadRolesPermissions(){
+  const el=document.getElementById('rolesList');if(!el)return;
+  const r=await api('GET','/api/auth/roles');
+  if(r.error){el.innerHTML='<div class="auth-err">'+esc(r.error)+'</div>';return;}
+  RBAC_PAGE_KEYS_FE=r.page_keys||[];
+  RBAC_ROLES_CACHE=r.roles||[];
+  if(!RBAC_ROLES_CACHE.length){el.innerHTML='<div style="color:var(--gray-500)">No custom roles yet. Add one above.</div>';return;}
+  el.innerHTML=RBAC_ROLES_CACHE.map(role=>{
+    const perms=role.permissions||{};
+    const checks=RBAC_PAGE_KEYS_FE.map(k=>`<label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer"><input type="checkbox" ${perms[k]?'checked':''} onchange="toggleRolePermission('${role.id}','${k}',this.checked)">${esc(RBAC_PAGE_LABELS[k]||k)}</label>`).join('');
+    return `<div style="border:1px solid var(--gray-200);border-radius:8px;padding:14px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-weight:700;font-size:15px">${esc(role.name)}</div>
+        <button class="btn btn-sm" style="color:var(--red)" onclick="deleteRole('${role.id}','${esc(role.name).replace(/'/g,"&#39;")}')">Delete</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">${checks}</div>
+    </div>`;
+  }).join('');
+}
+
+async function addRole(){
+  const nameEl=document.getElementById('newRoleName');
+  const name=(nameEl?.value||'').trim();
+  if(!name){alert('Enter a role name first.');return;}
+  const r=await api('POST','/api/auth/roles',{name,permissions:{}});
+  if(r.error){alert('❌ '+r.error);return;}
+  if(nameEl)nameEl.value='';
+  loadRolesPermissions();
+}
+
+async function toggleRolePermission(roleId,pageKey,checked){
+  // Send the FULL permissions set (not just the toggled key) -- the backend
+  // replaces the whole permissions object on update rather than merging, so
+  // sending only one key would silently wipe every other permission this
+  // role had.
+  const role=RBAC_ROLES_CACHE.find(rr=>rr.id===roleId);
+  if(!role)return;
+  const perms={...(role.permissions||{}),[pageKey]:checked};
+  const r=await api('PUT',`/api/auth/roles/${roleId}`,{permissions:perms});
+  if(r.error){alert('❌ '+r.error);loadRolesPermissions();return;}
+  role.permissions=perms;
+}
+
+async function deleteRole(roleId,name){
+  if(!confirm(`Delete role "${name}"? Anyone currently assigned this role will lose access to its pages (falling back to no restriction).`))return;
+  const r=await api('DELETE',`/api/auth/roles/${roleId}`);
+  if(r.error){alert('❌ '+r.error);return;}
+  loadRolesPermissions();
+}
+
+
 function teamHTML(){return`<div class="card" style="max-width:700px" id="teamCard"><div class="card-title">Team members</div><div id="teamList"><div style="color:var(--gray-500)">Loading...</div></div></div>`;}
 
 function integrationsHTML(){return`<div class="card" style="max-width:700px">

@@ -711,7 +711,7 @@ def team():
         claims = verify_token(request)
         if not claims: return jsonify({'error': 'Unauthorized'}), 401
         if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
-        members = sb.table('users').select('id,name,email,role,created_at,is_platform_admin,can_review,can_view_all_quotes').eq('company_id', claims['company_id']).execute()
+        members = sb.table('users').select('id,name,email,role,role_id,created_at,is_platform_admin,can_review,can_view_all_quotes').eq('company_id', claims['company_id']).execute()
         # Platform-admin accounts are excluded even if their row happens to share
         # this company_id — they're managed at the platform level, not visible
         # to (or manageable by) a regular tenant's company admin.
