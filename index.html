@@ -2324,7 +2324,7 @@ const HELP_CONTENT={
     <h4>Options</h4>
     <p>The pill tabs above the details card. Use these when you want to offer the customer real alternatives (e.g. "Standard" vs "Premium") priced side by side — see them compared on the <strong>Summary</strong> tab. Most quotes only need one.</p>
     <h4>Sections &amp; items</h4>
-    <p>Group items under a section (e.g. "LED Screen", "Installation"). Add/remove items, drag the ⠿ handle or use ▲▼ to reorder.</p>
+    <p>Group items under a section (e.g. "LED Screen", "Installation"). Add/remove items, drag the ⠿ handle or use ▲▼ to reorder. Use ⧉ to copy a line, then 📋 Paste it into the same or a different section.</p>
     <h4>Internal vs Client view</h4>
     <p>Toggle top-right. <strong>Internal</strong> shows your cost, discount, markup/margin % and vendor — for your team only. <strong>Client</strong> shows only what a customer would see. This is a screen-only toggle; the actual Print/PDF output is controlled separately from the Print tab.</p>
     <h4>Pricing</h4>
@@ -2333,9 +2333,10 @@ const HELP_CONTENT={
     <ul>
       <li><strong>💾 Save</strong> — autosaves as you type too, this just forces it immediately.</li>
       <li><strong>📤 Send to Review</strong> — snapshot this quote and route it to chosen reviewers before it goes to a customer.</li>
-      <li><strong>📑 Generate Proposal</strong> — AI drafts a Technical/Commercial proposal document from this quote.</li>
+      <li><strong>📑 Generate Proposal</strong> — AI drafts a Technical/Commercial proposal document from this quote. Pick which sections to include, choose a different AI model if one is overloaded, and your company's certifications/founded year/notable clients (set once in Company Profile) appear automatically.</li>
       <li><strong>🔍 AI Review</strong> — an advisory completeness check (missing pricing, thin descriptions, etc.); nothing is changed automatically.</li>
       <li><strong>✨ Auto-BOM</strong> — describe a project in plain language and AI suggests a bill of materials, matching your Product Catalog where it can.</li>
+      <li><strong>🧮 Price Check</strong> — sums cost × qty by vendor per option, letting you cross-check against the distributor's quoted totals before sending.</li>
       <li><strong>📄 Template / 📥 Import Excel</strong> — download a blank item template or bulk-import items from a spreadsheet.</li>
       <li><strong>⋯ More</strong> — 📜 History (past review submissions), 🔍 Compare (diff any two saved versions), 🖼 Images toggle (product photos + catalog assist), ⧉ Duplicate quote, ⬇ Export PDF.</li>
     </ul>
@@ -2393,6 +2394,15 @@ const HELP_CONTENT={
       <li>Reviewers see it under <strong>Assigned to me</strong>; admins can also see <strong>All company reviews</strong>.</li>
       <li>Opening a review shows the print preview (read-only) plus a decision box: <strong>Approve</strong>, or <strong>Request changes</strong> (a comment is required).</li>
       <li>Admins get override actions on any review: reassign reviewers, cancel the review, or force-approve / force-request-changes.</li>
+    </ul>
+  `},
+  testimonials:{title:'Testimonials',body:`
+    <p>Collect client feedback after a project wraps, and publish the best of it to your website.</p>
+    <ul>
+      <li>From a project on the <strong>Projects</strong> page, click <strong>Request Feedback</strong> to generate a one-time link (valid 60 days) — share it with the client by email or WhatsApp.</li>
+      <li>The client fills in a star rating and a short testimonial, with an explicit checkbox for whether you may publish it publicly.</li>
+      <li>Submissions land here as <strong>Pending review</strong>. <strong>Approve</strong> or <strong>Reject</strong> them; only approved testimonials with consent can be <strong>Published</strong>.</li>
+      <li>Published testimonials are exposed via a public API endpoint your website can pull from — nothing is ever shown publicly without the client's consent.</li>
     </ul>
   `},
   products:{title:'Product Catalog',body:`
@@ -2473,7 +2483,7 @@ const HELP_CONTENT={
     <p><strong>+ Onboard company</strong> creates a new tenant. Suspending a company blocks that team from logging in (existing sessions may remain valid briefly) until it's reactivated.</p>
   `},
 };
-const HELP_ORDER=['dashboard','editor','terms','summary','vendor','print','log','reviewQueue','products','customers','vendorMaster','projects','projectPerformance','projectPerformanceDetail','team','integrations','companyProfile','platform'];
+const HELP_ORDER=['dashboard','editor','terms','summary','vendor','print','log','reviewQueue','testimonials','products','customers','vendorMaster','projects','projectPerformance','projectPerformanceDetail','team','integrations','companyProfile','platform'];
 function currentHelpKey(){
   if(A.helpViewTopic&&HELP_CONTENT[A.helpViewTopic])return A.helpViewTopic;
   return HELP_CONTENT[A.page]?A.page:'dashboard';
@@ -2804,8 +2814,8 @@ function editorHTML(){
           </div>
           <textarea class="iinput" oninput="sec(${si}).items[${ii}].brand=this.value;schedSave()" onblur="captureProduct(${si},${ii})" placeholder="Brand">${esc(it.brand)}</textarea>
           <textarea class="iinput" oninput="sec(${si}).items[${ii}].desc=this.value;schedSave()" placeholder="Description">${esc(it.desc)}</textarea>
-          <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="costusd" value="${it.costUsd||0}" oninput="liveCalc(this)" title="Cost in USD — auto-converts to Cost using Rate to AED" placeholder="0">
-          <input class="iinput" type="number" id="cost-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="cost" value="${it.cost}" oninput="liveCalc(this)" placeholder="0">
+          <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="costusd" value="${it.costUsd||0}" oninput="liveCalc(this)" onblur="syncProductCost(${si},${ii})" title="Cost in USD — auto-converts to Cost using Rate to AED" placeholder="0">
+          <input class="iinput" type="number" id="cost-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="cost" value="${it.cost}" oninput="liveCalc(this)" onblur="syncProductCost(${si},${ii})" placeholder="0">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="disc" value="${it.disc||0}" oninput="liveCalc(this)" placeholder="0">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="discadd" value="${it.discAdd||0}" oninput="liveCalc(this)" title="Additional discount, applied on top of Disc%" placeholder="0">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="margin" value="${((it.margin||0.2)*100).toFixed(2)}" step="0.01" oninput="liveCalc(this)" placeholder="20.00">
@@ -3326,6 +3336,18 @@ async function captureProduct(si,ii){
     const cr=await api('POST','/api/products',{brand,model,description:it.desc||'',default_cost:+it.cost||0,default_margin:+it.margin||0.2});
     if(cr.product){it.product_id=cr.product.id;schedSave();updThumb(si,ii);}
   }catch(e){}
+}
+
+// Pushes a quote line's cost back to the product it's linked to, if that
+// product's catalog cost is still 0/missing. Needed because captureProduct()
+// above links/creates the product the moment Brand or Model is blurred --
+// almost always before the user has typed a cost yet -- so without this, a
+// product created from a quote line permanently keeps a 0 catalog cost even
+// after the real cost is entered.
+async function syncProductCost(si,ii){
+  const it=sec(si)?.items?.[ii];
+  if(!it||!it.product_id||!(+it.cost>0))return;
+  try{ await api('POST',`/api/products/${it.product_id}/sync-cost`,{cost:+it.cost}); }catch(e){}
 }
 
 // ── Vendor-field live search (Vendor Master autocomplete; manual values allowed) ──

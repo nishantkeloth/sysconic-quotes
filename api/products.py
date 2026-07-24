@@ -238,6 +238,37 @@ def update_product(pid):
     row = sb.table('products').update(d).eq('id', pid).execute()
     return jsonify({'product': row.data[0]})
 
+# ── Sync a quote line's cost back to the product it's linked to ────────────────
+# Fixes a real gap: captureProduct() in index.html auto-creates a catalog
+# product the moment a quote line's Brand/Model field is blurred, using
+# whatever cost is in the row at that instant -- which is almost always still
+# 0, since the user usually hasn't typed the cost yet. Nothing ever pushed the
+# real cost back afterward. This endpoint does that, called when the Cost
+# field is blurred on a row that's already linked to a product_id. Only fills
+# in a cost that's currently missing/zero -- never overwrites a deliberately
+# set catalog price just because one particular quote line (which may carry a
+# special/negotiated cost) happened to be edited.
+@app.route('/api/products/<pid>/sync-cost', methods=['POST'])
+def sync_product_cost(pid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+
+    try:
+        cost = max(0, float((request.json or {}).get('cost') or 0))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid cost'}), 400
+    if cost <= 0:
+        return jsonify({'ok': True, 'updated': False})
+
+    existing = sb.table('products').select('id,default_cost').eq('id', pid).eq('company_id', claims['company_id']).execute()
+    if not existing.data:
+        return jsonify({'error': 'Not found'}), 404
+    if float(existing.data[0].get('default_cost') or 0) > 0:
+        return jsonify({'ok': True, 'updated': False})
+
+    sb.table('products').update({'default_cost': cost, 'cost_updated_at': 'now()'}).eq('id', pid).execute()
+    return jsonify({'ok': True, 'updated': True})
+
 # ── Delete product ─────────────────────────────────────────────────────────────
 @app.route('/api/products/<pid>', methods=['DELETE'])
 def delete_product(pid):

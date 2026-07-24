@@ -40,6 +40,22 @@ def require_platform_admin(claims):
 
 PLATFORM_ADMIN_ONLY = {'error': 'Platform admin only.'}
 
+# ── Platform audit log (OBS-001) ────────────────────────────────────────────────
+# Platform admins act across every tenant, so there's no per-company owner who
+# would otherwise notice a suspicious action. This gives an after-the-fact
+# record of who did what, to which company, and when. Best-effort: a logging
+# failure must never block the actual admin action, so failures are swallowed.
+def _audit(claims, action, target_company_id=None, detail=None):
+    try:
+        sb.table('platform_audit_log').insert({
+            'actor_user_id': claims.get('user_id'),
+            'action': action,
+            'target_company_id': target_company_id,
+            'detail': detail or {},
+        }).execute()
+    except Exception:
+        traceback.print_exc()
+
 def slugify(name):
     return re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
 
@@ -199,6 +215,8 @@ def create_company():
             'role': 'admin', 'password_hash': pw_hash, 'is_platform_admin': False,
         }).execute().data[0]
 
+        _audit(claims, 'create_company', target_company_id=co['id'], detail={'company_name': company_name, 'admin_email': admin_email, 'plan': plan})
+
         return jsonify({
             'company': {'id': co['id'], 'name': co['name'], 'slug': co['slug'], 'plan': co['plan']},
             'admin_user': {'id': user['id'], 'name': user['name'], 'email': user['email']},
@@ -214,6 +232,7 @@ def suspend_company(cid):
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
     if not require_platform_admin(claims): return jsonify(PLATFORM_ADMIN_ONLY), 403
     sb.table('companies').update({'status': 'suspended'}).eq('id', cid).execute()
+    _audit(claims, 'suspend_company', target_company_id=cid)
     return jsonify({'ok': True})
 
 @app.route('/api/platform/companies/<cid>/reactivate', methods=['POST'])
@@ -222,6 +241,7 @@ def reactivate_company(cid):
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
     if not require_platform_admin(claims): return jsonify(PLATFORM_ADMIN_ONLY), 403
     sb.table('companies').update({'status': 'active'}).eq('id', cid).execute()
+    _audit(claims, 'reactivate_company', target_company_id=cid)
     return jsonify({'ok': True})
 
 # ── Invite a user into a specific, explicitly-chosen existing company ──────────
@@ -268,6 +288,8 @@ def invite_to_company(cid):
         inviter = sb.table('users').select('name').eq('id', claims['user_id']).execute()
         inviter_name = inviter.data[0]['name'] if inviter.data else 'The Sysconic Platform Team'
         email_sent = send_invite_email(email, invite_url, company_name, inviter_name, role)
+
+        _audit(claims, 'invite_to_company', target_company_id=cid, detail={'invited_email': email, 'role': role})
 
         return jsonify({
             'invite_url': invite_url,

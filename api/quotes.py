@@ -165,10 +165,27 @@ def quote_activity(qid):
     return jsonify({'activity': entries})
 
 # ── Create quote ───────────────────────────────────────────────────────────────
+# SUB-001: plan-limit plumbing only, per product decision — no plan currently
+# sets max_quotes_per_month, so this is a no-op today for every real company.
+# It exists so a limit can be turned on later (via companies.plan_limits)
+# without another deploy.
+def _quote_limit_exceeded(claims):
+    co = sb.table('companies').select('plan_limits').eq('id', claims['company_id']).execute().data
+    limits = (co[0].get('plan_limits') if co else None) or {}
+    max_per_month = limits.get('max_quotes_per_month')
+    if max_per_month is None:
+        return False
+    month_start = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    count = sb.table('quotes').select('id', count='exact')\
+        .eq('company_id', claims['company_id']).gt('created_at', month_start).execute()
+    return (count.count or 0) >= max_per_month
+
 @app.route('/api/quotes', methods=['POST'])
 def create_quote():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if _quote_limit_exceeded(claims):
+        return jsonify({'error': "This company has reached its plan's quote limit for this month."}), 403
 
     d = request.json or {}
     row = sb.table('quotes').insert({
