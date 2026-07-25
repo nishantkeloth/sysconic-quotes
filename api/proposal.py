@@ -58,6 +58,22 @@ def verify_token(req):
         return None
 
 # ── Colors (matches the modernized Quotation PDF) ───────────────────────────────
+def has_page_access(claims, page_key):
+    if claims.get('role') == 'admin':
+        return True
+    rp = claims.get('role_permissions')
+    if rp is None:
+        return True
+    return bool(rp.get(page_key))
+
+@app.before_request
+def _rbac_page_gate():
+    claims = verify_token(request)
+    if not claims:
+        return None
+    if not has_page_access(claims, 'quotes'):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
+    return None
 NAVY    = HexColor('#16294f')
 NAVY2   = HexColor('#1a3c6e')
 GOLD    = HexColor('#f4b400')
