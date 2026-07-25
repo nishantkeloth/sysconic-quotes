@@ -45,6 +45,34 @@ def verify_token(req):
 def has_feature(claims, feature):
     return bool((claims.get('features') or {}).get(feature))
 
+def has_page_access(claims, page_key):
+    if claims.get('role') == 'admin':
+        return True
+    rp = claims.get('role_permissions')
+    if rp is None:
+        return True
+    return bool(rp.get(page_key))
+
+_PUBLIC_TESTIMONIAL_PATHS = ('/api/testimonials/verify', '/api/testimonials/submit', '/api/testimonials/public')
+
+@app.before_request
+def _rbac_page_gate():
+    if request.path in _PUBLIC_TESTIMONIAL_PATHS:
+        return None
+    claims = verify_token(request)
+    if not claims:
+        return None
+    path = request.path
+    if path.startswith('/api/testimonials'):
+        page_key = 'testimonials'
+    elif path.startswith('/api/project-performance') or path.startswith('/api/pp-sync'):
+        page_key = 'projectPerformance'
+    else:
+        page_key = 'projects'
+    if not has_page_access(claims, page_key):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
+    return None
+
 STATUSES = ('active','on_hold','completed','cancelled')
 
 def clean_project(d):
