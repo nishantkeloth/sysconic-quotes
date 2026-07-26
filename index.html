@@ -6,6 +6,7 @@
 <title>QTcal AI — Quote Manager v1.0.1</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231e3a5f'/%3E%3Ccircle cx='27' cy='27' r='15' fill='none' stroke='%23fff' stroke-width='5'/%3E%3Cline x1='37' y1='37' x2='46' y2='46' stroke='%23fff' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M46 14 L48 20 L54 22 L48 24 L46 30 L44 24 L38 22 L44 20 Z' fill='%23f59e0b'/%3E%3C/svg%3E">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.3/mermaid.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -2626,6 +2627,7 @@ function buildTopbarRight(){
     <span class="tb-sep"></span>
     <button class="btn" onclick="reviewQuote()">🔍 AI Review</button>
     ${!isQuoteLocked()?`<button class="btn" onclick="openBomModal()" title="Generate a bill of materials from a project description using AI">✨ Auto-BOM</button>`:''}
+    ${hasFeature('diagrams')?`<button class="btn" onclick="openDiagramModal()" title="Generate a system schematic (signal flow diagram) from this option's BOM using AI">🗺 AI Diagram</button>`:''}
     <button class="btn" onclick="openPriceCheckModal()" title="Sum cost x qty by vendor per option, to cross-check against distributor pricing">Price Check</button>
     <span class="tb-sep"></span>
     <button class="btn" onclick="downloadTemplate()" title="Download Excel template">📄 Template</button>
@@ -3850,6 +3852,163 @@ function applyBom(){
   schedSave();closeBomModal();draw();
 }
 
+// ── AI System Diagram ──────────────────────────────────────────────────────────
+// Generates a Mermaid system schematic from the active option's BOM via Gemini.
+// The code is stored on the option object itself (opt().diagram) so it rides
+// along inside quote_data — saved, snapshotted and available to the proposal
+// generator with no schema change.
+let DIAG={busy:false,code:'',showCode:false};
+
+function diagMermaidReady(){return typeof window.mermaid!=='undefined';}
+let _diagInit=false;
+function diagInitMermaid(){
+  if(_diagInit||!diagMermaidReady())return;
+  window.mermaid.initialize({startOnLoad:false,securityLevel:'loose',theme:'base',fontFamily:'inherit'});
+  _diagInit=true;
+}
+
+function openDiagramModal(){
+  if(!A.activeQuote)return;
+  const o=opt();if(!o)return;
+  DIAG={busy:false,code:(o.diagram&&o.diagram.code)||'',showCode:false};
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="diagOverlay" onclick="if(event.target===this)closeDiagramModal()">
+    <div class="modal" style="max-width:900px;max-height:90vh;overflow-y:auto" id="diagModalBox"></div></div>`);
+  renderDiagramModal();
+  if(DIAG.code)renderDiagPreview();
+}
+function closeDiagramModal(){const el=document.getElementById('diagOverlay');if(el)el.remove();DIAG={busy:false,code:'',showCode:false};}
+
+function renderDiagramModal(){
+  const box=document.getElementById('diagModalBox');if(!box)return;
+  const o=opt()||{};
+  const saved=o.diagram&&o.diagram.code;
+  box.innerHTML=`
+    <div class="modal-title">🗺 AI System Diagram <span style="font-size:12px;font-weight:600;color:var(--amber)">AI</span></div>
+    <div class="modal-sub">Generates a system schematic (signal flow) from this option's bill of materials. Review it — AI can misread a BOM line — then save it to the quote or download it.${saved?` <span style="color:var(--green)">A diagram is saved on ${esc(o.label||'this option')}${o.diagram.updated_at?' ('+esc(o.diagram.updated_at.slice(0,10))+')':''}.</span>`:''}</div>
+    <div id="diagPreview" style="border:1.5px solid var(--gray-200);border-radius:8px;min-height:220px;margin:10px 0;padding:12px;overflow:auto;background:#fff;display:flex;align-items:center;justify-content:center">
+      <div style="color:var(--gray-500);font-size:14px">${DIAG.code?'Rendering…':'No diagram yet — click Generate to draw one from the BOM.'}</div>
+    </div>
+    ${DIAG.showCode?`<textarea id="diagCode" rows="10" spellcheck="false" style="width:100%;padding:10px;font-family:monospace;font-size:12px;border:1.5px solid var(--gray-200);border-radius:8px;margin-bottom:10px" oninput="DIAG.code=this.value" onchange="renderDiagPreview()">${esc(DIAG.code)}</textarea>
+    <div style="font-size:12px;color:var(--gray-500);margin:-6px 0 10px">Edit the Mermaid code above, then click outside the box to re-render.</div>`:''}
+    <div class="modal-actions" style="flex-wrap:wrap;gap:8px">
+      <button class="btn" onclick="closeDiagramModal()">Close</button>
+      <button class="btn" onclick="DIAG.showCode=!DIAG.showCode;renderDiagramModal();if(DIAG.code)renderDiagPreview()">${DIAG.showCode?'Hide':'✎ Edit'} code</button>
+      ${DIAG.code?`<button class="btn" onclick="downloadDiagram('svg')">⬇ SVG</button>
+      <button class="btn" onclick="downloadDiagram('png')">⬇ PNG</button>`:''}
+      ${DIAG.code&&!isQuoteLocked()?`<button class="btn" onclick="saveDiagramToQuote()">💾 Save to quote</button>`:''}
+      <button class="btn btn-navy" id="diagGenBtn" onclick="generateDiagram()">${DIAG.code?'🔄 Regenerate':'✨ Generate'} with AI</button>
+    </div>`;
+}
+
+function diagBomPayload(){
+  const o=opt();if(!o)return null;
+  return{
+    title:A.activeQuote?.title||'',
+    sections:(o.sections||[]).map(s=>({name:s.name||'',items:(s.items||[]).map(it=>({brand:it.brand||'',model:it.model||'',desc:it.desc||'',qty:it.qty||1}))})),
+  };
+}
+
+async function generateDiagram(){
+  if(DIAG.busy)return;
+  const payload=diagBomPayload();
+  if(!payload||!payload.sections.some(s=>s.items.length)){alert('This option has no line items yet — add the BOM first.');return;}
+  const btn=document.getElementById('diagGenBtn');
+  if(btn){btn.disabled=true;btn.textContent='Generating…';}
+  DIAG.busy=true;
+  const prev=document.getElementById('diagPreview');
+  if(prev)prev.innerHTML='<div style="color:var(--gray-500);font-size:14px;padding:26px">⏳ Drawing the system schematic… this can take up to a minute</div>';
+  let r;
+  try{r=await api('POST','/api/diagram/generate',{quote:payload});}
+  catch(e){r={error:'Could not reach the diagram service. Please try again.'};}
+  DIAG.busy=false;
+  if(r.error){
+    if(prev)prev.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;
+    if(btn){btn.disabled=false;btn.textContent=(DIAG.code?'🔄 Regenerate':'✨ Generate')+' with AI';}
+    return;
+  }
+  DIAG.code=r.mermaid||'';
+  renderDiagramModal();
+  renderDiagPreview();
+}
+
+let _diagSeq=0;
+async function renderDiagPreview(){
+  const prev=document.getElementById('diagPreview');if(!prev)return;
+  if(!DIAG.code){prev.innerHTML='<div style="color:var(--gray-500);font-size:14px">No diagram yet.</div>';return;}
+  if(!diagMermaidReady()){prev.innerHTML='<div class="auth-err">Diagram renderer failed to load — check your internet connection and reload the page.</div>';return;}
+  diagInitMermaid();
+  try{
+    const {svg}=await window.mermaid.render('diagSvg'+(++_diagSeq),DIAG.code);
+    prev.style.display='block';
+    prev.innerHTML=svg;
+    const el=prev.querySelector('svg');
+    if(el){el.style.maxWidth='100%';el.style.height='auto';}
+  }catch(e){
+    prev.innerHTML=`<div class="auth-err">The diagram code has a syntax error and can't be rendered.<br><span style="font-size:12px">${esc(String(e.message||e).slice(0,300))}</span></div>`;
+    if(!DIAG.showCode){DIAG.showCode=true;renderDiagramModal();}
+  }
+}
+
+// Returns a Promise<string|null> of a PNG data URL rendered at 2x for quality.
+async function diagCodeToPng(code,scale=2){
+  if(!code||!diagMermaidReady())return null;
+  diagInitMermaid();
+  const {svg}=await window.mermaid.render('diagPngSvg'+(++_diagSeq),code);
+  // Parse intrinsic size from the SVG so the raster isn't blurry or clipped
+  const tmp=document.createElement('div');
+  tmp.style.cssText='position:absolute;left:-99999px;top:0';
+  tmp.innerHTML=svg;document.body.appendChild(tmp);
+  const el=tmp.querySelector('svg');
+  let w=1200,h=800;
+  try{
+    const bb=el.getBBox();
+    w=Math.ceil(bb.width+bb.x*2)||el.viewBox?.baseVal?.width||1200;
+    h=Math.ceil(bb.height+bb.y*2)||el.viewBox?.baseVal?.height||800;
+  }catch(e){
+    w=el.viewBox?.baseVal?.width||1200;h=el.viewBox?.baseVal?.height||800;
+  }
+  el.setAttribute('width',w);el.setAttribute('height',h);
+  const svgStr=new XMLSerializer().serializeToString(el);
+  document.body.removeChild(tmp);
+  const blob=new Blob([svgStr],{type:'image/svg+xml;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  try{
+    const img=await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=url;});
+    const canvas=document.createElement('canvas');
+    canvas.width=Math.round(w*scale);canvas.height=Math.round(h*scale);
+    const ctx=canvas.getContext('2d');
+    ctx.fillStyle='#ffffff';ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(img,0,0,canvas.width,canvas.height);
+    return canvas.toDataURL('image/png');
+  }finally{URL.revokeObjectURL(url);}
+}
+
+async function downloadDiagram(kind){
+  if(!DIAG.code)return;
+  const name=((A.activeQuote?.title||'diagram').replace(/[^\w\- ]+/g,'').trim().replace(/ +/g,'-')||'diagram')+'-schematic';
+  try{
+    if(kind==='svg'){
+      diagInitMermaid();
+      const {svg}=await window.mermaid.render('diagDlSvg'+(++_diagSeq),DIAG.code);
+      const blob=new Blob([svg],{type:'image/svg+xml;charset=utf-8'});
+      const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name+'.svg';a.click();URL.revokeObjectURL(a.href);
+    }else{
+      const png=await diagCodeToPng(DIAG.code);
+      if(!png){alert('Could not render the diagram to PNG.');return;}
+      const a=document.createElement('a');a.href=png;a.download=name+'.png';a.click();
+    }
+  }catch(e){alert('Download failed: the diagram code has a syntax error.');}
+}
+
+function saveDiagramToQuote(){
+  const o=opt();if(!o||!DIAG.code)return;
+  if(isQuoteLocked()){alert('This quote is locked — unlock it to save the diagram.');return;}
+  o.diagram={code:DIAG.code,updated_at:new Date().toISOString()};
+  schedSave();
+  renderDiagramModal();
+  renderDiagPreview();
+}
+
 // ── Proposal generator ───────────────────────────────────────────────────────────
 // Two-step flow: draft the AI content first (no PDF yet) so it can be reviewed
 // and edited, then generate Technical / Commercial / Combined independently.
@@ -3936,8 +4095,10 @@ function proposalReviewHTML(){
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Sections to include</label>
     <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">
-      ${[['overview','Overview'],['scope','Scope of Work'],['quality','Quality/Testing'],['system_design','System Design'],['rollout','Rollout Plan'],['warranty','Warranty']].map(([key,lbl])=>`<label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;cursor:pointer"><input type="checkbox" ${(c.sections_enabled||(c.sections_enabled={}))[key]!==false?'checked':''} onchange="PROP.content.sections_enabled=PROP.content.sections_enabled||{};PROP.content.sections_enabled['${key}']=this.checked">${lbl}</label>`).join('')}
-    </div><label style="font-size:12px;font-weight:700;color:var(--gray-500)">Stat highlights</label>
+      ${[['overview','Overview'],['scope','Scope of Work'],['quality','Quality/Testing'],['system_design','System Design'],...(hasFeature('diagrams')?[['schematic','System Schematic']]:[]),['rollout','Rollout Plan'],['warranty','Warranty']].map(([key,lbl])=>`<label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;cursor:pointer"><input type="checkbox" ${(c.sections_enabled||(c.sections_enabled={}))[key]!==false?'checked':''} onchange="PROP.content.sections_enabled=PROP.content.sections_enabled||{};PROP.content.sections_enabled['${key}']=this.checked">${lbl}</label>`).join('')}
+    </div>
+    ${hasFeature('diagrams')&&!opts().some(o=>o.diagram&&o.diagram.code)?`<div style="font-size:12px;color:var(--amber);margin:-8px 0 12px">System Schematic: no diagram is saved on this quote yet — generate one via 🗺 AI Diagram in the editor toolbar, or that section will be skipped.</div>`:''}
+    <label style="font-size:12px;font-weight:700;color:var(--gray-500)">Stat highlights</label>
     <div class="field-grid g4" style="margin:6px 0 12px;grid-template-columns:1fr 1fr">
       ${c.stats.map((s,i)=>`<div><input placeholder="Value" value="${esc(s.value)}" oninput="PROP.content.stats[${i}].value=this.value" style="margin-bottom:4px;text-align:center;font-weight:700;width:100%"><input placeholder="Label" value="${esc(s.label)}" oninput="PROP.content.stats[${i}].label=this.value" style="font-size:11px;text-align:center;width:100%"></div>`).join('')}
     </div>
@@ -4012,6 +4173,19 @@ async function renderProposalKind(kind){
   const labelMap={technical:'📘 Technical (no pricing)',commercial:'💰 Commercial (priced)',combined:'📗 Combined (priced)'};
   PROP.busy=true;
   const btn=document.getElementById(idMap[kind]);if(btn){btn.disabled=true;btn.textContent='Generating…';}
+  // System Schematic section: render the saved Mermaid diagram to PNG client-side
+  // (ReportLab can't run Mermaid) and ship it inside the content payload.
+  if(kind!=='commercial'&&hasFeature('diagrams')&&(PROP.content.sections_enabled||{}).schematic!==false){
+    try{
+      const os_=opts();
+      let dcode=null;
+      if(PROP.which!=='all'&&os_[+PROP.which]?.diagram?.code)dcode=os_[+PROP.which].diagram.code;
+      else dcode=(os_.find(o=>o.diagram&&o.diagram.code)||{}).diagram?.code||null;
+      PROP.content.schematic_png=dcode?await diagCodeToPng(dcode):null;
+    }catch(e){PROP.content.schematic_png=null;}
+  }else{
+    PROP.content.schematic_png=null;
+  }
   let r;
   try{
     r=await api('POST','/api/proposal/render',{quote_id:A.activeQuote.id,which:PROP.which,kind,content:PROP.content});

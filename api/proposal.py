@@ -513,6 +513,33 @@ def _content_footer(canvas, doc):
 def _section_on(content, key):
     return (content.get('sections_enabled') or {}).get(key, True)
 
+MAX_SCHEMATIC_BYTES = 4 * 1024 * 1024  # 4 MB decoded
+
+def _schematic_image(data_url, CW):
+    """Decode a base64 PNG data URL into a ReportLab Image scaled to the
+    content width (capped to a portrait-page-friendly height). Returns None
+    on any problem — the proposal must never fail because of the diagram."""
+    try:
+        raw = data_url
+        if ',' in raw: raw = raw.split(',', 1)[1]
+        import base64
+        img_bytes = base64.b64decode(raw)
+        if not img_bytes or len(img_bytes) > MAX_SCHEMATIC_BYTES:
+            return None
+        reader = ImageReader(io.BytesIO(img_bytes))
+        iw, ih = reader.getSize()
+        if not iw or not ih:
+            return None
+        w = CW
+        h = w * ih / float(iw)
+        max_h = 200*mm
+        if h > max_h:
+            h = max_h
+            w = h * iw / float(ih)
+        return Image(io.BytesIO(img_bytes), width=w, height=h)
+    except Exception:
+        return None
+
 def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc_label):
     """kind: 'technical' | 'commercial' | 'combined'"""
     buf = io.BytesIO()
@@ -601,6 +628,18 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
             E.append(grid)
             if content.get('architecture_note'):
                 E.append(Spacer(1, 2*mm)); E.append(Paragraph(content['architecture_note'], S['body']))
+
+        # System Schematic: a Mermaid diagram rendered to PNG in the browser
+        # (see index.html's diagCodeToPng) and shipped inside content — the
+        # server only places the image; it never generates it.
+        if _section_on(content, 'schematic') and content.get('schematic_png'):
+            img_flow = _schematic_image(content['schematic_png'], CW)
+            if img_flow:
+                E.append(PageBreak())
+                E += [section_badge('SYSTEM DESIGN')] + heading('System Schematic', S)
+                E.append(Paragraph('Signal flow of the proposed system. Solid lines carry AV signal, heavy lines carry audio/video over the network, dotted lines are control.', S['small']))
+                E.append(Spacer(1, 3*mm))
+                E.append(img_flow)
 
         E.append(PageBreak())
         E += [section_badge('BILL OF MATERIALS')] + heading('Bill of Materials', S)

@@ -22,8 +22,11 @@ function boot({ fetchMock } = {}) {
     beforeParse(w) {
       w.fetch = async (url, opts = {}) => {
         captured.requests.push({ url: String(url), method: opts.method || 'GET', body: opts.body });
-        if (fetchMock) { const r = fetchMock(String(url), opts); if (r) return { ok: true, json: async () => r }; }
-        return { ok: true, json: async () => ({ quote: { id: 'q1' }, quotes: [], customers: [] }) };
+        // api() reads r.text() (not r.json()) since the AUTH-002 rework, so the
+        // mock must provide status/text too or every mocked call errors out.
+        const mk = (obj) => ({ ok: true, status: 200, json: async () => obj, text: async () => JSON.stringify(obj) });
+        if (fetchMock) { const r = fetchMock(String(url), opts); if (r) return mk(r); }
+        return mk({ quote: { id: 'q1' }, quotes: [], customers: [] });
       };
       w.alert = () => {}; w.confirm = () => true; w.prompt = () => 'x';
     },
@@ -187,6 +190,63 @@ async function testPdfButton() {
   check('pdf: downloadPDF function defined', hasFn === true);
 }
 
+// ── Test 10: AI System Diagram ─────────────────────────────────────────────
+const DIAG_TOKEN_JS = `A.token='x.'+btoa(JSON.stringify({features:{diagrams:true}}))+'.y';`;
+
+async function testDiagramFlag() {
+  const { run } = await freshEditor();
+  run(`draw()`);
+  // Check rendered buttons only — body.innerHTML would also match the string
+  // inside the app's own <script> source.
+  const btnCheck = `[...document.querySelectorAll('button')].some(b=>b.textContent.includes('AI Diagram'))`;
+  const without = run(btnCheck);
+  run(DIAG_TOKEN_JS + `draw()`);
+  const withFlag = run(btnCheck);
+  check('diagram: toolbar button hidden without feature flag', without === false);
+  check('diagram: toolbar button shown with feature flag', withFlag === true);
+}
+
+async function testDiagramGenerate() {
+  const ctx = await freshEditor({
+    fetchMock: (url) => url.includes('/api/diagram/generate')
+      ? { mermaid: 'flowchart LR\n    A["PC"] -- HDMI --> B["Display"]' }
+      : null,
+  });
+  const { run, captured } = ctx;
+  run(DIAG_TOKEN_JS + `
+    sec(0).items[0].brand='LG'; sec(0).items[0].model='98UM5K'; sec(0).items[0].desc='98in display'; sec(0).items[0].qty=1;
+    openDiagramModal();
+    generateDiagram();
+  `);
+  await wait(120);
+  const code = run(`DIAG.code`);
+  check('diagram: generate stores mermaid code', typeof code === 'string' && code.startsWith('flowchart'), `got "${String(code).slice(0, 40)}"`);
+  const req = captured.requests.find(r => r.url.includes('/api/diagram/generate'));
+  const body = req ? JSON.parse(req.body) : null;
+  check('diagram: request carries the BOM items', !!body && body.quote.sections[0].items[0].model === '98UM5K');
+  run(`saveDiagramToQuote()`);
+  const saved = run(`opts()[0].diagram && opts()[0].diagram.code`);
+  const stamped = run(`!!(opts()[0].diagram && opts()[0].diagram.updated_at)`);
+  check('diagram: save persists code onto the option (rides in quote_data)', typeof saved === 'string' && saved.startsWith('flowchart'));
+  check('diagram: save stamps updated_at', stamped === true);
+  run(`closeDiagramModal()`);
+}
+
+async function testDiagramProposalSection() {
+  const { run } = await freshEditor();
+  run(DIAG_TOKEN_JS + `PROP.content={title:'T'};`);
+  const withFlag = run(`proposalReviewHTML().includes('System Schematic')`);
+  const hint = run(`proposalReviewHTML().includes('no diagram is saved')`);
+  run(`opts()[0].diagram={code:'flowchart LR\\n A-->B',updated_at:'2026-07-26T00:00:00Z'};`);
+  const hintGone = run(`proposalReviewHTML().includes('no diagram is saved')`);
+  run(`A.token=null;`);
+  const withoutFlag = run(`proposalReviewHTML().includes('System Schematic')`);
+  check('diagram: proposal offers System Schematic toggle with flag', withFlag === true);
+  check('diagram: proposal hints when no diagram saved yet', hint === true);
+  check('diagram: hint disappears once a diagram is saved', hintGone === false);
+  check('diagram: proposal hides schematic toggle without flag', withoutFlag === false);
+}
+
 // ── Runner ──────────────────────────────────────────────────────────────────
 const suites = [
   ['Pricing formula', testPricing],
@@ -198,6 +258,9 @@ const suites = [
   ['Single-option print', testSingleOptionPrint],
   ['Zoho autocomplete', testZoho],
   ['PDF button', testPdfButton],
+  ['AI Diagram feature flag', testDiagramFlag],
+  ['AI Diagram generate & save', testDiagramGenerate],
+  ['AI Diagram proposal section', testDiagramProposalSection],
 ];
 
 console.log(`\nSysconic Quote Manager — automated tests\nTarget: ${INDEX}\n`);
