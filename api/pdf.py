@@ -22,6 +22,22 @@ def verify_token(req):
     except:
         return None
 
+def has_page_access(claims, page_key):
+    if claims.get('role') == 'admin':
+        return True
+    rp = claims.get('role_permissions')
+    if rp is None:
+        return True
+    return bool(rp.get(page_key))
+
+@app.before_request
+def _rbac_page_gate():
+    claims = verify_token(request)
+    if not claims:
+        return None
+    if not has_page_access(claims, 'quotes'):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
+    return None
 # AUTH-001 fix: duplicated from api/quotes.py (same one-file-per-route
 # constraint as every other cross-file duplication in this codebase -- see
 # e.g. calc_item/calc_opt, the Zoho adapter). quote_pdf() below was

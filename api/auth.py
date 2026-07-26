@@ -30,7 +30,20 @@ def get_app_url():
 def get_sb():
     return create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def make_token(user_id, company_id, role, is_platform_admin=False, features=None):
+def _resolve_role_permissions(sb, user):
+    # RBAC Phase 1: if the user has no custom role assigned, return None so
+    # make_token() omits the restriction entirely (backward compatible --
+    # untouched users keep today's full workspace access). Only look up and
+    # apply permissions once an admin has explicitly assigned a role.
+    role_id = user.get('role_id')
+    if not role_id:
+        return None
+    row = sb.table('roles').select('permissions').eq('id', role_id).execute()
+    if not row.data:
+        return None
+    return row.data[0].get('permissions') or {}
+
+def make_token(user_id, company_id, role, is_platform_admin=False, features=None, role_permissions=None):
     # AUTH-002: shortened from 30 days to 1 hour. This is now just the
     # stateless access token; long-lived sessions live in the `sessions`
     # table via a separate, revocable refresh token (see create_session()/
@@ -43,6 +56,7 @@ def make_token(user_id, company_id, role, is_platform_admin=False, features=None
         'role': role,
         'is_platform_admin': bool(is_platform_admin),
         'features': features or {},
+        'role_permissions': role_permissions,
         'exp': datetime.utcnow() + timedelta(hours=1)
     }, JWT_SECRET, algorithm='HS256')
 
@@ -360,7 +374,7 @@ def login():
         if co.get('status') == 'suspended':
             return jsonify({'error': "This company's account has been suspended. Contact your administrator."}), 403
 
-        token = make_token(user['id'], co['id'], user['role'], user.get('is_platform_admin', False), features=co.get('features') or {})
+        token = make_token(user['id'], co['id'], user['role'], user.get('is_platform_admin', False), features=co.get('features') or {}, role_permissions=_resolve_role_permissions(sb, user))
         refresh_raw = create_session(sb, user['id'], request)
 
         resp = jsonify({
@@ -417,7 +431,7 @@ def refresh():
         sb.table('sessions').update({'revoked_at': datetime.utcnow().isoformat()}).eq('id', session['id']).execute()
         new_raw = create_session(sb, user['id'], request)
 
-        access_token = make_token(user['id'], co['id'], user['role'], user.get('is_platform_admin', False), features=co.get('features') or {})
+        access_token = make_token(user['id'], co['id'], user['role'], user.get('is_platform_admin', False), features=co.get('features') or {}, role_permissions=_resolve_role_permissions(sb, user))
         resp = jsonify({
             'token': access_token,
             'user': {'id': user['id'], 'name': user.get('name', ''), 'email': user['email'], 'role': user['role'], 'is_platform_admin': bool(user.get('is_platform_admin')), 'ms365_email': user.get('ms365_email')},
@@ -697,7 +711,7 @@ def team():
         claims = verify_token(request)
         if not claims: return jsonify({'error': 'Unauthorized'}), 401
         if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
-        members = sb.table('users').select('id,name,email,role,created_at,is_platform_admin,can_review,can_view_all_quotes').eq('company_id', claims['company_id']).execute()
+        members = sb.table('users').select('id,name,email,role,role_id,created_at,is_platform_admin,can_review,can_view_all_quotes').eq('company_id', claims['company_id']).execute()
         # Platform-admin accounts are excluded even if their row happens to share
         # this company_id — they're managed at the platform level, not visible
         # to (or manageable by) a regular tenant's company admin.
@@ -958,6 +972,90 @@ def upload_company_logo():
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
+# ── RBAC Phase 1: custom, per-company roles (page-level view/hide) ─────────
+RBAC_PAGE_KEYS = ['quotes','products','customers','vendors','projects','projectPerformance','reviewQueue','testimonials','team','integrations','companyProfile']
+
+def _clean_permissions(d):
+    out = {}
+    for k in RBAC_PAGE_KEYS:
+        if k in d: out[k] = bool(d[k])
+    return out
+
+@app.route('/api/auth/roles', methods=['GET'])
+def list_roles():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+    sb = get_sb()
+    rows = sb.table('roles').select('*').eq('company_id', claims['company_id']).order('created_at').execute()
+    return jsonify({'roles': rows.data or [], 'page_keys': RBAC_PAGE_KEYS})
+
+@app.route('/api/auth/roles', methods=['POST'])
+def create_role():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+    sb = get_sb()
+    d = request.json or {}
+    name = str(d.get('name') or '').strip()[:100]
+    if not name: return jsonify({'error': 'Role name is required'}), 400
+    permissions = _clean_permissions(d.get('permissions') or {})
+    try:
+        row = sb.table('roles').insert({'company_id': claims['company_id'], 'name': name, 'permissions': permissions}).execute()
+    except Exception as e:
+        return jsonify({'error': f'Could not create role (maybe a duplicate name?): {str(e)[:200]}'}), 400
+    return jsonify({'role': row.data[0]})
+
+@app.route('/api/auth/roles/<rid>', methods=['PUT'])
+def update_role(rid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+    sb = get_sb()
+    existing = sb.table('roles').select('id').eq('id', rid).eq('company_id', claims['company_id']).execute()
+    if not existing.data: return jsonify({'error': 'Role not found'}), 404
+    d = request.json or {}
+    update = {}
+    if 'name' in d:
+        name = str(d.get('name') or '').strip()[:100]
+        if not name: return jsonify({'error': 'Role name cannot be empty'}), 400
+        update['name'] = name
+    if 'permissions' in d:
+        update['permissions'] = _clean_permissions(d.get('permissions') or {})
+    if update:
+        sb.table('roles').update(update).eq('id', rid).execute()
+    row = sb.table('roles').select('*').eq('id', rid).execute()
+    return jsonify({'role': row.data[0] if row.data else None})
+
+@app.route('/api/auth/roles/<rid>', methods=['DELETE'])
+def delete_role(rid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+    sb = get_sb()
+    existing = sb.table('roles').select('id').eq('id', rid).eq('company_id', claims['company_id']).execute()
+    if not existing.data: return jsonify({'error': 'Role not found'}), 404
+    sb.table('roles').delete().eq('id', rid).execute()
+    return jsonify({'ok': True})
+
+@app.route('/api/auth/users/<uid>/role', methods=['PUT'])
+def assign_user_role(uid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+    sb = get_sb()
+    user_row = sb.table('users').select('id').eq('id', uid).eq('company_id', claims['company_id']).execute()
+    if not user_row.data: return jsonify({'error': 'User not found'}), 404
+    d = request.json or {}
+    role_id = d.get('role_id') or None
+    if role_id:
+        role_row = sb.table('roles').select('id').eq('id', role_id).eq('company_id', claims['company_id']).execute()
+        if not role_row.data: return jsonify({'error': 'Role not found'}), 404
+    sb.table('users').update({'role_id': role_id}).eq('id', uid).execute()
+    return jsonify({'ok': True})
+
 
 if __name__ == '__main__':
     app.run(debug=True)

@@ -108,6 +108,14 @@ def verify_token(req):
     except:
         return None
 
+def has_page_access(claims, page_key):
+    if claims.get('role') == 'admin':
+        return True
+    rp = claims.get('role_permissions')
+    if rp is None:
+        return True
+    return bool(rp.get(page_key))
+
 VALID_CURRENCIES = {'AED','USD','EUR','GBP','SAR','QAR'}
 
 def normalize_key(s):
@@ -274,6 +282,7 @@ def sync_product_cost(pid):
 def delete_product(pid):
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not has_page_access(claims, 'products'): return jsonify({'error': 'You do not have access to this feature.'}), 403
 
     existing = sb.table('products').select('id').eq('id', pid).eq('company_id', claims['company_id']).execute()
     if not existing.data: return jsonify({'error': 'Not found'}), 404
@@ -286,6 +295,7 @@ def delete_product(pid):
 def bulk_import():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not has_page_access(claims, 'products'): return jsonify({'error': 'You do not have access to this feature.'}), 403
 
     items = (request.json or {}).get('products') or []
     if not isinstance(items, list) or not items:

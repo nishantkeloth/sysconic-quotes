@@ -280,6 +280,11 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .role-admin{background:var(--navy-light);color:var(--navy)}
 .role-user{background:var(--gray-100);color:var(--gray-500)}
 .team-member{display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--gray-100)}
+.tm-slot{flex-shrink:0}
+.tm-slot-sm{width:90px}
+.tm-slot-md{width:130px}
+.tm-slot-role{width:100px}
+.tm-slot-lg{width:180px}
 .team-avatar{width:42px;height:42px;border-radius:50%;background:var(--navy-light);color:var(--navy);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;flex-shrink:0}
 
 .prod-thumb{width:36px;height:36px;border-radius:6px;border:1.5px solid var(--gray-200);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;background:var(--white);font-size:15px;margin-top:2px}
@@ -475,6 +480,7 @@ const A={screen:'login',token:null,user:null,company:null,
 function toggleSidebar(){A.sbOpen=!A.sbOpen;draw();}
 function parseJwt(t){try{return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));}catch(e){return {};}}
 function hasFeature(f){return !!(A.token&&(parseJwt(A.token).features||{})[f]);}
+function hasPageAccess(pageKey){if(A.user?.role==='admin')return true;if(!A.token)return true;const rp=parseJwt(A.token).role_permissions;if(rp===null||rp===undefined)return true;return !!rp[pageKey];}
 // Zoho's internal project_id isn't the human-readable number staff use --
 // that's the cf_project_no custom field, stored separately as
 // zoho_project_no. Display should always prefer it, falling back to the
@@ -2140,12 +2146,18 @@ function draw(){
   if(A.screen==='feedbackForm'){document.getElementById('app').innerHTML=feedbackFormHTML();return;}if(A.screen==='acceptInvite'){document.getElementById('app').innerHTML=acceptInviteHTML();return;}
   if(A.screen==='forgotPassword'){document.getElementById('app').innerHTML=forgotPasswordHTML();return;}
   if(A.screen==='resetPassword'){document.getElementById('app').innerHTML=resetPasswordHTML();return;}
+  const PAGE_KEY_MAP={dashboard:'quotes',products:'products',customers:'customers',vendorMaster:'vendors',projects:'projects',projectPerformance:'projectPerformance',projectPerformanceDetail:'projectPerformance',reviewQueue:'reviewQueue',testimonials:'testimonials'};
+  if(PAGE_KEY_MAP[A.page]&&!hasPageAccess(PAGE_KEY_MAP[A.page])){
+    const fallbackOrder=['dashboard','products','customers','vendorMaster','projects','projectPerformance','reviewQueue','testimonials'];
+    A.page=fallbackOrder.find(p=>hasPageAccess(PAGE_KEY_MAP[p]))||'dashboard';
+  }
   document.getElementById('app').innerHTML=appHTML();
   setTimeout(initTA,30);
   if(A.page==='team'){setTimeout(loadTeam,50);}
   if(A.page==='integrations'){setTimeout(loadIntegrations,50);setTimeout(loadSyncConfig,50);}
   if(A.page==='platform'){setTimeout(loadPlatformCompanies,50);}
   if(A.page==='companyProfile'){setTimeout(loadCompanyProfile,50);}
+  if(A.page==='rolesPermissions'){setTimeout(loadRolesPermissions,50);}
   if(A.page==='print'){ensurePrintCompany();}
   if(A.page==='products')setTimeout(loadProducts,50);
   if(A.page==='customers')setTimeout(loadCustomersPage,50);
@@ -2521,7 +2533,7 @@ function helpDrawerHTML(){
 // ── App shell ─────────────────────────────────────────────────────────────────
 function appHTML(){
   const init=(A.user?.name||'U').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
-  const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',log:'Activity Log',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master',integrations:'Integrations',platform:'All Companies',companyProfile:'Company Profile',reviewQueue:'Review Queue',projectPerformance:'Project Performance',projectPerformanceDetail:'Project Detail'};
+  const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',log:'Activity Log',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master',integrations:'Integrations',platform:'All Companies',companyProfile:'Company Profile',rolesPermissions:'Roles & Permissions',reviewQueue:'Review Queue',projectPerformance:'Project Performance',projectPerformanceDetail:'Project Detail'};
   const inEditor=['editor','terms','summary','vendor','print','log'].includes(A.page);
 
   const nav=(page,cb)=>`A.page='${page}';${cb||''}closeSidebar();draw()`;
@@ -2533,16 +2545,17 @@ function appHTML(){
     <nav class="sb-nav">
       ${A.user?.is_platform_admin?'':`
       <div class="sb-sec">Workspace</div>
-      <div class="sb-item ${A.page==='dashboard'?'active':''}" onclick="${nav('dashboard')}"><span class="sb-icon">🏠</span>Quotes</div>
-      <div class="sb-item ${A.page==='products'?'active':''}" onclick="${nav('products')}"><span class="sb-icon">📦</span>Products</div>
-      <div class="sb-item ${A.page==='customers'?'active':''}" onclick="${nav('customers')}"><span class="sb-icon">👤</span>Customers</div>
-      <div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="${nav('vendorMaster')}"><span class="sb-icon">🏭</span>Vendors</div>
-      ${hasFeature('projects')?`<div class="sb-item ${A.page==='projects'?'active':''}" onclick="${nav('projects')}"><span class="sb-icon">📁</span>Projects</div>`:''}
-      ${hasFeature('project_performance')?`<div class="sb-item ${(A.page==='projectPerformance'||A.page==='projectPerformanceDetail')?'active':''}" onclick="${nav('projectPerformance')}"><span class="sb-icon">📊</span>Project Performance</div>`:''}
-      <div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>       ${hasFeature('testimonials')?`<div class="sb-item ${A.page==='testimonials'?'active':''}" onclick="${nav('testimonials')}"><span class="sb-icon">⭐</span>Testimonials</div>`:''}       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}`}       ${(A.user?.role==='admin'&&!A.user?.is_platform_admin)?`<div class="sb-sec">Settings</div>
+      ${hasPageAccess('quotes')?`<div class="sb-item ${A.page==='dashboard'?'active':''}" onclick="${nav('dashboard')}"><span class="sb-icon">🏠</span>Quotes</div>`:''}
+      ${hasPageAccess('products')?`<div class="sb-item ${A.page==='products'?'active':''}" onclick="${nav('products')}"><span class="sb-icon">📦</span>Products</div>`:''}
+      ${hasPageAccess('customers')?`<div class="sb-item ${A.page==='customers'?'active':''}" onclick="${nav('customers')}"><span class="sb-icon">👤</span>Customers</div>`:''}
+      ${hasPageAccess('vendors')?`<div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="${nav('vendorMaster')}"><span class="sb-icon">🏭</span>Vendors</div>`:''}
+      ${hasFeature('projects')&&hasPageAccess('projects')?`<div class="sb-item ${A.page==='projects'?'active':''}" onclick="${nav('projects')}"><span class="sb-icon">📁</span>Projects</div>`:''}
+      ${hasFeature('project_performance')&&hasPageAccess('projectPerformance')?`<div class="sb-item ${(A.page==='projectPerformance'||A.page==='projectPerformanceDetail')?'active':''}" onclick="${nav('projectPerformance')}"><span class="sb-icon">📊</span>Project Performance</div>`:''}
+      ${hasPageAccess('reviewQueue')?`<div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>`:''}       ${hasFeature('testimonials')&&hasPageAccess('testimonials')?`<div class="sb-item ${A.page==='testimonials'?'active':''}" onclick="${nav('testimonials')}"><span class="sb-icon">⭐</span>Testimonials</div>`:''}       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}`}       ${(A.user?.role==='admin'&&!A.user?.is_platform_admin)?`<div class="sb-sec">Settings</div>
       <div class="sb-item ${A.page==='team'?'active':''}" onclick="${nav('team')}"><span class="sb-icon">👥</span>Team</div>
       <div class="sb-item ${A.page==='integrations'?'active':''}" onclick="${nav('integrations')}"><span class="sb-icon">🔌</span>Integrations</div>
-      <div class="sb-item ${A.page==='companyProfile'?'active':''}" onclick="${nav('companyProfile')}"><span class="sb-icon">🏢</span>Company Profile</div>`:''}
+      <div class="sb-item ${A.page==='companyProfile'?'active':''}" onclick="${nav('companyProfile')}"><span class="sb-icon">🏢</span>Company Profile</div>
+      <div class="sb-item ${A.page==='rolesPermissions'?'active':''}" onclick="${nav('rolesPermissions')}"><span class="sb-icon">🔐</span>Roles & Permissions</div>`:''}
       ${A.user?.is_platform_admin?`<div class="sb-sec">Platform</div><div class="sb-item ${A.page==='platform'?'active':''}" onclick="${nav('platform')}"><span class="sb-icon">🌐</span>All Companies</div>`:''}
     </nav>
     <div class="sb-foot">
@@ -2578,6 +2591,7 @@ function appHTML(){
   else if(A.page==='integrations')pageContent=integrationsHTML();
   else if(A.page==='platform')pageContent=platformHTML();
   else if(A.page==='companyProfile')pageContent=companyProfileHTML();
+  else if(A.page==='rolesPermissions')pageContent=rolesPermissionsHTML();
   else if(A.page==='reviewQueue')pageContent=reviewQueueHTML();
   else if(A.page==='testimonials')pageContent=testimonialsHTML();
 
@@ -4220,7 +4234,72 @@ function importVendorsMaster(event){
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────
-function teamHTML(){return`<div class="card" style="max-width:700px" id="teamCard"><div class="card-title">Team members</div><div id="teamList"><div style="color:var(--gray-500)">Loading...</div></div></div>`;}
+const RBAC_PAGE_LABELS = {quotes:'Quotes',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile'};
+let RBAC_PAGE_KEYS_FE = [];
+let RBAC_ROLES_CACHE = [];
+
+function rolesPermissionsHTML(){return`<div class="card" style="max-width:820px">
+  <div class="card-title">Roles &amp; Permissions</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Create custom roles and choose which pages each one can see. A team member with no role assigned keeps full access, same as today — restriction only applies once you assign them a role on the Team page.</div>
+  <div style="display:flex;gap:8px;margin-bottom:16px">
+    <input class="input" id="newRoleName" placeholder="New role name, e.g. Sales" style="flex:1">
+    <button class="btn btn-navy" onclick="addRole()">+ Add role</button>
+  </div>
+  <div id="rolesList"><div style="color:var(--gray-500)">Loading…</div></div>
+</div>`;}
+
+async function loadRolesPermissions(){
+  const el=document.getElementById('rolesList');if(!el)return;
+  const r=await api('GET','/api/auth/roles');
+  if(r.error){el.innerHTML='<div class="auth-err">'+esc(r.error)+'</div>';return;}
+  RBAC_PAGE_KEYS_FE=r.page_keys||[];
+  RBAC_ROLES_CACHE=r.roles||[];
+  if(!RBAC_ROLES_CACHE.length){el.innerHTML='<div style="color:var(--gray-500)">No custom roles yet. Add one above.</div>';return;}
+  el.innerHTML=RBAC_ROLES_CACHE.map(role=>{
+    const perms=role.permissions||{};
+    const checks=RBAC_PAGE_KEYS_FE.map(k=>`<label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer"><input type="checkbox" ${perms[k]?'checked':''} onchange="toggleRolePermission('${role.id}','${k}',this.checked)">${esc(RBAC_PAGE_LABELS[k]||k)}</label>`).join('');
+    return `<div style="border:1px solid var(--gray-200);border-radius:8px;padding:14px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-weight:700;font-size:15px">${esc(role.name)}</div>
+        <button class="btn btn-sm" style="color:var(--red)" onclick="deleteRole('${role.id}','${esc(role.name).replace(/'/g,"&#39;")}')">Delete</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">${checks}</div>
+    </div>`;
+  }).join('');
+}
+
+async function addRole(){
+  const nameEl=document.getElementById('newRoleName');
+  const name=(nameEl?.value||'').trim();
+  if(!name){alert('Enter a role name first.');return;}
+  const r=await api('POST','/api/auth/roles',{name,permissions:{}});
+  if(r.error){alert('❌ '+r.error);return;}
+  if(nameEl)nameEl.value='';
+  loadRolesPermissions();
+}
+
+async function toggleRolePermission(roleId,pageKey,checked){
+  // Send the FULL permissions set (not just the toggled key) -- the backend
+  // replaces the whole permissions object on update rather than merging, so
+  // sending only one key would silently wipe every other permission this
+  // role had.
+  const role=RBAC_ROLES_CACHE.find(rr=>rr.id===roleId);
+  if(!role)return;
+  const perms={...(role.permissions||{}),[pageKey]:checked};
+  const r=await api('PUT',`/api/auth/roles/${roleId}`,{permissions:perms});
+  if(r.error){alert('❌ '+r.error);loadRolesPermissions();return;}
+  role.permissions=perms;
+}
+
+async function deleteRole(roleId,name){
+  if(!confirm(`Delete role "${name}"? Anyone currently assigned this role will lose access to its pages (falling back to no restriction).`))return;
+  const r=await api('DELETE',`/api/auth/roles/${roleId}`);
+  if(r.error){alert('❌ '+r.error);return;}
+  loadRolesPermissions();
+}
+
+
+function teamHTML(){return`<div class="card" style="max-width:1050px" id="teamCard"><div class="card-title">Team members</div><div id="teamList"><div style="color:var(--gray-500)">Loading...</div></div></div>`;}
 
 function integrationsHTML(){return`<div class="card" style="max-width:700px">
   <div class="card-title">Integrations</div>
@@ -4407,6 +4486,17 @@ async function saveNewCompany(){
   loadPlatformCompanies();
 }
 
+function customRoleSelectHTML(currentRoleId,roles,onchange){
+  const opts=roles.map(rl=>`<option value="${rl.id}" ${currentRoleId===rl.id?'selected':''}>${esc(rl.name)}</option>`).join('');
+  return `<select class="input" style="width:auto;padding:4px 8px;font-size:13px;margin-left:10px" onchange="${onchange}" title="Custom role controlling which pages this person can see">
+    <option value="">No restriction (default)</option>
+    ${opts}
+  </select>`;
+}
+async function assignCustomRole(userId,roleId){
+  const r=await api('PUT',`/api/auth/users/${userId}/role`,{role_id:roleId||null});
+  if(r.error){alert('Error: '+r.error);loadTeam();return;}
+}
 function roleSelectHTML(currentRole,onchange){
   return `<select class="input" style="width:auto;padding:4px 8px;font-size:13px;margin-left:10px" onchange="${onchange}">
     <option value="user"${currentRole==='user'?' selected':''}>User</option>
@@ -4416,29 +4506,26 @@ function roleSelectHTML(currentRole,onchange){
 async function loadTeam(){
   const el=document.getElementById('teamList'); if(!el)return;
   const r=await api('GET','/api/auth/team');
+  const rolesRes=await api('GET','/api/auth/roles');
+  const customRoles=rolesRes.roles||[];
   const members=r.members||[], pending=r.pending||[];
   const isAdmin=A.user?.role==='admin';
   let html=members.map(m=>`<div class="team-member">
     <div class="team-avatar">${(m.name||m.email)[0].toUpperCase()}</div>
-    <div style="flex:1"><div style="font-size:15px;font-weight:600">${esc(m.name||'—')}</div><div style="font-size:13px;color:var(--gray-500)">${esc(m.email)}</div></div>
-    ${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;margin-right:10px" title="Eligible to be picked as a quote reviewer">
-      <input type="checkbox" ${m.can_review?'checked':''} onchange="toggleCanReview('${m.id}',this.checked)"> Reviewer
-    </label>`:(m.can_review?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600);margin-right:10px">Reviewer</span>`:'')}
-    ${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;margin-right:10px" title="Sees every quote in the company on the dashboard, not just their own">
-      <input type="checkbox" ${m.can_view_all_quotes?'checked':''} onchange="toggleCanViewAllQuotes('${m.id}',this.checked)"> View all quotes
-    </label>`:(m.can_view_all_quotes?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600);margin-right:10px">Views all quotes</span>`:'')}
-    ${isAdmin?roleSelectHTML(m.role,`changeMemberRole('${m.id}',this.value,'${esc(m.email).replace(/'/g,"&#39;")}')`):`<span class="role-badge role-${m.role}">${m.role}</span>`}
-    ${isAdmin?`<button class="btn btn-sm" style="margin-left:10px" onclick="adminResetPassword('${m.id}','${esc(m.email).replace(/'/g,"&#39;")}')">Reset password</button>`:''}
+    <div style="flex:1;min-width:150px;overflow:hidden"><div style="font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(m.name||'—')}">${esc(m.name||'—')}</div><div style="font-size:13px;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(m.email)}">${esc(m.email)}</div></div>
+    <div class="tm-slot tm-slot-sm">${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;white-space:nowrap" title="Eligible to be picked as a quote reviewer"><input type="checkbox" ${m.can_review?'checked':''} onchange="toggleCanReview('${m.id}',this.checked)">Reviewer</label>`:(m.can_review?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600)">Reviewer</span>`:'')}</div>
+    <div class="tm-slot tm-slot-md">${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;white-space:nowrap" title="Sees every quote in the company on the dashboard, not just their own"><input type="checkbox" ${m.can_view_all_quotes?'checked':''} onchange="toggleCanViewAllQuotes('${m.id}',this.checked)">View all quotes</label>`:(m.can_view_all_quotes?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600)">Views all quotes</span>`:'')}</div>
+    <div class="tm-slot tm-slot-role">${isAdmin?roleSelectHTML(m.role,`changeMemberRole('${m.id}',this.value,'${esc(m.email).replace(/'/g,"&#39;")}')`):`<span class="role-badge role-${m.role}">${m.role}</span>`}</div>
+    <div class="tm-slot tm-slot-lg">${isAdmin?customRoleSelectHTML(m.role_id,customRoles,`assignCustomRole('${m.id}',this.value)`):''}</div>
+    <div class="tm-slot tm-slot-lg">${isAdmin?`<button class="btn btn-sm" onclick="adminResetPassword('${m.id}','${esc(m.email).replace(/'/g,"&#39;")}')">Reset password</button>`:''}</div>
   </div>`).join('');
   if(pending.length){html+=`<div style="font-size:12px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px">Pending invites</div>`;
-    html+=pending.map(p=>`<div class="team-member"><div class="team-avatar" style="background:var(--amber-light);color:var(--amber)">✉</div><div style="flex:1"><div style="font-size:15px;font-weight:600">${esc(p.email)}</div><div style="font-size:13px;color:var(--gray-500)">Pending</div></div>
-    ${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;margin-right:10px" title="Eligible to be picked as a quote reviewer once they join">
-      <input type="checkbox" ${p.can_review?'checked':''} onchange="toggleInviteCanReview('${p.token}',this.checked)"> Reviewer
-    </label>`:(p.can_review?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600);margin-right:10px">Reviewer</span>`:'')}
-    ${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;margin-right:10px" title="Sees every company quote once they join, not just their own">
-      <input type="checkbox" ${p.can_view_all_quotes?'checked':''} onchange="toggleInviteCanViewAllQuotes('${p.token}',this.checked)"> View all quotes
-    </label>`:(p.can_view_all_quotes?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600);margin-right:10px">Views all quotes</span>`:'')}
-    ${isAdmin?roleSelectHTML(p.role,`changeInviteRole('${p.token}',this.value,'${esc(p.email).replace(/'/g,"&#39;")}')`):`<span class="role-badge role-${p.role}">${p.role}</span>`}
+    html+=pending.map(p=>`<div class="team-member"><div class="team-avatar" style="background:var(--amber-light);color:var(--amber)">✉</div><div style="flex:1;min-width:150px;overflow:hidden"><div style="font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(p.email)}">${esc(p.email)}</div><div style="font-size:13px;color:var(--gray-500)">Pending</div></div>
+    <div class="tm-slot tm-slot-sm">${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;white-space:nowrap" title="Eligible to be picked as a quote reviewer once they join"><input type="checkbox" ${p.can_review?'checked':''} onchange="toggleInviteCanReview('${p.token}',this.checked)">Reviewer</label>`:(p.can_review?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600)">Reviewer</span>`:'')}</div>
+    <div class="tm-slot tm-slot-md">${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;white-space:nowrap" title="Sees every company quote once they join, not just their own"><input type="checkbox" ${p.can_view_all_quotes?'checked':''} onchange="toggleInviteCanViewAllQuotes('${p.token}',this.checked)">View all quotes</label>`:(p.can_view_all_quotes?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600)">Views all quotes</span>`:'')}</div>
+    <div class="tm-slot tm-slot-role">${isAdmin?roleSelectHTML(p.role,`changeInviteRole('${p.token}',this.value,'${esc(p.email).replace(/'/g,"&#39;")}')`):`<span class="role-badge role-${p.role}">${p.role}</span>`}</div>
+    <div class="tm-slot tm-slot-lg"></div>
+    <div class="tm-slot tm-slot-lg"></div>
     </div>`).join('');}
   el.innerHTML=html||'<div style="color:var(--gray-500)">No team members yet</div>';
 }

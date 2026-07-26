@@ -25,6 +25,22 @@ def verify_token(req):
     except:
         return None
 
+def has_page_access(claims, page_key):
+    if claims.get('role') == 'admin':
+        return True
+    rp = claims.get('role_permissions')
+    if rp is None:
+        return True
+    return bool(rp.get(page_key))
+
+@app.before_request
+def _rbac_page_gate():
+    claims = verify_token(request)
+    if not claims:
+        return None
+    if not has_page_access(claims, 'quotes'):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
+    return None
 SYSTEM_PROMPT = """You are a senior estimator at an AV / LED wall installation company in the UAE, drafting a bill of materials (BOM) for a new project based on a short description from the salesperson.
 
 You will be given:

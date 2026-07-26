@@ -28,6 +28,24 @@ def verify_token(req):
     except:
         return None
 
+def has_page_access(claims, page_key):
+    if claims.get('role') == 'admin':
+        return True
+    rp = claims.get('role_permissions')
+    if rp is None:
+        return True
+    return bool(rp.get(page_key))
+
+@app.before_request
+def _rbac_page_gate():
+    claims = verify_token(request)
+    if not claims:
+        return None
+    if request.method == 'GET':
+        return None
+    if not has_page_access(claims, 'vendors'):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
+    return None
 def clean_vendor(d):
     out = {}
     for k in ('name','contact_person','email','phone','address','category','notes'):
