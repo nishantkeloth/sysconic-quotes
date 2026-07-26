@@ -370,6 +370,14 @@ def verify_token(req):
     except:
         return None
 
+def has_page_access(claims, page_key):
+    if claims.get('role') == 'admin':
+        return True
+    rp = claims.get('role_permissions')
+    if rp is None:
+        return True
+    return bool(rp.get(page_key))
+
 def mask(value):
     value = str(value or '')
     if len(value) <= 4: return '••••'
@@ -626,6 +634,8 @@ def run_auto_sync():
 def zoho_create_project():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not has_page_access(claims, 'projectPerformance'):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
     if not (claims.get('features') or {}).get('project_performance'):
         return jsonify({'error': 'Feature not enabled'}), 403
     pid = (request.json or {}).get('project_id')
