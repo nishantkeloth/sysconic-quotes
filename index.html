@@ -635,13 +635,13 @@ const PP_COLUMNS=[
     cell:p=>`<td style="padding:8px">AED ${fmt(p.revenue_forecast||0)}</td>`},
   {key:'originalGp',label:'Original GP%',
     tip:'Gross profit % frozen from the awarded quote at project creation: (Original Selling Price − Original Estimated Cost) ÷ Original Selling Price. Never changes after the project is created.',
-    cell:p=>`<td style="padding:8px">${fmtPct100(p.original_gp_pct||0)}</td>`},
+    cell:p=>`<td style="padding:8px" ${!(p.original_estimated_cost>0)?'title="No quote baseline — project imported from Zoho. Link a quote (zoho_project_id) and re-sync to recover it."':''}>${(p.original_estimated_cost>0)?fmtPct100(p.original_gp_pct||0):'—'}</td>`},
   {key:'forecastGp',label:'Forecast GP%',
     tip:'Current forecast gross profit %, recalculated on every sync: (Revenue Forecast − Estimate at Completion) ÷ Revenue Forecast.',
     cell:p=>`<td style="padding:8px">${fmtPct100(p.forecast_gp_pct||0)}</td>`},
   {key:'erosion',label:'Erosion',
     tip:'Margin Erosion = Original GP% − Forecast GP%. A positive number (shown in red) means margin has eroded since the quote was awarded.',
-    cell:p=>`<td style="padding:8px;${(p.margin_erosion_pct||0)>0?'color:var(--red)':''}">${fmtPct100(p.margin_erosion_pct||0)}</td>`},
+    cell:p=>`<td style="padding:8px;${(p.margin_erosion_pct||0)>0?'color:var(--red)':''}" ${!(p.original_estimated_cost>0)?'title="No quote baseline to measure erosion against."':''}>${(p.original_estimated_cost>0)?fmtPct100(p.margin_erosion_pct||0):'—'}</td>`},
   {key:'poExpense',label:'PO Expense',
     tip:'Actual billed cost that traces back to a Purchase Order in Zoho Books (bills with a linked PO).',
     cell:p=>`<td style="padding:8px">AED ${fmt(p.po_based_actual_cost||0)}</td>`},
@@ -821,9 +821,9 @@ function ppOverviewTab(d){
   const p=d.project;
   const cards=[
     ['Project Value','AED '+fmt(p.revenue_forecast||0),'navy'],
-    ['Original GP%',fmtPct100(p.original_gp_pct||0),'navy'],
+    ['Original GP%',(p.original_estimated_cost>0)?fmtPct100(p.original_gp_pct||0):'—','navy'],
     ['Forecast GP%',fmtPct100(p.forecast_gp_pct||0),'green'],
-    ['Margin Erosion',fmtPct100(p.margin_erosion_pct||0),(p.margin_erosion_pct||0)>0?'red':'green'],
+    ['Margin Erosion',(p.original_estimated_cost>0)?fmtPct100(p.margin_erosion_pct||0):'—',(p.margin_erosion_pct||0)>0?'red':'green'],
     ['Actual Cost','AED '+fmt(p.actual_cost||0),'navy'],
     ['Committed Cost','AED '+fmt(p.committed_cost||0),'amber'],
     ['Estimate at Completion','AED '+fmt(p.estimate_at_completion||0),'navy'],
@@ -861,11 +861,11 @@ function ppFinancialTab(d){
     <table style="width:100%;border-collapse:collapse;font-size:14px">
       <tr><td style="padding:6px 0">Original Selling Price</td><td style="text-align:right">AED ${fmt(p.original_selling_price||0)}</td></tr>
       <tr><td style="padding:6px 0">Original Estimated Cost</td><td style="text-align:right">AED ${fmt(p.original_estimated_cost||0)}</td></tr>
-      <tr><td style="padding:6px 0">Original GP</td><td style="text-align:right">AED ${fmt(p.original_gp||0)} (${fmtPct100(p.original_gp_pct||0)})</td></tr>
+      <tr><td style="padding:6px 0">Original GP</td><td style="text-align:right">${(p.original_estimated_cost>0)?`AED ${fmt(p.original_gp||0)} (${fmtPct100(p.original_gp_pct||0)})`:'— no quote baseline'}</td></tr>
       <tr style="border-top:1.5px solid var(--gray-200)"><td style="padding:6px 0">Current Revenue Forecast</td><td style="text-align:right">AED ${fmt(p.revenue_forecast||0)}</td></tr>
       <tr><td style="padding:6px 0">Estimate at Completion</td><td style="text-align:right">AED ${fmt(p.estimate_at_completion||0)}</td></tr>
       <tr><td style="padding:6px 0">Forecast GP</td><td style="text-align:right">AED ${fmt(p.forecast_gp||0)} (${fmtPct100(p.forecast_gp_pct||0)})</td></tr>
-      <tr style="border-top:1.5px solid var(--gray-200)"><td style="padding:6px 0;font-weight:700">Margin Erosion</td><td style="text-align:right;font-weight:700;${(p.margin_erosion_pct||0)>0?'color:var(--red)':'color:var(--green)'}">${fmtPct100(p.margin_erosion_pct||0)}</td></tr>
+      <tr style="border-top:1.5px solid var(--gray-200)"><td style="padding:6px 0;font-weight:700">Margin Erosion</td><td style="text-align:right;font-weight:700;${(p.margin_erosion_pct||0)>0?'color:var(--red)':'color:var(--green)'}">${(p.original_estimated_cost>0)?fmtPct100(p.margin_erosion_pct||0):'—'}</td></tr>
     </table>
   </div>
   <div class="card" style="margin-top:16px">

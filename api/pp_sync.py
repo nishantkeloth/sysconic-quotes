@@ -385,7 +385,10 @@ def recalculate_project(company_id, project_id):
     forecast_cost_variance = original_cost - eac
     forecast_gp = revenue_forecast - eac
     forecast_gp_pct = (forecast_gp / revenue_forecast * 100.0) if revenue_forecast else 0.0
-    margin_erosion = original_gp_pct - forecast_gp_pct
+    # No-baseline guard (see api/projects.py, the routed copy): erosion vs a
+    # fake 0% baseline is meaningless for Zoho-imported projects.
+    has_baseline = original_cost > 0
+    margin_erosion = (original_gp_pct - forecast_gp_pct) if has_baseline else 0.0
 
     # Billing & Collection (requirement §19). Collected Value derived from
     # invoice.total - invoice.balance rather than requiring the payments
