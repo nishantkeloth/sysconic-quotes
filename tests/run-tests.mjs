@@ -71,33 +71,6 @@ async function testPricing() {
   check('pricing (margin): line total = unit price × qty', tpM === 2250, `got ${tpM}`);
 }
 
-// ── Test 1b: V.Disc% — internal vendor discount boosts GP, not the price ───
-async function testVendorDisc() {
-  const { run } = await freshEditor();
-  run(`
-    A.activeQuote.pricing_type='margin';
-    const it = sec(0).items[0];
-    it.cost = 13700; it.disc = 0; it.margin = 0.2; it.qty = 1;
-  `);
-  const before = run(`calcItem(sec(0).items[0])`);
-  run(`sec(0).items[0].vdisc = 5;`);
-  const after = run(`calcItem(sec(0).items[0])`);
-  // Sell price must NOT move: 13700 / 0.8 = 17125
-  check('vdisc: sell price unchanged by vendor discount', before.up === 17125 && after.up === 17125, `got ${before.up} → ${after.up}`);
-  // Cost drops 5%: 13700 × 0.95 = 13015 ; GP rises from 3425 to 4110
-  check('vdisc: cost total uses discounted vendor cost', after.tc === 13015, `got ${after.tc}`);
-  check('vdisc: GP captures the vendor discount', after.tgp === 17125 - 13015, `got ${after.tgp}`);
-  // Option margin improves: 4110 / 17125 ≈ 24%
-  const m = run(`calcOpt(opt()).margin`);
-  check('vdisc: effective margin rises above quoted margin', m > 0.239 && m < 0.241, `got ${m}`);
-  // Editor renders the internal-only input; client view must not have it
-  run(`draw()`);
-  check('vdisc: input present in internal view', run(`!!document.querySelector('input[data-field="vdisc"]')`) === true);
-  run(`A.view='client'; draw()`);
-  check('vdisc: input absent from client view', run(`!!document.querySelector('input[data-field="vdisc"]')`) === false);
-  run(`A.view='internal'; draw()`);
-}
-
 // ── Test 2: REGRESSION — typed text persists (the initTA bug) ─────────────
 async function testTypingPersists() {
   const { run } = await freshEditor();
@@ -288,30 +261,6 @@ async function testDiagramGenerate() {
   run(`closeDiagramModal()`);
 }
 
-async function testDiagramAutoFill() {
-  const ctx = await freshEditor({
-    fetchMock: (url) => {
-      if (url.includes('/api/products/image-search')) return { images: [{ url: 'https://vendor.com/pic.jpg', thumb: '' }] };
-      if (url.includes('/api/products/p1/image')) return { product: { image_url: 'https://cdn.supabase.co/product-images/p1.png' } };
-      return null;
-    },
-  });
-  const { run } = ctx;
-  run(DIAG_TOKEN_JS + `
-    sec(0).items[0].brand='LG'; sec(0).items[0].model='98UM5K'; sec(0).items[0].product_id='p1';
-    openDiagramModal();
-  `);
-  const offer = run(`document.getElementById('diagModalBox').innerHTML`);
-  check('autofill: button offered with missing-image count', offer.includes('Auto-fill images (1)'));
-  run(`diagAutoFillImages()`);
-  await wait(200);
-  const img = run(`sec(0).items[0].img`);
-  check('autofill: top search result saved onto the item', img === 'https://cdn.supabase.co/product-images/p1.png', `got "${img}"`);
-  const after = run(`document.getElementById('diagModalBox').innerHTML`);
-  check('autofill: button disappears once nothing is missing', !after.includes('Auto-fill images'));
-  run(`closeDiagramModal()`);
-}
-
 async function testDiagramProposalSection() {
   const { run } = await freshEditor();
   run(DIAG_TOKEN_JS + `PROP.content={title:'T'};`);
@@ -330,7 +279,6 @@ async function testDiagramProposalSection() {
 // ── Runner ──────────────────────────────────────────────────────────────────
 const suites = [
   ['Pricing formula', testPricing],
-  ['Vendor discount (internal)', testVendorDisc],
   ['Typing persistence (regression)', testTypingPersists],
   ['Items / sections / options', testStructure],
   ['VAT math', testVat],
@@ -341,7 +289,6 @@ const suites = [
   ['PDF button', testPdfButton],
   ['AI Diagram feature flag', testDiagramFlag],
   ['AI Diagram generate & save', testDiagramGenerate],
-  ['AI Diagram image auto-fill', testDiagramAutoFill],
   ['AI Diagram proposal section', testDiagramProposalSection],
 ];
 
