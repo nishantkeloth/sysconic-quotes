@@ -6,7 +6,7 @@
 <title>QTcal AI — Quote Manager v1.0.1</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231e3a5f'/%3E%3Ccircle cx='27' cy='27' r='15' fill='none' stroke='%23fff' stroke-width='5'/%3E%3Cline x1='37' y1='37' x2='46' y2='46' stroke='%23fff' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M46 14 L48 20 L54 22 L48 24 L46 30 L44 24 L38 22 L44 20 Z' fill='%23f59e0b'/%3E%3C/svg%3E">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.4.1/mermaid.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.12.0/mermaid.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/svg-pan-zoom/3.6.1/svg-pan-zoom.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -3888,6 +3888,8 @@ function renderDiagramModal(){
   const box=document.getElementById('diagModalBox');if(!box)return;
   const o=opt()||{};
   const saved=o.diagram&&o.diagram.code;
+  let missingImgs=0;
+  (o.sections||[]).forEach(s=>(s.items||[]).forEach(it=>{if(!it.img&&((it.brand||'').trim()||(it.model||'').trim()))missingImgs++;}));
   box.innerHTML=`
     <div class="modal-title">🗺 AI System Diagram <span style="font-size:12px;font-weight:600;color:var(--amber)">AI</span></div>
     <div class="modal-sub">Generates a system schematic (signal flow) from this option's bill of materials. Review it — AI can misread a BOM line — then save it to the quote or download it.${saved?` <span style="color:var(--green)">A diagram is saved on ${esc(o.label||'this option')}${o.diagram.updated_at?' ('+esc(o.diagram.updated_at.slice(0,10))+')':''}.</span>`:''}</div>
@@ -3905,6 +3907,7 @@ function renderDiagramModal(){
       <button class="btn" onclick="downloadDiagram('png')">⬇ PNG</button>`:''}
       ${DIAG.code&&!isQuoteLocked()?`<button class="btn" onclick="saveDiagramToQuote()">💾 Save to quote</button>`:''}
       <label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600;cursor:pointer;color:var(--gray-500)" title="Render items that have a catalog image as product-photo nodes (XTEN-AV style). Applies on the next Generate."><input type="checkbox" ${DIAG.photos?'checked':''} onchange="DIAG.photos=this.checked">🖼 Product photos</label>
+      ${missingImgs&&!isQuoteLocked()?`<button class="btn" id="diagImgFillBtn" onclick="diagAutoFillImages()" title="Web-search a product photo for each item that has a brand/model but no image (first result is used; saved to your catalog — fix any wrong pick via the 📷 icon on the item row)">🖼 Auto-fill images (${missingImgs})</button>`:''}
       <button class="btn btn-navy" id="diagGenBtn" onclick="generateDiagram()">${DIAG.code?'🔄 Regenerate':'✨ Generate'} with AI</button>
     </div>`;
 }
@@ -3921,6 +3924,50 @@ function diagBomPayload(){
       return row;
     })})),
   };
+}
+
+// Auto-fill: for every item with a brand/model but no image, web-search a
+// product photo (Brave, via the existing image-search endpoint), take the top
+// result and save it to the catalog via the existing per-product image
+// endpoint — which copies it into Supabase storage, so the photo is also
+// CORS-safe for PNG export. Sequential on purpose: respects the Brave API
+// rate limit. First result isn't always right; the row 📷 picker fixes those.
+async function diagAutoFillImages(){
+  if(DIAG.busy)return;
+  const o=opt();if(!o)return;
+  if(isQuoteLocked()){alert('This quote is locked — unlock it to update item images.');return;}
+  const targets=[];
+  (o.sections||[]).forEach((s,si)=>(s.items||[]).forEach((it,ii)=>{
+    if(!it.img&&((it.brand||'').trim()||(it.model||'').trim()))targets.push([si,ii]);
+  }));
+  if(!targets.length)return;
+  const CAP=15;
+  const btn=document.getElementById('diagImgFillBtn');
+  DIAG.busy=true;
+  let done=0,ok=0,fail=0;
+  for(const [si,ii] of targets.slice(0,CAP)){
+    done++;
+    if(btn){btn.disabled=true;btn.textContent=`Fetching ${done}/${Math.min(targets.length,CAP)}…`;}
+    try{
+      const it=sec(si)?.items?.[ii];if(!it)continue;
+      if(!it.product_id)await captureProduct(si,ii);
+      if(!it.product_id){fail++;continue;}
+      const q=((it.brand||'')+' '+(it.model||'')).trim();
+      const r=await api('GET','/api/products/image-search?q='+encodeURIComponent(q));
+      const first=(r.images||[])[0];
+      if(r.error||!first||!first.url){fail++;continue;}
+      const sv=await api('POST','/api/products/'+it.product_id+'/image',{url:first.url});
+      if(sv.error||!sv.product||!sv.product.image_url){fail++;continue;}
+      it.img=sv.product.image_url;ok++;
+    }catch(e){fail++;}
+  }
+  DIAG.busy=false;
+  if(ok&&A.activeQuote)schedSave();
+  const skipped=targets.length>CAP?` ${targets.length-CAP} item(s) skipped (rate-limit cap) — run Auto-fill again for the rest.`:'';
+  alert(`Product images: ${ok} found and saved${fail?`, ${fail} not found or failed`:''}.${skipped}${ok?' The first search result was used — fix any wrong picture via the 📷 icon on the item row, then Regenerate the diagram.':''}`);
+  renderDiagramModal();
+  if(DIAG.code)renderDiagPreview();
+  if(A.page==='editor')draw();
 }
 
 async function generateDiagram(){
