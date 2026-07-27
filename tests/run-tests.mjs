@@ -22,8 +22,11 @@ function boot({ fetchMock } = {}) {
     beforeParse(w) {
       w.fetch = async (url, opts = {}) => {
         captured.requests.push({ url: String(url), method: opts.method || 'GET', body: opts.body });
-        if (fetchMock) { const r = fetchMock(String(url), opts); if (r) return { ok: true, json: async () => r }; }
-        return { ok: true, json: async () => ({ quote: { id: 'q1' }, quotes: [], customers: [] }) };
+        // api() reads r.text() (not r.json()) since the AUTH-002 rework, so the
+        // mock must provide status/text too or every mocked call errors out.
+        const mk = (obj) => ({ ok: true, status: 200, json: async () => obj, text: async () => JSON.stringify(obj) });
+        if (fetchMock) { const r = fetchMock(String(url), opts); if (r) return mk(r); }
+        return mk({ quote: { id: 'q1' }, quotes: [], customers: [] });
       };
       w.alert = () => {}; w.confirm = () => true; w.prompt = () => 'x';
     },
@@ -55,11 +58,17 @@ async function testPricing() {
     const it = sec(0).items[0];
     it.cost = 1000; it.disc = 10; it.margin = 0.2; it.qty = 2;
   `);
+  // Default pricing_type is 'markup': cost after disc = 900; up = round(900 × 1.2) = 1080
   const up = run(`calcItem(sec(0).items[0]).up`);
   const tp = run(`calcItem(sec(0).items[0]).tp`);
-  // cost after disc = 900; unit price = round(900 / 0.8) = 1125; total = 2250
-  check('pricing: unit price = ROUND(cost·(1−disc)/(1−margin))', up === 1125, `got ${up}`);
-  check('pricing: line total = unit price × qty', tp === 2250, `got ${tp}`);
+  check('pricing (markup): unit price = ROUND(cost·(1−disc)·(1+markup))', up === 1080, `got ${up}`);
+  check('pricing (markup): line total = unit price × qty', tp === 2160, `got ${tp}`);
+  // Margin mode: up = round(900 / (1 − 0.2)) = 1125
+  run(`A.activeQuote.pricing_type='margin';`);
+  const upM = run(`calcItem(sec(0).items[0]).up`);
+  const tpM = run(`calcItem(sec(0).items[0]).tp`);
+  check('pricing (margin): unit price = ROUND(cost·(1−disc)/(1−margin))', upM === 1125, `got ${upM}`);
+  check('pricing (margin): line total = unit price × qty', tpM === 2250, `got ${tpM}`);
 }
 
 // ── Test 2: REGRESSION — typed text persists (the initTA bug) ─────────────
@@ -102,6 +111,8 @@ async function testStructure() {
 // ── Test 4: VAT math ───────────────────────────────────────────────────────
 async function testVat() {
   const { run } = await freshEditor();
+  // Margin mode so the subtotal is a round 1000 (800 / 0.8); VAT 5% on top.
+  run(`A.activeQuote.pricing_type='margin';`);
   run(`const it=sec(0).items[0]; it.cost=800; it.disc=0; it.margin=0.2; it.qty=1;`);
   run(`opt().vatEnabled=true; opt().vatRate=5;`);
   const grand = run(`calcOpt(opt()).grand`);
@@ -132,6 +143,7 @@ async function testSavePayload() {
 async function testMultiOptionPrint() {
   const { run } = await freshEditor();
   run(`
+    A.company={name:'Sysconic Technologies'};
     sec(0).items[0].brand='B1'; sec(0).items[0].cost=100; sec(0).items[0].qty=1;
     addOpt();
     opt().sections[0].items[0].brand='B2'; opt().sections[0].items[0].cost=200;
@@ -139,10 +151,12 @@ async function testMultiOptionPrint() {
   `);
   await wait(60);
   const htmlOut = run(`document.getElementById('app').innerHTML`);
-  const banners = (htmlOut.match(/page-break-after:avoid">Option \d/g) || []).length;
-  const grandTotals = (htmlOut.match(/Grand Total/g) || []).length;
+  // Option banner pill markup ends "...page-break-after:avoid;margin-bottom:10px">Option N";
+  // totals/terms labels are sentence case since the print restyle.
+  const banners = (htmlOut.match(/margin-bottom:10px">Option \d/g) || []).length;
+  const grandTotals = (htmlOut.match(/>Grand total</g) || []).length;
   const headers = (htmlOut.match(/SYSCONIC TECHNOLOGIES/g) || []).length;
-  const terms = (htmlOut.match(/Terms &amp; Conditions/g) || []).length;
+  const terms = (htmlOut.match(/>Terms &amp; conditions</g) || []).length;
   check('print: defaults to All options (2 option banners)', banners === 2, `got ${banners}`);
   check('print: per-option totals (2× Grand Total)', grandTotals === 2, `got ${grandTotals}`);
   check('print: company header appears once', headers === 1, `got ${headers}`);
@@ -153,27 +167,27 @@ async function testMultiOptionPrint() {
 // ── Test 7: single-option print unchanged ──────────────────────────────────
 async function testSingleOptionPrint() {
   const { run } = await freshEditor();
-  run(`sec(0).items[0].brand='Solo'; sec(0).items[0].cost=100; A.page='print'; draw();`);
+  run(`A.company={name:'Sysconic Technologies'}; sec(0).items[0].brand='Solo'; sec(0).items[0].cost=100; A.page='print'; draw();`);
   await wait(60);
   const htmlOut = run(`document.getElementById('app').innerHTML`);
   const headers = (htmlOut.match(/SYSCONIC TECHNOLOGIES/g) || []).length;
-  const banners = (htmlOut.match(/page-break-after:avoid">Option \d/g) || []).length;
+  const banners = (htmlOut.match(/margin-bottom:10px">Option \d/g) || []).length;
   check('print single: header present, no option banner', headers === 1 && banners === 0, `h=${headers} b=${banners}`);
 }
 
-// ── Test 8: Zoho customer autocomplete ─────────────────────────────────────
+// ── Test 8: customer autocomplete (customer master, fed by integration sync) ──
 async function testZoho() {
   const ctx = await freshEditor({
-    fetchMock: (url) => url.includes('/api/zoho/customers')
-      ? { customers: [{ id: '1', name: 'Golden Synapse Technologies LLC', company: '', email: 'a@b.com', phone: '' }] }
+    fetchMock: (url) => url.includes('/api/customers?search=')
+      ? { customers: [{ id: '1', name: 'Golden Synapse Technologies LLC', company_name: '', email: 'a@b.com', phone: '' }] }
       : null,
   });
   const { run } = ctx;
   run(`zohoSearch('gol')`);
   await wait(500); // debounce 320ms + fetch
   const drop = run(`document.getElementById('custDrop') ? document.getElementById('custDrop').innerHTML : ''`);
-  check('zoho: dropdown renders matched customer', drop.includes('Golden Synapse'));
-  check('zoho: dropdown labeled as Zoho source', drop.includes('From Zoho Books'));
+  check('autocomplete: dropdown renders matched customer', drop.includes('Golden Synapse'));
+  check('autocomplete: dropdown labeled with source', drop.includes('Your customer master'));
 }
 
 // ── Test 9: PDF download button ────────────────────────────────────────────
@@ -187,6 +201,75 @@ async function testPdfButton() {
   check('pdf: downloadPDF function defined', hasFn === true);
 }
 
+// ── Test 10: AI System Diagram ─────────────────────────────────────────────
+const DIAG_TOKEN_JS = `A.token='x.'+btoa(JSON.stringify({features:{diagrams:true}}))+'.y';`;
+
+async function testDiagramFlag() {
+  const { run } = await freshEditor();
+  run(`draw()`);
+  // Check rendered buttons only — body.innerHTML would also match the string
+  // inside the app's own <script> source.
+  const btnCheck = `[...document.querySelectorAll('button')].some(b=>b.textContent.includes('AI Diagram'))`;
+  const without = run(btnCheck);
+  run(DIAG_TOKEN_JS + `draw()`);
+  const withFlag = run(btnCheck);
+  check('diagram: toolbar button hidden without feature flag', without === false);
+  check('diagram: toolbar button shown with feature flag', withFlag === true);
+}
+
+async function testDiagramGenerate() {
+  const ctx = await freshEditor({
+    fetchMock: (url) => url.includes('/api/diagram/generate')
+      ? { mermaid: 'flowchart LR\n    A["PC"] -- HDMI --> B["Display"]' }
+      : null,
+  });
+  const { run, captured } = ctx;
+  run(DIAG_TOKEN_JS + `
+    sec(0).items[0].brand='LG'; sec(0).items[0].model='98UM5K'; sec(0).items[0].desc='98in display'; sec(0).items[0].qty=1;
+    openDiagramModal();
+    generateDiagram();
+  `);
+  await wait(120);
+  const code = run(`DIAG.code`);
+  check('diagram: generate stores mermaid code', typeof code === 'string' && code.startsWith('flowchart'), `got "${String(code).slice(0, 40)}"`);
+  const req = captured.requests.find(r => r.url.includes('/api/diagram/generate'));
+  const body = req ? JSON.parse(req.body) : null;
+  check('diagram: request carries the BOM items', !!body && body.quote.sections[0].items[0].model === '98UM5K');
+  run(`saveDiagramToQuote()`);
+  const saved = run(`opts()[0].diagram && opts()[0].diagram.code`);
+  const stamped = run(`!!(opts()[0].diagram && opts()[0].diagram.updated_at)`);
+  check('diagram: save persists code onto the option (rides in quote_data)', typeof saved === 'string' && saved.startsWith('flowchart'));
+  check('diagram: save stamps updated_at', stamped === true);
+
+  // Quick wins: direction toggle + Mermaid Live link
+  const modalHtml = run(`document.getElementById('diagModalBox').innerHTML`);
+  check('diagram: direction toggle button present', modalHtml.includes('Vertical') || modalHtml.includes('Horizontal'));
+  check('diagram: Mermaid Live button present', modalHtml.includes('Mermaid Live'));
+  run(`diagToggleDirection()`);
+  check('diagram: direction toggle flips LR to TB', run(`DIAG.code`).startsWith('flowchart TB'));
+  run(`diagToggleDirection()`);
+  check('diagram: direction toggle flips back to LR', run(`DIAG.code`).startsWith('flowchart LR'));
+  const liveUrl = run(`diagLiveEditorUrl(DIAG.code)`);
+  const decoded = Buffer.from(String(liveUrl).split('#base64:')[1], 'base64').toString('utf-8');
+  check('diagram: Mermaid Live URL carries the code', String(liveUrl).startsWith('https://mermaid.live/edit#base64:') && JSON.parse(decoded).code.startsWith('flowchart'));
+  run(`closeDiagramModal()`);
+}
+
+async function testDiagramProposalSection() {
+  const { run } = await freshEditor();
+  run(DIAG_TOKEN_JS + `PROP.content={title:'T'};`);
+  const withFlag = run(`proposalReviewHTML().includes('System Schematic')`);
+  const hint = run(`proposalReviewHTML().includes('no diagram is saved')`);
+  run(`opts()[0].diagram={code:'flowchart LR\\n A-->B',updated_at:'2026-07-26T00:00:00Z'};`);
+  const hintGone = run(`proposalReviewHTML().includes('no diagram is saved')`);
+  run(`A.token=null;`);
+  const withoutFlag = run(`proposalReviewHTML().includes('System Schematic')`);
+  check('diagram: proposal offers System Schematic toggle with flag', withFlag === true);
+  check('diagram: proposal hints when no diagram saved yet', hint === true);
+  check('diagram: hint disappears once a diagram is saved', hintGone === false);
+  check('diagram: proposal hides schematic toggle without flag', withoutFlag === false);
+}
+
 // ── Runner ──────────────────────────────────────────────────────────────────
 const suites = [
   ['Pricing formula', testPricing],
@@ -196,8 +279,11 @@ const suites = [
   ['Save payload', testSavePayload],
   ['Multi-option print', testMultiOptionPrint],
   ['Single-option print', testSingleOptionPrint],
-  ['Zoho autocomplete', testZoho],
+  ['Customer autocomplete', testZoho],
   ['PDF button', testPdfButton],
+  ['AI Diagram feature flag', testDiagramFlag],
+  ['AI Diagram generate & save', testDiagramGenerate],
+  ['AI Diagram proposal section', testDiagramProposalSection],
 ];
 
 console.log(`\nSysconic Quote Manager — automated tests\nTarget: ${INDEX}\n`);

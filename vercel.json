@@ -24,6 +24,7 @@
     { "src": "/api/products/(.*)", "dest": "api/products.py" },
     { "src": "/api/products",      "dest": "api/products.py" },
     { "src": "/api/bom/(.*)", "dest": "api/bom.py" },
+    { "src": "/api/diagram/(.*)", "dest": "api/ai.py" },
     { "src": "/api/customers/(.*)", "dest": "api/customers.py" },
     { "src": "/api/customers",      "dest": "api/customers.py" },
     { "src": "/api/vendors/(.*)", "dest": "api/vendors.py" },
