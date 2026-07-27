@@ -3863,7 +3863,12 @@ function diagMermaidReady(){return typeof window.mermaid!=='undefined';}
 let _diagInit=false;
 function diagInitMermaid(){
   if(_diagInit||!diagMermaidReady())return;
-  window.mermaid.initialize({startOnLoad:false,securityLevel:'loose',theme:'base',fontFamily:'inherit'});
+  // htmlLabels:false is load-bearing: with HTML labels, mermaid puts
+  // <foreignObject> nodes inside the SVG, and Chrome then refuses
+  // canvas.toDataURL() ("tainted canvas") — which silently killed the
+  // PNG export and the proposal schematic embed. Pure-SVG labels render
+  // near-identically and keep the canvas clean.
+  window.mermaid.initialize({startOnLoad:false,securityLevel:'loose',theme:'base',fontFamily:'inherit',flowchart:{htmlLabels:false},htmlLabels:false});
   _diagInit=true;
 }
 
