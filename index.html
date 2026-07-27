@@ -7,6 +7,7 @@
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231e3a5f'/%3E%3Ccircle cx='27' cy='27' r='15' fill='none' stroke='%23fff' stroke-width='5'/%3E%3Cline x1='37' y1='37' x2='46' y2='46' stroke='%23fff' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M46 14 L48 20 L54 22 L48 24 L46 30 L44 24 L38 22 L44 20 Z' fill='%23f59e0b'/%3E%3C/svg%3E">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.3/mermaid.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/svg-pan-zoom/3.6.1/svg-pan-zoom.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -3898,7 +3899,9 @@ function renderDiagramModal(){
     <div class="modal-actions" style="flex-wrap:wrap;gap:8px">
       <button class="btn" onclick="closeDiagramModal()">Close</button>
       <button class="btn" onclick="DIAG.showCode=!DIAG.showCode;renderDiagramModal();if(DIAG.code)renderDiagPreview()">${DIAG.showCode?'Hide':'✎ Edit'} code</button>
-      ${DIAG.code?`<button class="btn" onclick="downloadDiagram('svg')">⬇ SVG</button>
+      ${DIAG.code?`<button class="btn" onclick="diagToggleDirection()" title="Flip the layout between Left-to-Right and Top-to-Bottom">${/^(flowchart|graph)\s+(TB|TD)/.test(DIAG.code)?'↔ Horizontal':'↕ Vertical'}</button>
+      <button class="btn" onclick="openDiagLiveEditor()" title="Open this diagram in the free Mermaid Live Editor for full editing — paste the refined code back via ✎ Edit code">🔗 Mermaid Live</button>
+      <button class="btn" onclick="downloadDiagram('svg')">⬇ SVG</button>
       <button class="btn" onclick="downloadDiagram('png')">⬇ PNG</button>`:''}
       ${DIAG.code&&!isQuoteLocked()?`<button class="btn" onclick="saveDiagramToQuote()">💾 Save to quote</button>`:''}
       <button class="btn btn-navy" id="diagGenBtn" onclick="generateDiagram()">${DIAG.code?'🔄 Regenerate':'✨ Generate'} with AI</button>
@@ -3939,6 +3942,7 @@ async function generateDiagram(){
 let _diagSeq=0;
 async function renderDiagPreview(){
   const prev=document.getElementById('diagPreview');if(!prev)return;
+  if(DIAG._pz){try{DIAG._pz.destroy();}catch(e){}DIAG._pz=null;}
   if(!DIAG.code){prev.innerHTML='<div style="color:var(--gray-500);font-size:14px">No diagram yet.</div>';return;}
   if(!diagMermaidReady()){prev.innerHTML='<div class="auth-err">Diagram renderer failed to load — check your internet connection and reload the page.</div>';return;}
   diagInitMermaid();
@@ -3948,10 +3952,44 @@ async function renderDiagPreview(){
     prev.innerHTML=svg;
     const el=prev.querySelector('svg');
     if(el){el.style.maxWidth='100%';el.style.height='auto';}
+    // Pan/zoom: scroll to zoom, drag to pan — big schematics don't fit a modal.
+    // Needs a fixed-height box and explicit svg size; guarded so a pan-zoom
+    // hiccup never breaks the preview itself.
+    if(el&&typeof window.svgPanZoom!=='undefined'){
+      try{
+        prev.style.height='440px';
+        el.style.maxWidth='none';el.style.width='100%';el.style.height='100%';
+        DIAG._pz=window.svgPanZoom(el,{controlIconsEnabled:true,fit:true,center:true,minZoom:0.3,maxZoom:12,zoomScaleSensitivity:0.35});
+      }catch(e){}
+    }
   }catch(e){
     prev.innerHTML=`<div class="auth-err">The diagram code has a syntax error and can't be rendered.<br><span style="font-size:12px">${esc(String(e.message||e).slice(0,300))}</span></div>`;
     if(!DIAG.showCode){DIAG.showCode=true;renderDiagramModal();}
   }
+}
+
+// Quick-win: flip flowchart orientation. TD is mermaid's legacy alias for TB.
+function diagToggleDirection(){
+  if(!DIAG.code)return;
+  DIAG.code=DIAG.code.replace(/^((?:flowchart|graph)\s+)(LR|RL|TB|TD|BT)/,(m,p,d)=>p+((d==='TB'||d==='TD')?'LR':'TB'));
+  renderDiagramModal();
+  renderDiagPreview();
+}
+
+// Quick-win: open the current code in the free Mermaid Live Editor
+// (mermaid.live) — full editing with live preview, no login. The state rides
+// in the URL hash as base64 JSON; UTF-8-safe encoding for symbols like ×/·.
+function diagLiveEditorUrl(code){
+  const state={code:code,mermaid:'{\n  "theme": "base"\n}',autoSync:true,updateDiagram:true};
+  const json=JSON.stringify(state);
+  const bytes=new TextEncoder().encode(json);
+  let bin='';for(let i=0;i<bytes.length;i+=8192)bin+=String.fromCharCode.apply(null,bytes.subarray(i,i+8192));
+  return 'https://mermaid.live/edit#base64:'+btoa(bin);
+}
+function openDiagLiveEditor(){
+  if(!DIAG.code)return;
+  try{window.open(diagLiveEditorUrl(DIAG.code),'_blank');}
+  catch(e){alert('Could not open the Mermaid Live Editor.');}
 }
 
 // Returns a Promise<string|null> of a PNG data URL rendered at 2x for quality.

@@ -240,6 +240,18 @@ async function testDiagramGenerate() {
   const stamped = run(`!!(opts()[0].diagram && opts()[0].diagram.updated_at)`);
   check('diagram: save persists code onto the option (rides in quote_data)', typeof saved === 'string' && saved.startsWith('flowchart'));
   check('diagram: save stamps updated_at', stamped === true);
+
+  // Quick wins: direction toggle + Mermaid Live link
+  const modalHtml = run(`document.getElementById('diagModalBox').innerHTML`);
+  check('diagram: direction toggle button present', modalHtml.includes('Vertical') || modalHtml.includes('Horizontal'));
+  check('diagram: Mermaid Live button present', modalHtml.includes('Mermaid Live'));
+  run(`diagToggleDirection()`);
+  check('diagram: direction toggle flips LR to TB', run(`DIAG.code`).startsWith('flowchart TB'));
+  run(`diagToggleDirection()`);
+  check('diagram: direction toggle flips back to LR', run(`DIAG.code`).startsWith('flowchart LR'));
+  const liveUrl = run(`diagLiveEditorUrl(DIAG.code)`);
+  const decoded = Buffer.from(String(liveUrl).split('#base64:')[1], 'base64').toString('utf-8');
+  check('diagram: Mermaid Live URL carries the code', String(liveUrl).startsWith('https://mermaid.live/edit#base64:') && JSON.parse(decoded).code.startsWith('flowchart'));
   run(`closeDiagramModal()`);
 }
 
