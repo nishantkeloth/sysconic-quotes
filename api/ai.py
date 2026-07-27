@@ -142,6 +142,9 @@ Rules for the diagram:
   sources #dbeafe stroke #2563eb, conferencing #ede9fe stroke #7c3aed, processing #fef3c7 stroke #d97706, display #dcfce7 stroke #16a34a, audio #ffe4e6 stroke #e11d48, control #e2e8f0 stroke #475569, power #fee2e2 stroke #b91c1c. stroke-width:2px on all.
 - Node IDs: short uppercase alphanumeric (PC, SW1, LED). No special characters in IDs. Never use | ( ) [ ] { } # or " inside label text — spell them out or omit.
 - Keep it readable: maximum ~25 nodes. Merge identical repeated items into one node with a qty prefix.
+- Product photos: if an item includes an "img" URL, render its node as an image node with exactly this syntax (single-line label, no <br>):
+  ID@{ img: "the exact img url", label: "Role - Brand Model", pos: "t", w: 80, h: 60, constraint: "on" }
+  Then connect and class it like any other node. Items without an "img" URL keep the normal quoted-label node form.
 
 Respond ONLY with valid JSON, no markdown fences, no commentary, in exactly this shape:
 {"mermaid":"flowchart LR\\n ..."}"""
@@ -170,12 +173,17 @@ def generate_diagram():
         items = []
         for it in (s.get('items') or []):
             if count >= DIAGRAM_MAX_ITEMS: break
-            items.append({
+            row = {
                 'brand': str(it.get('brand') or '')[:120],
                 'model': str(it.get('model') or '')[:120],
                 'description': str(it.get('desc') or it.get('description') or '')[:300],
                 'qty': it.get('qty') or 1,
-            })
+            }
+            # Product photo URL → image node in the schematic. http(s) only.
+            img = str(it.get('img') or '')[:500]
+            if img.startswith('http://') or img.startswith('https://'):
+                row['img'] = img
+            items.append(row)
             count += 1
         if items:
             slim.append({'name': str(s.get('name') or '')[:100], 'items': items})

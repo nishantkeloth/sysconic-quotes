@@ -6,7 +6,7 @@
 <title>QTcal AI — Quote Manager v1.0.1</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231e3a5f'/%3E%3Ccircle cx='27' cy='27' r='15' fill='none' stroke='%23fff' stroke-width='5'/%3E%3Cline x1='37' y1='37' x2='46' y2='46' stroke='%23fff' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M46 14 L48 20 L54 22 L48 24 L46 30 L44 24 L38 22 L44 20 Z' fill='%23f59e0b'/%3E%3C/svg%3E">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.3/mermaid.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.4.1/mermaid.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/svg-pan-zoom/3.6.1/svg-pan-zoom.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -3858,7 +3858,7 @@ function applyBom(){
 // The code is stored on the option object itself (opt().diagram) so it rides
 // along inside quote_data — saved, snapshotted and available to the proposal
 // generator with no schema change.
-let DIAG={busy:false,code:'',showCode:false};
+let DIAG={busy:false,code:'',showCode:false,photos:true};
 
 function diagMermaidReady(){return typeof window.mermaid!=='undefined';}
 let _diagInit=false;
@@ -3876,7 +3876,7 @@ function diagInitMermaid(){
 function openDiagramModal(){
   if(!A.activeQuote)return;
   const o=opt();if(!o)return;
-  DIAG={busy:false,code:(o.diagram&&o.diagram.code)||'',showCode:false};
+  DIAG={busy:false,code:(o.diagram&&o.diagram.code)||'',showCode:false,photos:true};
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="diagOverlay" onclick="if(event.target===this)closeDiagramModal()">
     <div class="modal" style="max-width:900px;max-height:90vh;overflow-y:auto" id="diagModalBox"></div></div>`);
   renderDiagramModal();
@@ -3904,6 +3904,7 @@ function renderDiagramModal(){
       <button class="btn" onclick="downloadDiagram('svg')">⬇ SVG</button>
       <button class="btn" onclick="downloadDiagram('png')">⬇ PNG</button>`:''}
       ${DIAG.code&&!isQuoteLocked()?`<button class="btn" onclick="saveDiagramToQuote()">💾 Save to quote</button>`:''}
+      <label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600;cursor:pointer;color:var(--gray-500)" title="Render items that have a catalog image as product-photo nodes (XTEN-AV style). Applies on the next Generate."><input type="checkbox" ${DIAG.photos?'checked':''} onchange="DIAG.photos=this.checked">🖼 Product photos</label>
       <button class="btn btn-navy" id="diagGenBtn" onclick="generateDiagram()">${DIAG.code?'🔄 Regenerate':'✨ Generate'} with AI</button>
     </div>`;
 }
@@ -3912,7 +3913,13 @@ function diagBomPayload(){
   const o=opt();if(!o)return null;
   return{
     title:A.activeQuote?.title||'',
-    sections:(o.sections||[]).map(s=>({name:s.name||'',items:(s.items||[]).map(it=>({brand:it.brand||'',model:it.model||'',desc:it.desc||'',qty:it.qty||1}))})),
+    sections:(o.sections||[]).map(s=>({name:s.name||'',items:(s.items||[]).map(it=>{
+      const row={brand:it.brand||'',model:it.model||'',desc:it.desc||'',qty:it.qty||1};
+      // Product photo (Supabase product-images) → image node in the schematic,
+      // XTEN-AV style. Only sent when the toggle is on and the item has one.
+      if(DIAG.photos&&it.img)row.img=it.img;
+      return row;
+    })})),
   };
 }
 
@@ -4011,6 +4018,22 @@ async function diagCodeToPng(code,scale=2){
     w=el.viewBox?.baseVal?.width||1200;h=el.viewBox?.baseVal?.height||800;
   }
   el.setAttribute('width',w);el.setAttribute('height',h);
+  // Inline external product photos as data URLs: an SVG rasterized through an
+  // <img> element is forbidden from loading external resources, so photo nodes
+  // would silently render blank in the PNG (and the proposal embed). Supabase
+  // storage serves CORS '*' so fetch() works; any failure just leaves that
+  // node photo-less rather than breaking the export.
+  const extImgs=[...el.querySelectorAll('image')];
+  await Promise.all(extImgs.map(async im=>{
+    const href=im.getAttribute('href')||im.getAttribute('xlink:href')||'';
+    if(!href||href.startsWith('data:'))return;
+    try{
+      const resp=await fetch(href,{mode:'cors'});
+      const blob=await resp.blob();
+      const durl=await new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.onerror=rej;fr.readAsDataURL(blob);});
+      im.setAttribute('href',durl);im.removeAttribute('xlink:href');
+    }catch(e){}
+  }));
   const svgStr=new XMLSerializer().serializeToString(el);
   document.body.removeChild(tmp);
   const blob=new Blob([svgStr],{type:'image/svg+xml;charset=utf-8'});
