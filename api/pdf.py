@@ -124,18 +124,26 @@ def _num(v, d=0):
     try: return float(v or 0)
     except: return 0.0
 
-def calc_item(it):
+def calc_item(it, pricing_type='markup'):
+    # Mirrors index.html's calcItem(): quotes are priced either as Markup
+    # (cost x (1+pct), the default) or Margin (cost / (1-pct), capped at 95%)
+    # depending on quote.pricing_type. int(x+0.5) == JS Math.round for the
+    # positive values seen here (Python's round() half-even would drift).
     cad = _num(it.get('cost')) * (1 - _num(it.get('disc'))/100.0) * (1 - _num(it.get('discAdd'))/100.0)
     m = _num(it.get('margin'))
-    up = round(cad * (1 + m))
+    if pricing_type == 'margin':
+        mm = min(0.95, max(0.0, m))
+        up = int(cad / (1 - mm) + 0.5)
+    else:
+        up = int(cad * (1 + m) + 0.5)
     qty = _num(it.get('qty'))
     return up, up * qty
 
-def calc_opt(o):
+def calc_opt(o, pricing_type='markup'):
     ts = 0.0
     for s in (o.get('sections') or []):
         for it in (s.get('items') or []):
-            ts += calc_item(it)[1]
+            ts += calc_item(it, pricing_type)[1]
     vat_on = bool(o.get('vatEnabled'))
     rate = _num(o.get('vatRate') or 5)
     vat = ts * rate/100.0 if vat_on else 0.0
@@ -183,6 +191,7 @@ def build_quote_pdf(quote, logo_bytes, which='all', company=None):
     multi = len(opts) > 1
     terms = quote.get('terms_data') or []
     cur = quote.get('currency') or 'AED'
+    pt = quote.get('pricing_type') or 'markup'
 
     buf = io.BytesIO()
     doc = BaseDocTemplate(buf, pagesize=A4, leftMargin=15*mm, rightMargin=15*mm,
@@ -243,7 +252,7 @@ def build_quote_pdf(quote, logo_bytes, which='all', company=None):
 
     # ── Options ──
     for oi, o in enumerate(opts):
-        ts, vat_on, rate, vat, grand = calc_opt(o)
+        ts, vat_on, rate, vat, grand = calc_opt(o, pt)
         if multi:
             ob = Table([[Paragraph(f"<b>{o.get('label') or f'Option {oi+1}'}</b>",
                                    ParagraphStyle('ob', fontName='Helvetica-Bold', fontSize=9.5, textColor=white))]],
@@ -268,7 +277,7 @@ def build_quote_pdf(quote, logo_bytes, which='all', company=None):
                 E.append(badge); E.append(Spacer(1, 2*mm))
             rows = [header]
             for it in (s.get('items') or []):
-                up, tp = calc_item(it)
+                up, tp = calc_item(it, pt)
                 vat_amt = tp * (rate/100.0) if vat_on else None
                 vat_style = ParagraphStyle('vatc', parent=S['baseR'], textColor=HexColor('#a8b0bd'))
                 rows.append([Paragraph(str(rn), S['baseC']), Paragraph(str(it.get('brand') or ''), S['base']),
