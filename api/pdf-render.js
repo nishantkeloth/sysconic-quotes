@@ -74,9 +74,12 @@ module.exports = async (req, res) => {
   let browser;
   try {
     const chromium = await getChromium();
+    // Note: chromium.defaultViewport isn't a real static member on this
+    // package version (verified empty/undefined in testing) -- omitted
+    // rather than passing undefined, letting puppeteer-core use its own
+    // default viewport instead.
     browser = await puppeteer.launch({
       args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
       executablePath: await chromium.executablePath(),
     });
     const page = await browser.newPage();

@@ -13,7 +13,7 @@
     { "src": "api/platform.py", "use": "@vercel/python" },
     { "src": "api/proposal.py", "use": "@vercel/python" },
     { "src": "api/projects.py", "use": "@vercel/python" },
-    { "src": "api/pdf-render.js", "use": "@vercel/node", "config": { "maxLambdaSize": "250mb", "maxDuration": 30 } },
+    { "src": "api/pdf-render.js", "use": "@vercel/node", "config": { "maxLambdaSize": "250mb", "maxDuration": 30, "memory": 3009 } },
         { "src": "index.html",    "use": "@vercel/static" }
   ],
   "routes": [
