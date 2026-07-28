@@ -1,0 +1,11 @@
+{
+  "name": "sysconic-quotes-saas",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Node dependencies for Vercel serverless functions (self-hosted PDF rendering). The main app backend is Python/Flask (see api/*.py) -- this file exists only for the api/pdf-render.js function.",
+  "dependencies": {
+    "@sparticuz/chromium": "^149.0.0",
+    "puppeteer-core": "^25.4.0",
+    "jsonwebtoken": "^9.0.3"
+  }
+}
