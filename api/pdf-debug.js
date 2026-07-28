@@ -1,60 +1,65 @@
-// TEMPORARY diagnostic endpoint -- GET, no auth, verbose step-by-step logging,
-// so the actual failure point/cause is visible directly in the browser
-// response instead of hunting through Vercel's Logs UI. Mirrors the exact
-// launch sequence used by api/pdf-render.js. DELETE this file (and its
-// vercel.json build/route entries) once that route is confirmed working --
-// it's unauthenticated and launches a browser, so it shouldn't stay live.
-
-let chromiumPromise = null;
-function getChromium() {
-  if (!chromiumPromise) chromiumPromise = import('@sparticuz/chromium').then((m) => m.default);
-  return chromiumPromise;
-}
-const puppeteer = require('puppeteer-core');
+// TEMPORARY diagnostic endpoint -- GET, no auth. Runs one step further each
+// time based on ?step=N, returning JSON after that step instead of
+// continuing further. Since each request runs the same cascade fresh,
+// whichever step number stops returning valid JSON (and instead shows
+// Vercel's crash page) is the actual failing operation -- this works even
+// when the crash happens too fast/hard for console.log output to be visible
+// anywhere. Steps: 1=basic info only, 2=require puppeteer-core, 3=import
+// chromium, 4=resolve executablePath, 5=launch browser, 6=full PDF render.
+// DELETE this file (and its vercel.json build/route entries) once
+// api/pdf-render.js is confirmed working -- it's unauthenticated and can
+// launch a browser, so it shouldn't stay live.
 
 module.exports = async (req, res) => {
-  const steps = [];
-  const log = (msg) => {
-    steps.push(msg);
-    console.log('[pdf-debug]', msg);
+  const step = parseInt((req.query && req.query.step) || '1', 10) || 1;
+  const info = {
+    step,
+    node: process.version,
+    arch: process.arch,
+    platform: process.platform,
+    memory: process.memoryUsage(),
   };
-
-  log(`start: node=${process.version} arch=${process.arch} platform=${process.platform}`);
-  log(`memory at start: ${JSON.stringify(process.memoryUsage())}`);
 
   let browser;
   try {
-    log('importing @sparticuz/chromium...');
-    const chromium = await getChromium();
-    log(`chromium module loaded, args count=${(chromium.args || []).length}`);
+    let puppeteer, chromium, execPath;
 
-    log('resolving executablePath...');
-    const execPath = await chromium.executablePath();
-    log(`executablePath resolved: ${execPath}`);
+    if (step >= 2) {
+      puppeteer = require('puppeteer-core');
+      info.puppeteerLoaded = !!puppeteer;
+    }
+    if (step >= 3) {
+      const chromiumMod = await import('@sparticuz/chromium');
+      chromium = chromiumMod.default;
+      info.chromiumLoaded = !!chromium;
+      info.chromiumArgsCount = (chromium.args || []).length;
+    }
+    if (step >= 4) {
+      execPath = await chromium.executablePath();
+      info.execPath = execPath;
+      const fs = require('fs');
+      info.execExists = fs.existsSync(execPath);
+    }
+    if (step >= 5) {
+      browser = await puppeteer.launch({
+        args: chromium.args,
+        executablePath: execPath,
+      });
+      info.browserLaunched = true;
+    }
+    if (step >= 6) {
+      const page = await browser.newPage();
+      await page.setContent('<h1>Debug OK</h1>', { waitUntil: 'load', timeout: 15000 });
+      const pdfBuffer = await page.pdf({ format: 'A4' });
+      info.pdfBytes = pdfBuffer.length;
+    }
 
-    const fs = require('fs');
-    log(`executable exists on disk: ${fs.existsSync(execPath)}`);
-
-    log('launching puppeteer...');
-    browser = await puppeteer.launch({
-      args: chromium.args,
-      executablePath: execPath,
-    });
-    log('browser launched OK');
-
-    const page = await browser.newPage();
-    log('page created');
-    await page.setContent('<h1>Debug OK</h1>', { waitUntil: 'load', timeout: 15000 });
-    log('content set');
-    const pdfBuffer = await page.pdf({ format: 'A4' });
-    log(`pdf generated, bytes=${pdfBuffer.length}`);
-
+    info.memoryAfter = process.memoryUsage();
     res.setHeader('Content-Type', 'application/json');
-    res.status(200).json({ ok: true, steps, pdfBytes: pdfBuffer.length });
+    res.status(200).json({ ok: true, ...info });
   } catch (e) {
-    log(`ERROR: ${e && e.message}`);
     res.setHeader('Content-Type', 'application/json');
-    res.status(500).json({ ok: false, steps, error: String((e && e.stack) || e) });
+    res.status(500).json({ ok: false, ...info, error: String((e && e.stack) || e) });
   } finally {
     if (browser) {
       try {
