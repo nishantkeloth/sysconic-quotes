@@ -15,12 +15,17 @@
 // function's runtime explicitly (legacy `builds` array convention used
 // throughout this project; every new api/* file must be added there too).
 
-// @sparticuz/chromium ships as an ESM-wrapped default export -- `require()`
-// returns { default: Chromium, ... }, not the class itself. Verified against
-// the actual installed version (149.0.0): Chromium.args/.executablePath()
-// exist as static members; the old `.headless` static export is gone in this
-// version, so it's omitted below (puppeteer-core launches headless by default).
-const { default: chromium } = require('@sparticuz/chromium');
+// @sparticuz/chromium (149.0.0) ships as a pure ESM package -- require()'ing
+// it works in some local Node setups (Node 22's require(esm) interop) but
+// fails hard on Vercel's actual function runtime with ERR_REQUIRE_ESM, so it
+// must be loaded via dynamic import() instead, cached after the first call
+// since import() is async and this file otherwise stays CommonJS to match the
+// module.exports handler style @vercel/node expects.
+let chromiumPromise = null;
+function getChromium() {
+  if (!chromiumPromise) chromiumPromise = import('@sparticuz/chromium').then((m) => m.default);
+  return chromiumPromise;
+}
 const puppeteer = require('puppeteer-core');
 const jwt = require('jsonwebtoken');
 
@@ -68,6 +73,7 @@ module.exports = async (req, res) => {
 
   let browser;
   try {
+    const chromium = await getChromium();
     browser = await puppeteer.launch({
       args: chromium.args,
       defaultViewport: chromium.defaultViewport,
