@@ -15,19 +15,25 @@
 // function's runtime explicitly (legacy `builds` array convention used
 // throughout this project; every new api/* file must be added there too).
 
-// @sparticuz/chromium (149.0.0) ships as a pure ESM package -- require()'ing
-// it works in some local Node setups (Node 22's require(esm) interop) but
-// fails hard on Vercel's actual function runtime with ERR_REQUIRE_ESM, so it
-// must be loaded via dynamic import() instead, cached after the first call
-// since import() is async and this file otherwise stays CommonJS to match the
-// module.exports handler style @vercel/node expects.
+// Both @sparticuz/chromium (149.0.0) AND puppeteer-core (25.4.0) ship as pure
+// ESM packages -- require()'ing them appears to work in some local Node setups
+// (Node 22/24's require(esm) interop can mask this) but fails hard on Vercel's
+// actual function runtime with ERR_REQUIRE_ESM. A plain top-level `require()`
+// of either one crashes the function during module init, before the handler
+// or its try/catch even runs -- which is what caused every prior "instant,
+// uncatchable crash with zero logged output" seen while debugging this.
+// Both must be loaded via dynamic import() instead, cached after first call.
 let chromiumPromise = null;
 function getChromium() {
   if (!chromiumPromise) chromiumPromise = import('@sparticuz/chromium').then((m) => m.default);
   return chromiumPromise;
 }
-const puppeteer = require('puppeteer-core');
-const jwt = require('jsonwebtoken');
+let puppeteerPromise = null;
+function getPuppeteer() {
+  if (!puppeteerPromise) puppeteerPromise = import('puppeteer-core').then((m) => m.default);
+  return puppeteerPromise;
+}
+const jwt = require('jsonwebtoken'); // confirmed CJS-compatible, fine to require() directly
 
 function verifyToken(req) {
   const auth = (req.headers && req.headers['authorization']) || '';
@@ -73,7 +79,7 @@ module.exports = async (req, res) => {
 
   let browser;
   try {
-    const chromium = await getChromium();
+    const [chromium, puppeteer] = await Promise.all([getChromium(), getPuppeteer()]);
     // Note: chromium.defaultViewport isn't a real static member on this
     // package version (verified empty/undefined in testing) -- omitted
     // rather than passing undefined, letting puppeteer-core use its own
