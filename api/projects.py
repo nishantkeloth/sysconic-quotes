@@ -267,7 +267,13 @@ def recalculate_project(company_id, project_id):
     forecast_cost_variance = original_cost - eac
     forecast_gp = revenue_forecast - eac
     forecast_gp_pct = (forecast_gp / revenue_forecast * 100.0) if revenue_forecast else 0.0
-    margin_erosion = original_gp_pct - forecast_gp_pct
+    # Zoho-imported projects may have no quote baseline (original cost/GP
+    # unknown, stored as 0). Erosion measured against a fake 0% baseline is
+    # meaningless — and misleading in both directions — so it's suppressed
+    # until a real baseline exists (original_estimated_cost > 0). The UI
+    # shows "—" for Original GP% and Erosion on such rows.
+    has_baseline = original_cost > 0
+    margin_erosion = (original_gp_pct - forecast_gp_pct) if has_baseline else 0.0
 
     invoices = sb.table('zoho_invoices').select('total,balance').eq('project_id', project_id).execute().data or []
     invoiced_value = sum(_num(i.get('total')) for i in invoices)
@@ -376,7 +382,7 @@ def recalculate_project(company_id, project_id):
 
 # ── Portfolio dashboard + project list ──────────────────────────────────────
 PP_LIST_FIELDS = ('id,name,customer,status,project_manager_id,salesperson_id,project_type,'
-                   'revenue_forecast,original_gp_pct,forecast_gp_pct,margin_erosion_pct,actual_cost,'
+                   'revenue_forecast,original_estimated_cost,original_gp_pct,forecast_gp_pct,margin_erosion_pct,actual_cost,'
                    'po_based_actual_cost,non_po_based_actual_cost,'
                    'committed_cost,estimate_at_completion,invoiced_value,collected_value,net_cash_position,'
                    'health_score,health_status,completion_pct,zoho_project_id,zoho_project_no,quote_ref,created_at')
@@ -1051,6 +1057,38 @@ def _sync_project_actuals(company_id, project):
 # they get no commercial baseline (original_selling_price/cost/gp stay 0) --
 # they're actuals-tracked only until/unless a baseline is added by hand.
 # Called from both the manual portfolio-wide "Sync Now" and the daily cron.
+def _quote_baseline_for_zoho(company_id, zoho_project_id, zoho_project_no=None):
+    """Best-effort commercial baseline for a Zoho-imported project, recovered
+    from the QTcal quote linked to the same Zoho project (quotes carry
+    zoho_project_id/zoho_project_no once '+ Zoho' or award-time creation has
+    run). Uses the quote row's saved headline totals (total_sell/total_gp)
+    rather than re-walking quote_data — accurate for portfolio metrics
+    without duplicating the full award-time baseline-freeze logic here.
+    Returns a projects-row patch dict, or None when no linked quote exists —
+    in which case the project stays actuals-only and the UI shows '—'."""
+    try:
+        q = sb.table('quotes').select('id,total_sell,total_gp') \
+            .eq('company_id', company_id).eq('zoho_project_id', zoho_project_id).limit(1).execute()
+        if not q.data and zoho_project_no:
+            q = sb.table('quotes').select('id,total_sell,total_gp') \
+                .eq('company_id', company_id).eq('zoho_project_no', zoho_project_no).limit(1).execute()
+        if not q.data:
+            return None
+        ts = _num(q.data[0].get('total_sell'))
+        tg = _num(q.data[0].get('total_gp'))
+        if ts <= 0:
+            return None
+        return {
+            'quotation_id': q.data[0]['id'],
+            'revenue_forecast': ts,
+            'original_selling_price': ts,
+            'original_estimated_cost': ts - tg,
+            'original_gp': tg,
+            'original_gp_pct': tg / ts * 100.0,
+        }
+    except Exception:
+        return None
+
 def _upsert_zoho_project(company_id, zp):
     """Create the local `projects` row for a Zoho project not seen before.
     Shared by the full portfolio import and the targeted Sync Selected
@@ -1064,16 +1102,22 @@ def _upsert_zoho_project(company_id, zp):
         'zoho_project_no': zp.get('zoho_project_no'),
         'source': 'zoho_import',
     }
-    cost = _num(zp.get('total_project_cost'))
-    if cost:
-        # No quote baseline exists for an imported project, so Zoho's own
-        # Total Project Cost is the best available stand-in for Value --
-        # revenue_forecast is what the Portfolio/detail Value figures read.
-        insert['revenue_forecast'] = cost
-        insert['original_selling_price'] = cost
+    baseline = _quote_baseline_for_zoho(company_id, zp['zoho_project_id'], zp.get('zoho_project_no'))
+    if baseline:
+        # A QTcal quote is linked to this Zoho project — use its real
+        # commercial baseline so Original GP% / Erosion mean something.
+        insert.update(baseline)
+    else:
+        cost = _num(zp.get('total_project_cost'))
+        if cost:
+            # No quote baseline exists for an imported project, so Zoho's own
+            # Total Project Cost is the best available stand-in for Value --
+            # revenue_forecast is what the Portfolio/detail Value figures read.
+            insert['revenue_forecast'] = cost
+            insert['original_selling_price'] = cost
     sb.table('projects').insert(insert).execute()
 
-def _zoho_project_patch(row, zp):
+def _zoho_project_patch(company_id, row, zp):
     """Compute which fields on an *existing* local project row should be
     refreshed from newer Zoho data -- shared by the full-portfolio backfill
     and the Sync Selected backfill so both apply the same rules."""
@@ -1084,14 +1128,21 @@ def _zoho_project_patch(row, zp):
         patch['name'] = zp['project_name']
     if zp.get('customer_name') and row.get('customer') != zp['customer_name']:
         patch['customer'] = zp['customer_name']
-    # Only ever set Value from Zoho's Total Project Cost for projects with
-    # no quote-derived baseline (source='zoho_import') and no value set yet
-    # -- never overwrite a real commercial baseline frozen from an awarded quote.
-    if row.get('source') == 'zoho_import' and not _num(row.get('revenue_forecast')):
-        cost = _num(zp.get('total_project_cost'))
-        if cost:
-            patch['revenue_forecast'] = cost
-            patch['original_selling_price'] = cost
+    # Baseline recovery: a previously-imported Zoho project with no commercial
+    # baseline gets one from its linked QTcal quote when possible (fixes
+    # Original GP% showing 0 for Zoho-pulled projects). Never overwrites a
+    # real baseline frozen from an awarded quote (original_estimated_cost>0).
+    if row.get('source') == 'zoho_import' and not _num(row.get('original_estimated_cost')):
+        baseline = _quote_baseline_for_zoho(company_id, zp['zoho_project_id'], zp.get('zoho_project_no'))
+        if baseline:
+            patch.update(baseline)
+        elif not _num(row.get('revenue_forecast')):
+            # No linked quote either -- fall back to Zoho's Total Project
+            # Cost as the Value stand-in, as before.
+            cost = _num(zp.get('total_project_cost'))
+            if cost:
+                patch['revenue_forecast'] = cost
+                patch['original_selling_price'] = cost
     return patch
 
 def _mirror_zoho_no_to_quote(company_id, row, patch):
@@ -1127,7 +1178,7 @@ def _import_zoho_projects(company_id, project_filter=None):
     if project_filter:
         zoho_projects = [zp for zp in zoho_projects if project_filter(zp)]
 
-    existing = sb.table('projects').select('id,zoho_project_id,zoho_project_no,name,customer,source,revenue_forecast,quotation_id').eq('company_id', company_id)\
+    existing = sb.table('projects').select('id,zoho_project_id,zoho_project_no,name,customer,source,revenue_forecast,original_estimated_cost,quotation_id').eq('company_id', company_id)\
         .not_.is_('zoho_project_id', 'null').execute().data or []
     existing_by_id = {r['zoho_project_id']: r for r in existing}
 
@@ -1138,7 +1189,7 @@ def _import_zoho_projects(company_id, project_filter=None):
             # Already imported before -- backfill anything we're missing
             # (Project No, name/customer changes, Value) rather than leaving
             # the row stale forever.
-            patch = _zoho_project_patch(row, zp)
+            patch = _zoho_project_patch(company_id, row, zp)
             if patch:
                 try:
                     sb.table('projects').update(patch).eq('id', row['id']).execute()
@@ -1168,7 +1219,7 @@ def _import_specific_zoho_projects(company_id, values):
     if not creds or not ZOHO.is_configured(creds):
         return {'imported': 0, 'updated': 0, 'total_in_zoho': len(values), 'errors': ['Zoho Books is not connected for this company']}
 
-    existing = sb.table('projects').select('id,zoho_project_id,zoho_project_no,name,customer,source,revenue_forecast,quotation_id').eq('company_id', company_id).execute().data or []
+    existing = sb.table('projects').select('id,zoho_project_id,zoho_project_no,name,customer,source,revenue_forecast,original_estimated_cost,quotation_id').eq('company_id', company_id).execute().data or []
     by_id = {r['zoho_project_id']: r for r in existing if r.get('zoho_project_id')}
     by_no = {r['zoho_project_no']: r for r in existing if r.get('zoho_project_no')}
 
@@ -1185,7 +1236,7 @@ def _import_specific_zoho_projects(company_id, values):
             try:
                 zp = ZOHO.fetch_project(creds, row['zoho_project_id'])
                 if zp:
-                    patch = _zoho_project_patch(row, zp)
+                    patch = _zoho_project_patch(company_id, row, zp)
                     if patch:
                         sb.table('projects').update(patch).eq('id', row['id']).execute()
                         _mirror_zoho_no_to_quote(company_id, row, patch)

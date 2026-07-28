@@ -6,7 +6,7 @@
 <title>QTcal AI — Quote Manager v1.0.1</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231e3a5f'/%3E%3Ccircle cx='27' cy='27' r='15' fill='none' stroke='%23fff' stroke-width='5'/%3E%3Cline x1='37' y1='37' x2='46' y2='46' stroke='%23fff' stroke-width='5' stroke-linecap='round'/%3E%3Cpath d='M46 14 L48 20 L54 22 L48 24 L46 30 L44 24 L38 22 L44 20 Z' fill='%23f59e0b'/%3E%3C/svg%3E">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.3/mermaid.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.12.0/mermaid.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/svg-pan-zoom/3.6.1/svg-pan-zoom.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -635,13 +635,13 @@ const PP_COLUMNS=[
     cell:p=>`<td style="padding:8px">AED ${fmt(p.revenue_forecast||0)}</td>`},
   {key:'originalGp',label:'Original GP%',
     tip:'Gross profit % frozen from the awarded quote at project creation: (Original Selling Price − Original Estimated Cost) ÷ Original Selling Price. Never changes after the project is created.',
-    cell:p=>`<td style="padding:8px">${fmtPct100(p.original_gp_pct||0)}</td>`},
+    cell:p=>`<td style="padding:8px" ${!(p.original_estimated_cost>0)?'title="No quote baseline — project imported from Zoho. Link a quote (zoho_project_id) and re-sync to recover it."':''}>${(p.original_estimated_cost>0)?fmtPct100(p.original_gp_pct||0):'—'}</td>`},
   {key:'forecastGp',label:'Forecast GP%',
     tip:'Current forecast gross profit %, recalculated on every sync: (Revenue Forecast − Estimate at Completion) ÷ Revenue Forecast.',
     cell:p=>`<td style="padding:8px">${fmtPct100(p.forecast_gp_pct||0)}</td>`},
   {key:'erosion',label:'Erosion',
     tip:'Margin Erosion = Original GP% − Forecast GP%. A positive number (shown in red) means margin has eroded since the quote was awarded.',
-    cell:p=>`<td style="padding:8px;${(p.margin_erosion_pct||0)>0?'color:var(--red)':''}">${fmtPct100(p.margin_erosion_pct||0)}</td>`},
+    cell:p=>`<td style="padding:8px;${(p.margin_erosion_pct||0)>0?'color:var(--red)':''}" ${!(p.original_estimated_cost>0)?'title="No quote baseline to measure erosion against."':''}>${(p.original_estimated_cost>0)?fmtPct100(p.margin_erosion_pct||0):'—'}</td>`},
   {key:'poExpense',label:'PO Expense',
     tip:'Actual billed cost that traces back to a Purchase Order in Zoho Books (bills with a linked PO).',
     cell:p=>`<td style="padding:8px">AED ${fmt(p.po_based_actual_cost||0)}</td>`},
@@ -821,9 +821,9 @@ function ppOverviewTab(d){
   const p=d.project;
   const cards=[
     ['Project Value','AED '+fmt(p.revenue_forecast||0),'navy'],
-    ['Original GP%',fmtPct100(p.original_gp_pct||0),'navy'],
+    ['Original GP%',(p.original_estimated_cost>0)?fmtPct100(p.original_gp_pct||0):'—','navy'],
     ['Forecast GP%',fmtPct100(p.forecast_gp_pct||0),'green'],
-    ['Margin Erosion',fmtPct100(p.margin_erosion_pct||0),(p.margin_erosion_pct||0)>0?'red':'green'],
+    ['Margin Erosion',(p.original_estimated_cost>0)?fmtPct100(p.margin_erosion_pct||0):'—',(p.margin_erosion_pct||0)>0?'red':'green'],
     ['Actual Cost','AED '+fmt(p.actual_cost||0),'navy'],
     ['Committed Cost','AED '+fmt(p.committed_cost||0),'amber'],
     ['Estimate at Completion','AED '+fmt(p.estimate_at_completion||0),'navy'],
@@ -861,11 +861,11 @@ function ppFinancialTab(d){
     <table style="width:100%;border-collapse:collapse;font-size:14px">
       <tr><td style="padding:6px 0">Original Selling Price</td><td style="text-align:right">AED ${fmt(p.original_selling_price||0)}</td></tr>
       <tr><td style="padding:6px 0">Original Estimated Cost</td><td style="text-align:right">AED ${fmt(p.original_estimated_cost||0)}</td></tr>
-      <tr><td style="padding:6px 0">Original GP</td><td style="text-align:right">AED ${fmt(p.original_gp||0)} (${fmtPct100(p.original_gp_pct||0)})</td></tr>
+      <tr><td style="padding:6px 0">Original GP</td><td style="text-align:right">${(p.original_estimated_cost>0)?`AED ${fmt(p.original_gp||0)} (${fmtPct100(p.original_gp_pct||0)})`:'— no quote baseline'}</td></tr>
       <tr style="border-top:1.5px solid var(--gray-200)"><td style="padding:6px 0">Current Revenue Forecast</td><td style="text-align:right">AED ${fmt(p.revenue_forecast||0)}</td></tr>
       <tr><td style="padding:6px 0">Estimate at Completion</td><td style="text-align:right">AED ${fmt(p.estimate_at_completion||0)}</td></tr>
       <tr><td style="padding:6px 0">Forecast GP</td><td style="text-align:right">AED ${fmt(p.forecast_gp||0)} (${fmtPct100(p.forecast_gp_pct||0)})</td></tr>
-      <tr style="border-top:1.5px solid var(--gray-200)"><td style="padding:6px 0;font-weight:700">Margin Erosion</td><td style="text-align:right;font-weight:700;${(p.margin_erosion_pct||0)>0?'color:var(--red)':'color:var(--green)'}">${fmtPct100(p.margin_erosion_pct||0)}</td></tr>
+      <tr style="border-top:1.5px solid var(--gray-200)"><td style="padding:6px 0;font-weight:700">Margin Erosion</td><td style="text-align:right;font-weight:700;${(p.margin_erosion_pct||0)>0?'color:var(--red)':'color:var(--green)'}">${(p.original_estimated_cost>0)?fmtPct100(p.margin_erosion_pct||0):'—'}</td></tr>
     </table>
   </div>
   <div class="card" style="margin-top:16px">
@@ -3213,6 +3213,7 @@ function printHTML(forExport){
   const os=which==='all'?q.quote_data||[]:[q.quote_data?.[+which]||q.quote_data?.[0]].filter(Boolean);
   const TERMS=q.terms_data&&q.terms_data.length?q.terms_data:DEFAULT_TERMS;
   const multi=os.length>1;
+  const IMG=imgOn();
   const TH=getPrintTheme();
   let html='';
   if(!forExport){
@@ -3231,6 +3232,7 @@ function printHTML(forExport){
       const cellB='border-right:1px solid #e9ecf2';
       s.items.forEach((it,idx)=>{const c=calcItem(it);const vatAmt=o.vatEnabled?c.tp*((o.vatRate||5)/100):null;srows+=`<tr style="background:${idx%2===0?'#fff':TH.bg};page-break-inside:avoid">
         <td style="padding:${DP('10px 8px')};font-size:${SZ(11,'table')}px;color:#a8b0bd;text-align:center;${cellB};border-bottom:1px solid #eef1f5">${rn++}</td>
+        ${IMG?`<td style="padding:${DP('4px 6px')};text-align:center;${cellB};border-bottom:1px solid #eef1f5">${it.img?`<img src="${esc(it.img)}" style="width:32px;height:32px;object-fit:contain;border-radius:4px;border:1px solid #e2e6ec">`:''}</td>`:''}
         <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;white-space:nowrap;${cellB};border-bottom:1px solid #eef1f5">${esc(it.brand)}</td>
         <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;white-space:nowrap;${cellB};border-bottom:1px solid #eef1f5">${esc(it.model)}</td>
         <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#555;white-space:pre-line;${cellB};border-bottom:1px solid #eef1f5">${esc(it.desc)}</td>
@@ -3247,6 +3249,7 @@ function printHTML(forExport){
       <table style="width:100%;border-collapse:collapse;font-size:${SZ(12,'table')}px;margin-bottom:6px;border:1px solid #e2e6ec">
         <thead><tr style="background:${TH.dark}">
           <th style="padding:${DP('10px 8px')};text-align:center;width:28px;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">#</th>
+          ${IMG?`<th style="padding:${DP('6px 8px')};text-align:center;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}"></th>`:''}
           <th style="padding:${DP('10px')};text-align:left;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Brand</th>
           <th style="padding:${DP('10px')};text-align:left;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Model</th>
           <th style="padding:${DP('10px')};text-align:left;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Description</th>
@@ -3858,7 +3861,7 @@ function applyBom(){
 // The code is stored on the option object itself (opt().diagram) so it rides
 // along inside quote_data — saved, snapshotted and available to the proposal
 // generator with no schema change.
-let DIAG={busy:false,code:'',showCode:false};
+let DIAG={busy:false,code:'',showCode:false,photos:true};
 
 function diagMermaidReady(){return typeof window.mermaid!=='undefined';}
 let _diagInit=false;
@@ -3876,7 +3879,7 @@ function diagInitMermaid(){
 function openDiagramModal(){
   if(!A.activeQuote)return;
   const o=opt();if(!o)return;
-  DIAG={busy:false,code:(o.diagram&&o.diagram.code)||'',showCode:false};
+  DIAG={busy:false,code:(o.diagram&&o.diagram.code)||'',showCode:false,photos:true};
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="diagOverlay" onclick="if(event.target===this)closeDiagramModal()">
     <div class="modal" style="max-width:900px;max-height:90vh;overflow-y:auto" id="diagModalBox"></div></div>`);
   renderDiagramModal();
@@ -3888,6 +3891,8 @@ function renderDiagramModal(){
   const box=document.getElementById('diagModalBox');if(!box)return;
   const o=opt()||{};
   const saved=o.diagram&&o.diagram.code;
+  let missingImgs=0;
+  (o.sections||[]).forEach(s=>(s.items||[]).forEach(it=>{if(!it.img&&((it.brand||'').trim()||(it.model||'').trim()))missingImgs++;}));
   box.innerHTML=`
     <div class="modal-title">🗺 AI System Diagram <span style="font-size:12px;font-weight:600;color:var(--amber)">AI</span></div>
     <div class="modal-sub">Generates a system schematic (signal flow) from this option's bill of materials. Review it — AI can misread a BOM line — then save it to the quote or download it.${saved?` <span style="color:var(--green)">A diagram is saved on ${esc(o.label||'this option')}${o.diagram.updated_at?' ('+esc(o.diagram.updated_at.slice(0,10))+')':''}.</span>`:''}</div>
@@ -3904,6 +3909,8 @@ function renderDiagramModal(){
       <button class="btn" onclick="downloadDiagram('svg')">⬇ SVG</button>
       <button class="btn" onclick="downloadDiagram('png')">⬇ PNG</button>`:''}
       ${DIAG.code&&!isQuoteLocked()?`<button class="btn" onclick="saveDiagramToQuote()">💾 Save to quote</button>`:''}
+      <label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600;cursor:pointer;color:var(--gray-500)" title="Render items that have a catalog image as product-photo nodes (XTEN-AV style). Applies on the next Generate."><input type="checkbox" ${DIAG.photos?'checked':''} onchange="DIAG.photos=this.checked">🖼 Product photos</label>
+      ${missingImgs&&!isQuoteLocked()?`<button class="btn" id="diagImgFillBtn" onclick="diagAutoFillImages()" title="Web-search a product photo for each item that has a brand/model but no image (first result is used; saved to your catalog — fix any wrong pick via the 📷 icon on the item row)">🖼 Auto-fill images (${missingImgs})</button>`:''}
       <button class="btn btn-navy" id="diagGenBtn" onclick="generateDiagram()">${DIAG.code?'🔄 Regenerate':'✨ Generate'} with AI</button>
     </div>`;
 }
@@ -3912,8 +3919,58 @@ function diagBomPayload(){
   const o=opt();if(!o)return null;
   return{
     title:A.activeQuote?.title||'',
-    sections:(o.sections||[]).map(s=>({name:s.name||'',items:(s.items||[]).map(it=>({brand:it.brand||'',model:it.model||'',desc:it.desc||'',qty:it.qty||1}))})),
+    sections:(o.sections||[]).map(s=>({name:s.name||'',items:(s.items||[]).map(it=>{
+      const row={brand:it.brand||'',model:it.model||'',desc:it.desc||'',qty:it.qty||1};
+      // Product photo (Supabase product-images) → image node in the schematic,
+      // XTEN-AV style. Only sent when the toggle is on and the item has one.
+      if(DIAG.photos&&it.img)row.img=it.img;
+      return row;
+    })})),
   };
+}
+
+// Auto-fill: for every item with a brand/model but no image, web-search a
+// product photo (Brave, via the existing image-search endpoint), take the top
+// result and save it to the catalog via the existing per-product image
+// endpoint — which copies it into Supabase storage, so the photo is also
+// CORS-safe for PNG export. Sequential on purpose: respects the Brave API
+// rate limit. First result isn't always right; the row 📷 picker fixes those.
+async function diagAutoFillImages(){
+  if(DIAG.busy)return;
+  const o=opt();if(!o)return;
+  if(isQuoteLocked()){alert('This quote is locked — unlock it to update item images.');return;}
+  const targets=[];
+  (o.sections||[]).forEach((s,si)=>(s.items||[]).forEach((it,ii)=>{
+    if(!it.img&&((it.brand||'').trim()||(it.model||'').trim()))targets.push([si,ii]);
+  }));
+  if(!targets.length)return;
+  const CAP=15;
+  const btn=document.getElementById('diagImgFillBtn');
+  DIAG.busy=true;
+  let done=0,ok=0,fail=0;
+  for(const [si,ii] of targets.slice(0,CAP)){
+    done++;
+    if(btn){btn.disabled=true;btn.textContent=`Fetching ${done}/${Math.min(targets.length,CAP)}…`;}
+    try{
+      const it=sec(si)?.items?.[ii];if(!it)continue;
+      if(!it.product_id)await captureProduct(si,ii);
+      if(!it.product_id){fail++;continue;}
+      const q=((it.brand||'')+' '+(it.model||'')).trim();
+      const r=await api('GET','/api/products/image-search?q='+encodeURIComponent(q));
+      const first=(r.images||[])[0];
+      if(r.error||!first||!first.url){fail++;continue;}
+      const sv=await api('POST','/api/products/'+it.product_id+'/image',{url:first.url});
+      if(sv.error||!sv.product||!sv.product.image_url){fail++;continue;}
+      it.img=sv.product.image_url;ok++;
+    }catch(e){fail++;}
+  }
+  DIAG.busy=false;
+  if(ok&&A.activeQuote)schedSave();
+  const skipped=targets.length>CAP?` ${targets.length-CAP} item(s) skipped (rate-limit cap) — run Auto-fill again for the rest.`:'';
+  alert(`Product images: ${ok} found and saved${fail?`, ${fail} not found or failed`:''}.${skipped}${ok?' The first search result was used — fix any wrong picture via the 📷 icon on the item row, then Regenerate the diagram.':''}`);
+  renderDiagramModal();
+  if(DIAG.code)renderDiagPreview();
+  if(A.page==='editor')draw();
 }
 
 async function generateDiagram(){
@@ -4011,6 +4068,22 @@ async function diagCodeToPng(code,scale=2){
     w=el.viewBox?.baseVal?.width||1200;h=el.viewBox?.baseVal?.height||800;
   }
   el.setAttribute('width',w);el.setAttribute('height',h);
+  // Inline external product photos as data URLs: an SVG rasterized through an
+  // <img> element is forbidden from loading external resources, so photo nodes
+  // would silently render blank in the PNG (and the proposal embed). Supabase
+  // storage serves CORS '*' so fetch() works; any failure just leaves that
+  // node photo-less rather than breaking the export.
+  const extImgs=[...el.querySelectorAll('image')];
+  await Promise.all(extImgs.map(async im=>{
+    const href=im.getAttribute('href')||im.getAttribute('xlink:href')||'';
+    if(!href||href.startsWith('data:'))return;
+    try{
+      const resp=await fetch(href,{mode:'cors'});
+      const blob=await resp.blob();
+      const durl=await new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(fr.result);fr.onerror=rej;fr.readAsDataURL(blob);});
+      im.setAttribute('href',durl);im.removeAttribute('xlink:href');
+    }catch(e){}
+  }));
   const svgStr=new XMLSerializer().serializeToString(el);
   document.body.removeChild(tmp);
   const blob=new Blob([svgStr],{type:'image/svg+xml;charset=utf-8'});

@@ -226,6 +226,7 @@ async function testDiagramGenerate() {
   const { run, captured } = ctx;
   run(DIAG_TOKEN_JS + `
     sec(0).items[0].brand='LG'; sec(0).items[0].model='98UM5K'; sec(0).items[0].desc='98in display'; sec(0).items[0].qty=1;
+    sec(0).items[0].img='https://example.supabase.co/product-images/98um5k.png';
     openDiagramModal();
     generateDiagram();
   `);
@@ -235,6 +236,11 @@ async function testDiagramGenerate() {
   const req = captured.requests.find(r => r.url.includes('/api/diagram/generate'));
   const body = req ? JSON.parse(req.body) : null;
   check('diagram: request carries the BOM items', !!body && body.quote.sections[0].items[0].model === '98UM5K');
+  check('diagram: request carries product photo URL', !!body && body.quote.sections[0].items[0].img === 'https://example.supabase.co/product-images/98um5k.png');
+  run(`DIAG.photos=false;`);
+  const noPhoto = run(`diagBomPayload().sections[0].items[0].img`);
+  check('diagram: photos toggle off strips image URLs', noPhoto === undefined);
+  run(`DIAG.photos=true;`);
   run(`saveDiagramToQuote()`);
   const saved = run(`opts()[0].diagram && opts()[0].diagram.code`);
   const stamped = run(`!!(opts()[0].diagram && opts()[0].diagram.updated_at)`);
