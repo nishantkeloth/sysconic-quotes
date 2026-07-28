@@ -4150,6 +4150,15 @@ function propFileChosen(e){
   reader.onload=()=>{PROP.file={filename:f.name,data:reader.result};};
   reader.readAsDataURL(f);
 }
+function propCoverFileChosen(e){
+  const f=e.target.files&&e.target.files[0];e.target.value='';if(!f)return;
+  if(f.size>4*1024*1024){alert('Cover image must be under 4 MB.');return;}
+  const reader=new FileReader();
+  reader.onload=()=>{PROP.content.cover_image=reader.result;renderProposalModal();};
+  reader.readAsDataURL(f);
+}
+function propRemoveCoverImage(){PROP.content.cover_image=null;renderProposalModal();}
+function propSetTemplateStyle(style){PROP.content.template_style=style;renderProposalModal();}
 function propBulletsToText(arr){return (arr||[]).join('\n');}
 function propTextToBullets(str){return (str||'').split('\n').map(s=>s.trim()).filter(Boolean);}
 
@@ -4214,6 +4223,17 @@ function proposalReviewHTML(){
   return `<div style="max-height:52vh;overflow-y:auto;padding-right:8px;margin-top:8px">
     <div class="fld2" style="margin-bottom:10px"><label>Title</label><input value="${esc(c.title||'')}" oninput="PROP.content.title=this.value"></div>
     <div class="fld2" style="margin-bottom:10px"><label>Subtitle</label><input value="${esc(c.subtitle||'')}" oninput="PROP.content.subtitle=this.value"></div>
+
+    <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Cover image (optional)</label>
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px">
+      <label class="btn" style="cursor:pointer">📷 ${c.cover_image?'Change image':'Upload image'}<input type="file" accept="image/png,image/jpeg,image/webp" style="display:none" onchange="propCoverFileChosen(event)"></label>
+      ${c.cover_image?`<div style="position:relative;width:64px;height:56px;border-radius:6px;overflow:hidden;border:1.5px solid var(--gray-200)"><img src="${c.cover_image}" style="width:100%;height:100%;object-fit:cover"><button onclick="propRemoveCoverImage()" title="Remove image" style="position:absolute;top:2px;right:2px;width:16px;height:16px;border:none;border-radius:50%;background:#fff;color:#333;font-size:10px;line-height:16px;cursor:pointer;padding:0">✕</button></div>`:`<span style="font-size:12px;color:var(--gray-500)">Room photo, rendering, or client logo shown on the cover page</span>`}
+    </div>
+
+    <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Template style</label>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+      ${[['modern','Modern'],['corporate','Corporate'],['technical','Technical'],['executive','Executive']].map(([key,lbl])=>{const sel=(c.template_style||'modern')===key;return `<div onclick="propSetTemplateStyle('${key}')" style="cursor:pointer;padding:7px 4px;border-radius:8px;border:2px solid ${sel?'var(--navy)':'var(--gray-200)'};text-align:center;font-size:12px;font-weight:${sel?'700':'500'};color:${sel?'var(--navy)':'var(--gray-500)'}">${lbl}</div>`;}).join('')}
+    </div>
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Sections to include</label>
     <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">
