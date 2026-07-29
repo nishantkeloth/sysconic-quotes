@@ -4258,6 +4258,83 @@ function propCoverFileChosen(e){
 }
 function propRemoveCoverImage(){PROP.content.cover_image=null;renderProposalModal();}
 function propSetTemplateStyle(style){PROP.content.template_style=style;renderProposalModal();}
+
+// Mirrors api/proposal.py's THEMES + COVER_LAYOUT_FOR_STYLE so the picker shows
+// a live, roughly-to-scale preview of each style's actual cover-page layout and
+// colors before the user spends AI credits generating the real PDF.
+const PROP_THEMES={
+  modern:    {navy:'#16294f',gold:'#f4b400',layout:'modern',    label:'Modern'},
+  vibrant:   {navy:'#5b21b6',gold:'#f97316',layout:'modern',    label:'Vibrant'},
+  corporate: {navy:'#16294f',gold:'#f4b400',layout:'corporate', label:'Corporate'},
+  minimal:   {navy:'#111827',gold:'#0d9488',layout:'corporate', label:'Minimal'},
+  executive: {navy:'#16294f',gold:'#f4b400',layout:'executive', label:'Executive'},
+  classic:   {navy:'#7a1f2b',gold:'#c9a227',layout:'executive', label:'Classic'},
+  technical: {navy:'#16294f',gold:'#f4b400',layout:'technical', label:'Technical'},
+  midnight:  {navy:'#0b1220',gold:'#38bdf8',layout:'technical', label:'Midnight'},
+};
+function propTemplateSwatch(key){
+  const t=PROP_THEMES[key];
+  const W=76,H=100;
+  let inner='';
+  if(t.layout==='modern'){
+    inner=`<div style="position:absolute;inset:0;background:${t.navy};overflow:hidden">
+      <div style="position:absolute;width:70px;height:70px;border-radius:50%;background:rgba(255,255,255,.12);top:-30px;right:-20px"></div>
+      <div style="position:absolute;width:50px;height:50px;border-radius:50%;background:rgba(255,255,255,.10);bottom:-20px;left:-18px"></div>
+      <div style="position:absolute;left:8px;top:14px;width:26px;height:9px;border-radius:2px;background:#fff"></div>
+      <div style="position:absolute;left:8px;bottom:30px;right:8px;height:5px;border-radius:1px;background:${t.gold}"></div>
+      <div style="position:absolute;left:8px;bottom:12px;width:20px;height:14px;border-radius:2px;background:rgba(255,255,255,.9)"></div>
+      <div style="position:absolute;left:34px;bottom:12px;width:20px;height:14px;border-radius:2px;background:rgba(255,255,255,.9)"></div>
+    </div>`;
+  } else if(t.layout==='corporate'){
+    inner=`<div style="position:absolute;inset:0;background:#fff;overflow:hidden">
+      <div style="position:absolute;left:8px;right:8px;top:10px;height:2px;background:${t.gold}"></div>
+      <div style="position:absolute;left:8px;top:16px;width:22px;height:8px;border-radius:2px;background:${t.navy};opacity:.15"></div>
+      <div style="position:absolute;left:8px;top:44px;width:30px;height:6px;border:1px solid ${t.navy};border-radius:6px"></div>
+      <div style="position:absolute;left:8px;top:56px;right:10px;height:6px;border-radius:1px;background:${t.navy}"></div>
+      <div style="position:absolute;left:8px;top:66px;right:16px;height:6px;border-radius:1px;background:${t.navy}"></div>
+      <div style="position:absolute;left:8px;bottom:10px;right:8px;height:1px;background:#e2e6ec"></div>
+    </div>`;
+  } else if(t.layout==='executive'){
+    inner=`<div style="position:absolute;inset:0;background:#fff;overflow:hidden;text-align:center">
+      <div style="position:absolute;left:18px;right:18px;top:14px;height:6px;border-radius:6px;border:1px solid ${t.navy};opacity:.5"></div>
+      <div style="position:absolute;left:10px;right:10px;top:30px;height:6px;border-radius:1px;background:${t.navy}"></div>
+      <div style="position:absolute;left:16px;right:16px;top:40px;height:6px;border-radius:1px;background:${t.navy}"></div>
+      <div style="position:absolute;left:30px;right:30px;top:54px;height:2px;background:${t.gold}"></div>
+      <div style="position:absolute;left:10px;top:64px;width:22px;height:16px;border-radius:2px;background:${t.navy};opacity:.12"></div>
+      <div style="position:absolute;right:10px;top:64px;width:22px;height:16px;border-radius:2px;background:${t.navy};opacity:.12"></div>
+    </div>`;
+  } else { // technical
+    inner=`<div style="position:absolute;inset:0;background:#fff;overflow:hidden">
+      <div style="position:absolute;left:0;top:0;bottom:0;width:22px;background:${t.navy}"></div>
+      <div style="position:absolute;left:28px;top:20px;right:10px;height:7px;border-radius:1px;background:${t.navy}"></div>
+      <div style="position:absolute;left:28px;top:32px;right:16px;height:7px;border-radius:1px;background:${t.navy}"></div>
+      <div style="position:absolute;left:28px;top:46px;right:10px;height:1px;background:#e2e6ec"></div>
+      <div style="position:absolute;left:28px;top:52px;width:14px;height:14px;border-radius:2px;background:${t.gold};opacity:.85"></div>
+      <div style="position:absolute;left:46px;top:52px;width:14px;height:14px;border-radius:2px;background:${t.navy};opacity:.15"></div>
+    </div>`;
+  }
+  return `<div style="position:relative;width:${W}px;height:${H}px;border-radius:6px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.15)">${inner}</div>`;
+}
+
+// Generic add/remove for the repeatable content lists (feature_cards, scope_cards,
+// control_testing, architecture_items, mobilization_phases, exclusions) in the
+// proposal review modal — lets the user add more or delete AI-drafted items
+// instead of being stuck with a fixed count.
+function propAddListItem(key, tmpl){
+  (PROP.content[key]=PROP.content[key]||[]).push(Object.assign({}, tmpl));
+  renderProposalModal();
+}
+function propRemoveListItem(key, i){
+  if(!PROP.content[key])return;
+  PROP.content[key].splice(i,1);
+  renderProposalModal();
+}
+function propAddBtn(label, onclick){
+  return `<button type="button" onclick="${onclick}" style="margin:4px 0 2px;padding:5px 10px;border-radius:7px;border:1.5px dashed var(--gray-300);background:transparent;color:var(--navy);font-size:12px;font-weight:600;cursor:pointer">+ ${esc(label)}</button>`;
+}
+function propRemoveBtn(key, i){
+  return `<button type="button" title="Remove" onclick="propRemoveListItem('${key}',${i})" style="flex:0 0 auto;width:26px;height:26px;border:none;border-radius:6px;background:var(--gray-100);color:var(--gray-500);font-size:12px;cursor:pointer">✕</button>`;
+}
 function propBulletsToText(arr){return (arr||[]).join('\n');}
 function propTextToBullets(str){return (str||'').split('\n').map(s=>s.trim()).filter(Boolean);}
 
@@ -4312,12 +4389,12 @@ function renderProposalModal(){
 function proposalReviewHTML(){
   const c=PROP.content;
   while((c.stats||(c.stats=[])).length<4)c.stats.push({label:'',value:''});
-  while((c.feature_cards||(c.feature_cards=[])).length<4)c.feature_cards.push({title:'',description:''});
-  while((c.scope_cards||(c.scope_cards=[])).length<4)c.scope_cards.push({title:'',description:''});
-  while((c.control_testing||(c.control_testing=[])).length<2)c.control_testing.push({title:'',bullets:[]});
-  while((c.architecture_items||(c.architecture_items=[])).length<6)c.architecture_items.push({label:'',value:''});
-  while((c.mobilization_phases||(c.mobilization_phases=[])).length<4)c.mobilization_phases.push({title:'',bullets:[]});
-  while((c.exclusions||(c.exclusions=[])).length<3)c.exclusions.push({title:'',text:''});
+  if(!(c.feature_cards||(c.feature_cards=[])).length)c.feature_cards.push({title:'',description:''});
+  if(!(c.scope_cards||(c.scope_cards=[])).length)c.scope_cards.push({title:'',description:''});
+  if(!(c.control_testing||(c.control_testing=[])).length)c.control_testing.push({title:'',bullets:[]});
+  if(!(c.architecture_items||(c.architecture_items=[])).length)c.architecture_items.push({label:'',value:''});
+  if(!(c.mobilization_phases||(c.mobilization_phases=[])).length)c.mobilization_phases.push({title:'',bullets:[]});
+  if(!(c.exclusions||(c.exclusions=[])).length)c.exclusions.push({title:'',text:''});
 
   const tierLabels={small:'Small scope',medium:'Medium scope',large:'Large scope',enterprise:'Enterprise scope'};
   return `<div style="max-height:52vh;overflow-y:auto;padding-right:8px;margin-top:8px">
@@ -4331,9 +4408,12 @@ function proposalReviewHTML(){
       ${c.cover_image?`<div style="position:relative;width:64px;height:56px;border-radius:6px;overflow:hidden;border:1.5px solid var(--gray-200)"><img src="${c.cover_image}" style="width:100%;height:100%;object-fit:cover"><button onclick="propRemoveCoverImage()" title="Remove image" style="position:absolute;top:2px;right:2px;width:16px;height:16px;border:none;border-radius:50%;background:#fff;color:#333;font-size:10px;line-height:16px;cursor:pointer;padding:0">✕</button></div>`:`<span style="font-size:12px;color:var(--gray-500)">Room photo, rendering, or client logo shown on the cover page</span>`}
     </div>
 
-    <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Template style</label>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
-      ${[['modern','Modern'],['corporate','Corporate'],['technical','Technical'],['executive','Executive']].map(([key,lbl])=>{const sel=(c.template_style||'modern')===key;return `<div onclick="propSetTemplateStyle('${key}')" style="cursor:pointer;padding:7px 4px;border-radius:8px;border:2px solid ${sel?'var(--navy)':'var(--gray-200)'};text-align:center;font-size:12px;font-weight:${sel?'700':'500'};color:${sel?'var(--navy)':'var(--gray-500)'}">${lbl}</div>`;}).join('')}
+    <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Template style — applies to the whole document</label>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px">
+      ${Object.keys(PROP_THEMES).map(key=>{const t=PROP_THEMES[key];const sel=(c.template_style||'modern')===key;return `<div onclick="propSetTemplateStyle('${key}')" style="cursor:pointer;padding:6px;border-radius:10px;border:2px solid ${sel?'var(--navy)':'var(--gray-200)'};text-align:center;background:${sel?'var(--navy-light)':'transparent'}">
+        <div style="display:flex;justify-content:center;margin-bottom:5px">${propTemplateSwatch(key)}</div>
+        <div style="font-size:11.5px;font-weight:${sel?'700':'500'};color:${sel?'var(--navy)':'var(--gray-500)'}">${t.label}</div>
+      </div>`;}).join('')}
     </div>
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Sections to include</label>
@@ -4350,29 +4430,33 @@ function proposalReviewHTML(){
     <textarea rows="3" style="width:100%;margin:6px 0 12px;padding:8px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" oninput="PROP.content.executive_summary=this.value">${esc(c.executive_summary||'')}</textarea>
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500)">Feature cards</label>
-    ${c.feature_cards.map((f,i)=>`<div style="display:flex;gap:8px;margin:6px 0"><input style="flex:1" placeholder="Title" value="${esc(f.title)}" oninput="PROP.content.feature_cards[${i}].title=this.value"><input style="flex:2" placeholder="Description" value="${esc(f.description)}" oninput="PROP.content.feature_cards[${i}].description=this.value"></div>`).join('')}
+    ${c.feature_cards.map((f,i)=>`<div style="display:flex;gap:8px;margin:6px 0;align-items:center"><input style="flex:1" placeholder="Title" value="${esc(f.title)}" oninput="PROP.content.feature_cards[${i}].title=this.value"><input style="flex:2" placeholder="Description" value="${esc(f.description)}" oninput="PROP.content.feature_cards[${i}].description=this.value">${propRemoveBtn('feature_cards',i)}</div>`).join('')}
+    ${propAddBtn('Add feature card', `propAddListItem('feature_cards',{title:'',description:''})`)}
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Scope of work cards</label>
-    ${c.scope_cards.map((f,i)=>`<div style="display:flex;gap:8px;margin:6px 0"><input style="flex:1" placeholder="Title" value="${esc(f.title)}" oninput="PROP.content.scope_cards[${i}].title=this.value"><input style="flex:2" placeholder="Description" value="${esc(f.description)}" oninput="PROP.content.scope_cards[${i}].description=this.value"></div>`).join('')}
+    ${c.scope_cards.map((f,i)=>`<div style="display:flex;gap:8px;margin:6px 0;align-items:center"><input style="flex:1" placeholder="Title" value="${esc(f.title)}" oninput="PROP.content.scope_cards[${i}].title=this.value"><input style="flex:2" placeholder="Description" value="${esc(f.description)}" oninput="PROP.content.scope_cards[${i}].description=this.value">${propRemoveBtn('scope_cards',i)}</div>`).join('')}
+    ${propAddBtn('Add scope card', `propAddListItem('scope_cards',{title:'',description:''})`)}
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Control & testing</label>
-    ${c.control_testing.map((t,i)=>`<div style="margin:6px 0"><input style="width:100%;margin-bottom:4px" placeholder="Section title" value="${esc(t.title)}" oninput="PROP.content.control_testing[${i}].title=this.value"><textarea rows="2" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" placeholder="One bullet per line" oninput="PROP.content.control_testing[${i}].bullets=propTextToBullets(this.value)">${esc(propBulletsToText(t.bullets))}</textarea></div>`).join('')}
+    ${c.control_testing.map((t,i)=>`<div style="display:flex;gap:8px;margin:6px 0;align-items:flex-start"><div style="flex:1"><input style="width:100%;margin-bottom:4px" placeholder="Section title" value="${esc(t.title)}" oninput="PROP.content.control_testing[${i}].title=this.value"><textarea rows="2" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" placeholder="One bullet per line" oninput="PROP.content.control_testing[${i}].bullets=propTextToBullets(this.value)">${esc(propBulletsToText(t.bullets))}</textarea></div>${propRemoveBtn('control_testing',i)}</div>`).join('')}
+    ${propAddBtn('Add control/testing topic', `propAddListItem('control_testing',{title:'',bullets:[]})`)}
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Solution architecture</label>
-    <div class="field-grid g2">
-    ${c.architecture_items.map((a,i)=>`<div style="display:flex;gap:6px;margin:4px 0"><input style="flex:1" placeholder="Label" value="${esc(a.label)}" oninput="PROP.content.architecture_items[${i}].label=this.value"><input style="flex:1" placeholder="Value" value="${esc(a.value)}" oninput="PROP.content.architecture_items[${i}].value=this.value"></div>`).join('')}
-    </div>
+    ${c.architecture_items.map((a,i)=>`<div style="display:flex;gap:6px;margin:4px 0;align-items:center"><input style="flex:1" placeholder="Label" value="${esc(a.label)}" oninput="PROP.content.architecture_items[${i}].label=this.value"><input style="flex:1" placeholder="Value" value="${esc(a.value)}" oninput="PROP.content.architecture_items[${i}].value=this.value">${propRemoveBtn('architecture_items',i)}</div>`).join('')}
+    ${propAddBtn('Add architecture item', `propAddListItem('architecture_items',{label:'',value:''})`)}
     <textarea rows="2" style="width:100%;margin:6px 0;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" placeholder="Architecture note" oninput="PROP.content.architecture_note=this.value">${esc(c.architecture_note||'')}</textarea>
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Mobilization phases</label>
-    ${c.mobilization_phases.map((p,i)=>`<div style="margin:6px 0"><input style="width:100%;margin-bottom:4px" placeholder="Phase title" value="${esc(p.title)}" oninput="PROP.content.mobilization_phases[${i}].title=this.value"><textarea rows="2" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" placeholder="One bullet per line" oninput="PROP.content.mobilization_phases[${i}].bullets=propTextToBullets(this.value)">${esc(propBulletsToText(p.bullets))}</textarea></div>`).join('')}
+    ${c.mobilization_phases.map((p,i)=>`<div style="display:flex;gap:8px;margin:6px 0;align-items:flex-start"><div style="flex:1"><input style="width:100%;margin-bottom:4px" placeholder="Phase title" value="${esc(p.title)}" oninput="PROP.content.mobilization_phases[${i}].title=this.value"><textarea rows="2" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" placeholder="One bullet per line" oninput="PROP.content.mobilization_phases[${i}].bullets=propTextToBullets(this.value)">${esc(propBulletsToText(p.bullets))}</textarea></div>${propRemoveBtn('mobilization_phases',i)}</div>`).join('')}
+    ${propAddBtn('Add phase', `propAddListItem('mobilization_phases',{title:'',bullets:[]})`)}
 
     <div class="fld2" style="margin-top:10px"><label>Warranty period</label><input value="${esc(c.warranty_years||'')}" oninput="PROP.content.warranty_years=this.value"></div>
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Support coverage (one per line)</label>
     <textarea rows="3" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" oninput="PROP.content.support_bullets=propTextToBullets(this.value)">${esc(propBulletsToText(c.support_bullets))}</textarea>
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Exclusions</label>
-    ${c.exclusions.map((e,i)=>`<div style="display:flex;gap:8px;margin:6px 0"><input style="flex:1" placeholder="Title" value="${esc(e.title)}" oninput="PROP.content.exclusions[${i}].title=this.value"><input style="flex:2" placeholder="Text" value="${esc(e.text)}" oninput="PROP.content.exclusions[${i}].text=this.value"></div>`).join('')}
+    ${c.exclusions.map((e,i)=>`<div style="display:flex;gap:8px;margin:6px 0;align-items:center"><input style="flex:1" placeholder="Title" value="${esc(e.title)}" oninput="PROP.content.exclusions[${i}].title=this.value"><input style="flex:2" placeholder="Text" value="${esc(e.text)}" oninput="PROP.content.exclusions[${i}].text=this.value">${propRemoveBtn('exclusions',i)}</div>`).join('')}
+    ${propAddBtn('Add exclusion', `propAddListItem('exclusions',{title:'',text:''})`)}
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">General notes (one per line)</label>
     <textarea rows="3" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" oninput="PROP.content.general_notes=propTextToBullets(this.value)">${esc(propBulletsToText(c.general_notes))}</textarea>
