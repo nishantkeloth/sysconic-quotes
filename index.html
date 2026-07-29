@@ -3238,7 +3238,7 @@ function printHTML(forExport){
       const cellB='border-right:1px solid #e9ecf2';
       s.items.forEach((it,idx)=>{const c=calcItem(it);const vatAmt=o.vatEnabled?c.tp*((o.vatRate||5)/100):null;srows+=`<tr style="background:${idx%2===0?'#fff':TH.bg};page-break-inside:avoid">
         <td style="padding:${DP('10px 8px')};font-size:${SZ(11,'table')}px;color:#a8b0bd;text-align:center;${cellB};border-bottom:1px solid #eef1f5">${rn++}</td>
-        ${IMG?`<td style="padding:${DP('4px 6px')};text-align:center;${cellB};border-bottom:1px solid #eef1f5">${it.img?`<img src="${esc(it.img)}" style="width:32px;height:32px;object-fit:contain;border-radius:4px;border:1px solid #e2e6ec">`:''}</td>`:''}
+        ${IMG?`<td style="padding:${DP('4px 6px')};text-align:center;${cellB};border-bottom:1px solid #eef1f5">${it.img?`<div style="width:32px;height:32px;border-radius:4px;border:1px solid #e2e6ec;overflow:hidden;display:inline-block"><img src="${esc(it.img)}" style="width:100%;height:100%;object-fit:contain;display:block"></div>`:''}</td>`:''}
         <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;white-space:nowrap;${cellB};border-bottom:1px solid #eef1f5">${esc(it.brand)}</td>
         <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;white-space:nowrap;${cellB};border-bottom:1px solid #eef1f5">${esc(it.model)}</td>
         <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#555;white-space:pre-line;${cellB};border-bottom:1px solid #eef1f5">${esc(it.desc)}</td>
