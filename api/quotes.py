@@ -1084,6 +1084,31 @@ def _safe_attachment_name(name):
     name = re.sub(r'[\r\n\t]+', ' ', (name or 'attachment')).strip()
     return name[:150] or 'attachment'
 
+_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+MAX_EMAIL_RECIPIENTS = 20  # per field (To / CC) -- generous, just a sanity cap
+
+def _parse_email_list(raw, field_label):
+    """Comma/semicolon-separated addresses (or a JSON array, either works) ->
+    (deduped list, error_message). Returns a clear error rather than silently
+    dropping a bad address -- a typo'd recipient failing silently on a
+    customer-facing email is worse than a blocked send the user can fix and
+    resend immediately."""
+    parts = raw if isinstance(raw, list) else re.split(r'[;,]', raw or '')
+    seen, out, bad = set(), [], []
+    for p in parts:
+        addr = (p or '').strip()
+        if not addr: continue
+        if not _EMAIL_RE.match(addr):
+            bad.append(addr); continue
+        key = addr.lower()
+        if key in seen: continue
+        seen.add(key); out.append(addr)
+    if bad:
+        return None, f'{field_label} has an invalid email address: {", ".join(bad)}'
+    if len(out) > MAX_EMAIL_RECIPIENTS:
+        return None, f'{field_label} has too many addresses (max {MAX_EMAIL_RECIPIENTS}).'
+    return out, None
+
 def _decode_email_attachment(att):
     """One {filename, content_type, data} entry from the frontend -> a Graph
     fileAttachment dict, or (None, error_message) if it fails validation.
@@ -1124,13 +1149,16 @@ def email_quote(qid):
         return jsonify({'error': 'You don\'t have permission to email this quote — ask a Company Admin to enable "view all quotes" for your account, or have the quote creator send it'}), 403
 
     d = request.json or {}
-    to_email = (d.get('to') or '').strip()
+    to_list, err = _parse_email_list(d.get('to'), 'To')
+    if err: return jsonify({'error': err}), 400
+    if not to_list:
+        return jsonify({'error': 'Recipient email is required'}), 400
+    cc_list, err = _parse_email_list(d.get('cc'), 'CC')
+    if err: return jsonify({'error': err}), 400
     subject = (d.get('subject') or f"Quotation — {quote.get('title') or 'Sysconic'}").strip()
     message = d.get('message') or ''
     html = d.get('html') or ''
     from_email = (d.get('from_email') or '').strip()
-    if not to_email:
-        return jsonify({'error': 'Recipient email is required'}), 400
     if not html:
         return jsonify({'error': 'No quote HTML provided to render'}), 400
 
@@ -1206,7 +1234,7 @@ def email_quote(qid):
         'message': {
             'subject': subject,
             'body': {'contentType': 'HTML', 'content': body_html},
-            'toRecipients': [{'emailAddress': {'address': to_email}}],
+            'toRecipients': [{'emailAddress': {'address': a}} for a in to_list],
             'from': {'emailAddress': {'address': sender_email}},
             'attachments': [{
                 '@odata.type': '#microsoft.graph.fileAttachment',
@@ -1217,6 +1245,8 @@ def email_quote(qid):
         },
         'saveToSentItems': True,
     }
+    if cc_list:
+        payload['message']['ccRecipients'] = [{'emailAddress': {'address': a}} for a in cc_list]
 
     try:
         r = requests.post(
@@ -1240,7 +1270,8 @@ def email_quote(qid):
     # changing.
     next_customer_version = (quote.get('customer_version') or 0) + 1
     sb.table('quote_emails').insert({
-        'quote_id': qid, 'sent_by': claims['user_id'], 'sent_to': to_email, 'subject': subject,
+        'quote_id': qid, 'sent_by': claims['user_id'], 'sent_to': ', '.join(to_list),
+        'sent_cc': ', '.join(cc_list) or None, 'subject': subject,
         'version_number': next_customer_version,
         'title': quote.get('title'), 'customer': quote.get('customer'),
         'currency': quote.get('currency'), 'exchange_rate': quote.get('exchange_rate'),
@@ -1253,7 +1284,9 @@ def email_quote(qid):
         quote_update['status'] = 'sent'
     sb.table('quotes').update(quote_update).eq('id', qid).execute()
 
-    _log_activity(qid, claims['user_id'], 'emailed_to_customer', f"v{next_customer_version} sent to {to_email}")
+    log_note = f"v{next_customer_version} sent to {', '.join(to_list)}"
+    if cc_list: log_note += f" (cc: {', '.join(cc_list)})"
+    _log_activity(qid, claims['user_id'], 'emailed_to_customer', log_note)
 
     return jsonify({'ok': True, 'sent_from': sender_email, 'customer_version': next_customer_version})
 
