@@ -519,39 +519,75 @@ def numbered_phases(phases, CW, TH=None):
                           ('BOTTOMPADDING',(0,0),(-1,-1),8),('LEFTPADDING',(0,0),(-1,-1),0)]))
     return t
 
-def bom_table(sections, CW, cur, with_price, pricing_type='markup', TH=None):
+BOM_IMG_COL_MM = 15  # width of the BOM table's "Img" column
+BOM_IMG_BOX_MM = 12  # square box the thumbnail itself is fit inside
+
+def _bom_item_image(url, cache):
+    """Fetches a product photo (the same signed product-images URL saved on the
+    quote line as it.img) for one BOM row and returns a small fixed-size
+    ReportLab Image flowable, or '' if there's no image or the fetch/decode
+    fails -- a missing/broken product photo must never break BOM generation.
+    `cache` is a dict shared across every bom_table() call within one PDF
+    render so the same product repeated across sections/options is only
+    downloaded once."""
+    if not url:
+        return ''
+    if url in cache:
+        return cache[url]
+    flow = ''
+    try:
+        img_bytes = _fetch_bytes(url, timeout=8)
+        if img_bytes:
+            reader = ImageReader(io.BytesIO(img_bytes))
+            iw, ih = reader.getSize()
+            if iw and ih:
+                box = BOM_IMG_BOX_MM * mm
+                dw, dh = _img_contain_rect(iw, ih, box, box)
+                flow = Image(io.BytesIO(img_bytes), width=dw, height=dh)
+    except Exception:
+        flow = ''
+    cache[url] = flow
+    return flow
+
+def bom_table(sections, CW, cur, with_price, pricing_type='markup', TH=None, img_cache=None):
     TH = TH or _theme_for('modern')
+    if img_cache is None: img_cache = {}
     S_th = ParagraphStyle('th', fontName='Helvetica-Bold', fontSize=7.8, textColor=white)
     S_b  = ParagraphStyle('b', fontName='Helvetica', fontSize=8, textColor=TH['txt'], leading=10)
     S_bc = ParagraphStyle('bc', fontName='Helvetica', fontSize=8, textColor=TH['txt'], alignment=TA_CENTER)
     S_br = ParagraphStyle('br', fontName='Helvetica', fontSize=8, textColor=TH['txt'], alignment=TA_RIGHT)
     flow = []
+    img_w = BOM_IMG_COL_MM * mm
+    rem = CW - img_w
     for s in sections:
         if s.get('name'):
             flow.append(Paragraph(f"<b>{esc_p(s['name'])}</b>", ParagraphStyle('sn', fontName='Helvetica-Bold', fontSize=10, textColor=TH['navy'])))
             flow.append(Spacer(1, 1.5*mm))
         if with_price:
-            hdr = ['#','Brand','Model','Description', f'Unit Price ({cur})', 'Qty', 'UOM', f'Total ({cur})']
-            widths = [CW*0.04, CW*0.10, CW*0.13, CW*0.32, CW*0.13, CW*0.06, CW*0.06, CW*0.16]
+            hdr = ['#','Img','Brand','Model','Description', f'Unit Price ({cur})', 'Qty', 'UOM', f'Total ({cur})']
+            pct = [0.04, 0.10, 0.13, 0.32, 0.13, 0.06, 0.06, 0.16]
         else:
-            hdr = ['#','Brand','Model','Description','Qty','UOM']
-            widths = [CW*0.05, CW*0.15, CW*0.19, CW*0.44, CW*0.08, CW*0.09]
+            hdr = ['#','Img','Brand','Model','Description','Qty','UOM']
+            pct = [0.05, 0.15, 0.19, 0.44, 0.08, 0.09]
+        widths = [rem*pct[0], img_w] + [rem*p for p in pct[1:]]
         rows = [[Paragraph(h, S_th) for h in hdr]]
         rn = 1
         for it in (s.get('items') or []):
             up, tp = calc_item(it, pricing_type)
+            img_flow = _bom_item_image(it.get('img'), img_cache)
             if with_price:
-                rows.append([Paragraph(str(rn), S_bc), Paragraph(esc_p(it.get('brand') or ''), S_b),
+                rows.append([Paragraph(str(rn), S_bc), img_flow, Paragraph(esc_p(it.get('brand') or ''), S_b),
                              Paragraph(esc_p(it.get('model') or ''), S_b), Paragraph(esc_p(it.get('desc') or ''), S_b),
                              Paragraph(fmt(up), S_br), Paragraph(fmt(_num(it.get('qty'))), S_bc),
                              Paragraph(esc_p(it.get('uom') or 'Pcs'), S_bc), Paragraph(fmt(tp), S_br)])
             else:
-                rows.append([Paragraph(str(rn), S_bc), Paragraph(esc_p(it.get('brand') or ''), S_b),
+                rows.append([Paragraph(str(rn), S_bc), img_flow, Paragraph(esc_p(it.get('brand') or ''), S_b),
                              Paragraph(esc_p(it.get('model') or ''), S_b), Paragraph(esc_p(it.get('desc') or ''), S_b),
                              Paragraph(fmt(_num(it.get('qty'))), S_bc), Paragraph(esc_p(it.get('uom') or 'Pcs'), S_bc)])
             rn += 1
         tbl = Table(rows, colWidths=widths, repeatRows=1)
-        style = [('BACKGROUND',(0,0),(-1,0),TH['navy']),('VALIGN',(0,0),(-1,-1),'TOP'),
+        style = [('BACKGROUND',(0,0),(-1,0),TH['navy']),('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+                 ('ALIGN',(1,0),(1,-1),'CENTER'),
                  ('LINEBELOW',(0,1),(-1,-1),0.4,TH['grayb']),('TOPPADDING',(0,0),(-1,-1),4.5),
                  ('BOTTOMPADDING',(0,0),(-1,-1),4.5),('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5)]
         for ri in range(1, len(rows)):
@@ -990,6 +1026,7 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
     ])
 
     CW = doc.width
+    bom_img_cache = {}  # shared across every bom_table() call below so a product repeated across sections/options is only fetched once
     S = {
         'h1': ParagraphStyle('h1', fontName='Helvetica-Bold', fontSize=18, textColor=TH['navy'], leading=22, spaceBefore=2, spaceAfter=2),
         'body': ParagraphStyle('body', fontName='Helvetica', fontSize=9, textColor=TH['txt'], leading=13),
@@ -1081,7 +1118,7 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
             if len(opts) > 1 and o.get('label'):
                 E.append(Paragraph(f"<b>{esc_p(o['label'])}</b>", ParagraphStyle('optl', fontName='Helvetica-Bold', fontSize=11, textColor=TH['navy'])))
                 E.append(Spacer(1, 2*mm))
-            E += bom_table(secs, CW, cur, with_price=(kind == 'combined'), pricing_type=pt, TH=TH)
+            E += bom_table(secs, CW, cur, with_price=(kind == 'combined'), pricing_type=pt, TH=TH, img_cache=bom_img_cache)
 
         if kind == 'combined':
             for o in opts:
@@ -1149,7 +1186,7 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
             if len(opts) > 1 and o.get('label'):
                 E.append(Paragraph(f"<b>{esc_p(o['label'])}</b>", ParagraphStyle('optl2', fontName='Helvetica-Bold', fontSize=11, textColor=TH['navy'])))
                 E.append(Spacer(1, 2*mm))
-            E += bom_table(secs, CW, cur, with_price=True, pricing_type=pt, TH=TH)
+            E += bom_table(secs, CW, cur, with_price=True, pricing_type=pt, TH=TH, img_cache=bom_img_cache)
             ts, vat_on, rate, vat, grand = calc_opt(o, pt)
             trows = [[Paragraph('Subtotal', S['body']), Paragraph(f"{cur} {fmt(ts)}", S['body_r'])],
                      [Paragraph(f"VAT {rate:g}%" if vat_on else "VAT", S['body']),
