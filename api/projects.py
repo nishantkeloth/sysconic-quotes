@@ -1015,6 +1015,14 @@ class _ZohoSync:
                 # billing -- for hourly/daily/task billing types it's a
                 # per-hour/day rate, not a project value, so don't use it there.
                 'total_project_cost': (r.get('rate') if r.get('billing_type') == 'fixed_cost_for_project' else None),
+                # Cost Budget -- Zoho's own budget_type='total_project_cost'
+                # money-based budgeting field (cost_budget_amount), confirmed
+                # against Zoho's API reference for the *create* request body
+                # in create_project() above; not yet confirmed this exact key
+                # is what a GET /projects response echoes back, so treat a
+                # None here as "check the field name" if Zoho's UI clearly
+                # shows a Cost Budget but this keeps coming back empty.
+                'cost_budget': _num(r.get('cost_budget_amount')) or None,
             })
         return out
 
@@ -1033,6 +1041,7 @@ class _ZohoSync:
             'customer_name': (r.get('customer_name') or '')[:500],
             'status': r.get('status'),
             'total_project_cost': (r.get('rate') if r.get('billing_type') == 'fixed_cost_for_project' else None),
+            'cost_budget': _num(r.get('cost_budget_amount')) or None,
         }
 
 ZOHO = _ZohoSync()
@@ -1193,6 +1202,31 @@ def _quote_baseline_for_zoho(company_id, zoho_project_id, zoho_project_no=None):
     except Exception:
         return None
 
+def _zoho_budget_baseline(zp):
+    """Fallback 'baseline' for a Zoho-imported project with no linked QTcal
+    quote (_quote_baseline_for_zoho came back empty) -- built from Zoho's
+    own project-level Revenue Budget (Total Project Cost / `rate`) and Cost
+    Budget (`cost_budget_amount`) fields instead, the same two numbers
+    Zoho's own Edit Project screen shows. Lets Original GP% show a real
+    figure for these projects instead of a permanent '--'. Deliberately
+    weaker than a quote-frozen baseline (it moves if someone edits the
+    budget fields in Zoho -- see _zoho_project_patch, which keeps it live
+    on every sync rather than freezing it), so _quote_baseline_for_zoho
+    always wins when a real quote is linked. Returns None unless both
+    figures are present and positive -- a revenue-only project falls
+    through to the older revenue-only patch below instead of showing a
+    misleading 100% GP."""
+    revenue = _num(zp.get('total_project_cost'))
+    cost = _num(zp.get('cost_budget'))
+    if revenue <= 0 or cost <= 0:
+        return None
+    gp = revenue - cost
+    return {
+        'revenue_forecast': revenue, 'original_selling_price': revenue,
+        'original_estimated_cost': cost, 'original_gp': gp,
+        'original_gp_pct': gp / revenue * 100.0,
+    }
+
 def _upsert_zoho_project(company_id, zp):
     """Create the local `projects` row for a Zoho project not seen before.
     Shared by the full portfolio import and the targeted Sync Selected
@@ -1212,13 +1246,19 @@ def _upsert_zoho_project(company_id, zp):
         # commercial baseline so Original GP% / Erosion mean something.
         insert.update(baseline)
     else:
-        cost = _num(zp.get('total_project_cost'))
-        if cost:
-            # No quote baseline exists for an imported project, so Zoho's own
-            # Total Project Cost is the best available stand-in for Value --
-            # revenue_forecast is what the Portfolio/detail Value figures read.
-            insert['revenue_forecast'] = cost
-            insert['original_selling_price'] = cost
+        # No linked quote -- fall back to Zoho's own Revenue Budget/Cost
+        # Budget fields (see _zoho_budget_baseline) so Original GP% still
+        # shows something instead of a permanent '--'.
+        budget_baseline = _zoho_budget_baseline(zp)
+        if budget_baseline:
+            insert.update(budget_baseline)
+        else:
+            cost = _num(zp.get('total_project_cost'))
+            if cost:
+                # No Cost Budget either -- Zoho's Total Project Cost is at
+                # least a stand-in for Value, just with no GP% possible.
+                insert['revenue_forecast'] = cost
+                insert['original_selling_price'] = cost
     sb.table('projects').insert(insert).execute()
 
 def _zoho_project_patch(company_id, row, zp):
@@ -1238,17 +1278,24 @@ def _zoho_project_patch(company_id, row, zp):
     # real baseline frozen from an awarded quote (original_estimated_cost>0).
     if row.get('source') == 'zoho_import' and not _num(row.get('original_estimated_cost')):
         baseline = _quote_baseline_for_zoho(company_id, zp['zoho_project_id'], zp.get('zoho_project_no'))
+        if not baseline:
+            # No linked quote -- fall back to Zoho's own Revenue Budget/Cost
+            # Budget fields so Original GP% shows a real figure instead of
+            # staying '--' forever for every Zoho-imported project.
+            baseline = _zoho_budget_baseline(zp)
         if baseline:
-            patch.update(baseline)
+            for k, v in baseline.items():
+                if row.get(k) != v:
+                    patch[k] = v
         else:
-            # No linked quote either -- Zoho's own Total Project Cost is the
-            # only source of truth for Value on a baseline-less imported
-            # project. Kept live on every sync (not just backfilled once
-            # when empty, as before) -- otherwise an edit to Total Project
-            # Cost inside Zoho after the initial import never reaches
-            # QTcal, which is exactly what Nish hit after correcting a
-            # VAT-inclusive figure in Zoho and re-syncing: the old cached
-            # value just sat there unchanged.
+            # Neither a linked quote nor a Zoho Cost Budget -- Zoho's Total
+            # Project Cost is at least a stand-in for Value (no GP% possible
+            # without a cost figure to compare it to). Kept live on every
+            # sync (not just backfilled once when empty, as before) --
+            # otherwise an edit to Total Project Cost inside Zoho after the
+            # initial import never reaches QTcal, which is exactly what
+            # Nish hit after correcting a VAT-inclusive figure in Zoho and
+            # re-syncing: the old cached value just sat there unchanged.
             cost = _num(zp.get('total_project_cost'))
             if cost and cost != _num(row.get('revenue_forecast')):
                 patch['revenue_forecast'] = cost
