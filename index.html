@@ -2831,7 +2831,7 @@ function editorHTML(){
       <div class="fld2"><label>Quote title</label><input value="${esc(q.title)}" oninput="A.activeQuote.title=this.value;schedSave()"></div>
       <div class="fld2" style="position:relative"><label>Customer</label><input id="custInput" value="${esc(q.customer)}" autocomplete="off" style="padding-right:36px" oninput="A.activeQuote.customer=this.value;schedSave();zohoSearch(this.value)" onblur="setTimeout(hideCustDrop,180)" placeholder="Type or search Zoho Books…"><button class="cust-search-btn" title="Search customers in Zoho Books" onclick="openCustModal()">🔍</button><div id="custDrop" class="cust-drop" style="display:none"></div></div>
       <div class="fld2"><label>Option label</label><input value="${esc(o.label)}" oninput="opts()[A.activeOpt].label=this.value;draw()"></div>
-      <div class="fld2"><label>Quote ref</label><input value="${esc(o.ref||'')}" oninput="opts()[A.activeOpt].ref=this.value;schedSave()"></div>
+      <div class="fld2"><label>Quote ref</label><input value="${esc(q.quote_ref||o.ref||'')}" readonly title="Auto-generated — configure the prefix or number range in Company Profile → Quotation numbering"></div>
     </div>
     <div class="field-grid g4">
       <div class="fld2"><label>Date</label><input type="date" value="${o.date||''}" oninput="opts()[A.activeOpt].date=this.value;schedSave()"></div>
@@ -3057,7 +3057,7 @@ function buildExportHTML(){
 // reminder in case pages get separated after printing.
 function pdfFooterHTML(){
   const q=A.activeQuote;
-  const ref=q?.quote_data?.[0]?.ref||q?.title||'';
+  const ref=q?.quote_ref||q?.quote_data?.[0]?.ref||q?.title||'';
   const web=PRINTCO?.website||'';
   const left=[ref,web].filter(Boolean).join(' · ');
   const dark=getPrintTheme().dark;
@@ -3079,7 +3079,7 @@ async function downloadPDF(){
     // specific (page.pdf() builds its own repeating footer instead), so they're
     // no longer sent. Old route/pdfFooterHTML() left in place as a fallback.
     const r=await fetch('/api/pdf/render2',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+A.token},
-      body:JSON.stringify({html, filename:'Quotation-'+(q.quote_data?.[0]?.ref||q.title||'quote').replace(/[^\w\-]+/g,'-')+'.pdf'})});
+      body:JSON.stringify({html, filename:'Quotation-'+(q.quote_ref||q.quote_data?.[0]?.ref||q.title||'quote').replace(/[^\w\-]+/g,'-')+'.pdf'})});
     if(!r.ok){const e=await r.json().catch(()=>({}));alert(e.error||'PDF generation failed');return;}
     const blob=await r.blob();
     const cd=r.headers.get('Content-Disposition')||'';
@@ -3313,7 +3313,7 @@ function printHTML(forExport){
         </td>
       </tr></table>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0 18px">
-        <div style="background:${TH.bg};color:${TH.text};font-size:${SZ(11,'body')}px;font-weight:700;padding:5px 14px;border-radius:20px">${esc(o.ref)}</div>
+        <div style="background:${TH.bg};color:${TH.text};font-size:${SZ(11,'body')}px;font-weight:700;padding:5px 14px;border-radius:20px">${esc(q.quote_ref||o.ref||'')}</div>
         <div style="background:#f2f6fc;color:#5a6475;font-size:${SZ(11,'body')}px;font-weight:600;padding:5px 14px;border-radius:20px">${o.date}</div>
         
         ${!multi&&(q.quote_data||[]).length>1?`<div style="background:#fef3c7;color:#92400e;font-size:${SZ(11,'body')}px;font-weight:700;padding:5px 14px;border-radius:20px">${esc(o.label)}</div>`:''}
