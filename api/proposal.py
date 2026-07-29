@@ -439,38 +439,68 @@ def stat_row(stats, CW, TH=None):
 def esc_p(s):
     return str(s).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
 
+def _fixed_col_grid(items, CW, ncols, cell_builder, TH=None, colgap=4*mm, rowgap=3*mm, pad=10, box_w=0.6):
+    """Lays `items` out into a grid of ncols columns, one flowable-list per card built
+    by cell_builder(item). BACKGROUND/BOX are applied per-cell directly on THIS single
+    outer table (via exact-cell TableStyle coordinates), not on a nested per-card Table --
+    that's what makes every card in a row stretch its background/border to match the
+    tallest card in that row when descriptions wrap to different line counts, instead of
+    each card's box only covering its own (shorter) content height.
+    Real gutters between cards are separate spacer columns/rows (not padding), so cards
+    stay visually distinct with the page background showing through between them.
+    """
+    TH = TH or _theme_for('modern')
+    n = len(items)
+    cw = (CW - colgap*(ncols-1)) / ncols
+    colWidths = []
+    for i in range(ncols):
+        colWidths.append(cw)
+        if i < ncols-1: colWidths.append(colgap)
+    total_cols = len(colWidths)
+    nrows = (n + ncols - 1) // ncols
+    data = []
+    style_cmds = [('VALIGN',(0,0),(-1,-1),'TOP'),
+                  ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
+                  ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0)]
+    for r in range(nrows):
+        if r > 0:
+            data.append([Spacer(1, rowgap)] * total_cols)
+        row_idx = len(data)
+        row_cells = [''] * total_cols
+        for c in range(ncols):
+            idx = r*ncols + c
+            if idx >= n: continue
+            col = c * 2
+            row_cells[col] = cell_builder(items[idx])
+            style_cmds += [
+                ('BACKGROUND',(col,row_idx),(col,row_idx),TH['cardbg']),
+                ('BOX',(col,row_idx),(col,row_idx),box_w,TH['grayb']),
+                ('TOPPADDING',(col,row_idx),(col,row_idx),pad),
+                ('BOTTOMPADDING',(col,row_idx),(col,row_idx),pad),
+                ('LEFTPADDING',(col,row_idx),(col,row_idx),pad),
+                ('RIGHTPADDING',(col,row_idx),(col,row_idx),pad),
+            ]
+        data.append(row_cells)
+    data.append([Spacer(1, rowgap)] * total_cols)  # trailing margin before whatever follows
+    t = Table(data, colWidths=colWidths)
+    t.setStyle(TableStyle(style_cmds))
+    return t
+
 def card_grid(cards, CW, accent=None, TH=None):
     """2-column grid of feature/scope cards, each with a small accent block + title + description."""
     TH = TH or _theme_for('modern')
     accent = accent or TH['gold']
     S_title = ParagraphStyle('ct', fontName='Helvetica-Bold', fontSize=9.5, textColor=TH['navy'], leading=12)
     S_desc  = ParagraphStyle('cd', fontName='Helvetica', fontSize=8, textColor=TH['txt'], leading=11)
-    cells, row = [], []
-    gap = 4*mm
-    cw = (CW - gap) / 2
-    for i, c in enumerate(cards):
-        inner = Table([
-            [Table([['']], colWidths=[6*mm], rowHeights=[6*mm], style=TableStyle([('BACKGROUND',(0,0),(-1,-1),accent)]))],
-            [Paragraph(esc_p(c.get('title','')), S_title)],
-            [Paragraph(esc_p(c.get('description','')), S_desc)],
-        ], colWidths=[cw-16])
-        inner.setStyle(TableStyle([('TOPPADDING',(0,0),(-1,-1),2),('BOTTOMPADDING',(0,0),(0,0),4),
-                                   ('BOTTOMPADDING',(1,0),(-1,-1),3),('LEFTPADDING',(0,0),(-1,-1),0)]))
-        card = Table([[inner]], colWidths=[cw])
-        card.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),TH['cardbg']),('BOX',(0,0),(-1,-1),0.6,TH['grayb']),
-                                  ('TOPPADDING',(0,0),(-1,-1),10),('BOTTOMPADDING',(0,0),(-1,-1),10),
-                                  ('LEFTPADDING',(0,0),(-1,-1),10),('RIGHTPADDING',(0,0),(-1,-1),10)]))
-        row.append(card)
-        if len(row) == 2:
-            cells.append(row); row = []
-    if row:
-        row.append(Spacer(1,1))
-        cells.append(row)
-    t = Table(cells, colWidths=[cw, gap, cw][:2] if False else [cw, cw], spaceBefore=0)
-    style = [('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
-             ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),4*mm),('VALIGN',(0,0),(-1,-1),'TOP')]
-    t.setStyle(TableStyle(style))
-    return t
+    def _build(c):
+        return [
+            Table([['']], colWidths=[6*mm], rowHeights=[6*mm], style=TableStyle([('BACKGROUND',(0,0),(-1,-1),accent)])),
+            Spacer(1, 3*mm),
+            Paragraph(esc_p(c.get('title','')), S_title),
+            Spacer(1, 2*mm),
+            Paragraph(esc_p(c.get('description','')), S_desc),
+        ]
+    return _fixed_col_grid(cards, CW, 2, _build, TH=TH, colgap=4*mm, pad=10)
 
 def numbered_phases(phases, CW, TH=None):
     TH = TH or _theme_for('modern')
@@ -1023,23 +1053,12 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
             # proposal's extra architecture_items (see SCOPE_TARGETS) render
             # in full instead of being silently cut off past the 6th.
             items = content['architecture_items']
-            rows, row = [], []
-            for it in items:
-                cell = Table([[Paragraph(f"<b>{esc_p(it.get('label',''))}</b>", ParagraphStyle('al', fontName='Helvetica-Bold', fontSize=8.5, textColor=TH['navy']))],
-                              [Paragraph(esc_p(it.get('value','')), ParagraphStyle('av', fontName='Helvetica', fontSize=8, textColor=TH['txt'], leading=10))]],
-                             colWidths=[(CW-6*mm)/3])
-                cell.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),TH['cardbg']),('BOX',(0,0),(-1,-1),0.5,TH['grayb']),
-                                          ('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8),
-                                          ('LEFTPADDING',(0,0),(-1,-1),8),('RIGHTPADDING',(0,0),(-1,-1),8)]))
-                row.append(cell)
-                if len(row) == 3: rows.append(row); row = []
-            if row:
-                while len(row) < 3: row.append(Spacer(1,1))
-                rows.append(row)
-            grid = Table(rows, colWidths=[(CW-6*mm)/3]*3, spaceBefore=2)
-            grid.setStyle(TableStyle([('LEFTPADDING',(0,0),(-1,-1),0),('TOPPADDING',(0,0),(-1,-1),0),
-                                      ('BOTTOMPADDING',(0,0),(-1,-1),3*mm),('VALIGN',(0,0),(-1,-1),'TOP')]))
-            E.append(grid)
+            S_al = ParagraphStyle('al', fontName='Helvetica-Bold', fontSize=8.5, textColor=TH['navy'])
+            S_av = ParagraphStyle('av', fontName='Helvetica', fontSize=8, textColor=TH['txt'], leading=10)
+            def _arch_cell(it):
+                return [Paragraph(f"<b>{esc_p(it.get('label',''))}</b>", S_al), Spacer(1, 1.5*mm),
+                        Paragraph(esc_p(it.get('value','')), S_av)]
+            E.append(_fixed_col_grid(items, CW, 3, _arch_cell, TH=TH, colgap=3*mm, pad=8, box_w=0.5))
             if content.get('architecture_note'):
                 E.append(Spacer(1, 2*mm)); E.append(Paragraph(content['architecture_note'], S['body']))
 
