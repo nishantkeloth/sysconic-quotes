@@ -1923,8 +1923,12 @@ function defaultEmailDraft(){
   lines.push('','Please let us know if you have any questions or would like to proceed.','','Best regards,',A.user?.name||'');
   return lines.join('\n');
 }
+let EML={attachments:[]};
+const EML_MAX_FILE_BYTES=3*1024*1024, EML_MAX_TOTAL_BYTES=10*1024*1024, EML_MAX_COUNT=5;
+function emlFmtSize(b){return b<1024*1024?Math.round(b/1024)+' KB':(b/1024/1024).toFixed(1)+' MB';}
 function showEmailQuoteModal(){
   if(!A.activeQuote)return;
+  EML={attachments:[]};
   const fromVal=A.user?.ms365_email||A.user?.email||'';
   document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="emlOverlay" onclick="if(event.target===this)closeEmailQuoteModal()">'+
     '<div class="modal" style="max-width:480px">'+
@@ -1939,9 +1943,37 @@ function showEmailQuoteModal(){
     '<input id="emlSubject" class="iinput" style="width:100%;border:1.5px solid var(--gray-200);border-radius:8px;padding:10px;box-sizing:border-box" value="Quotation — '+esc(A.activeQuote.title||'')+'">'+
     '<label style="font-size:13px;font-weight:600;color:var(--gray-500);display:block;margin:12px 0 6px">Message (editable draft)</label>'+
     '<textarea id="emlMessage" class="iinput" style="width:100%;min-height:180px;border:1.5px solid var(--gray-200);border-radius:8px;padding:10px;box-sizing:border-box">'+esc(defaultEmailDraft())+'</textarea>'+
+    '<label style="font-size:13px;font-weight:600;color:var(--gray-500);display:block;margin:12px 0 6px">Attach files (optional — datasheets, brochures)</label>'+
+    '<label class="btn" style="cursor:pointer;display:inline-block">📎 Attach from desktop<input type="file" multiple style="display:none" onchange="emlFileChosen(event)"></label>'+
+    '<div style="font-size:12px;color:var(--gray-500);margin-top:4px">Up to '+EML_MAX_COUNT+' files, '+emlFmtSize(EML_MAX_FILE_BYTES)+' each, '+emlFmtSize(EML_MAX_TOTAL_BYTES)+' combined.</div>'+
+    '<div id="emlAttachList" style="margin-top:8px"></div>'+
     '<div id="emlErr" class="auth-err" style="display:none;margin-top:10px"></div>'+
     '<div class="modal-actions"><button class="btn" onclick="closeEmailQuoteModal()">Cancel</button><button class="btn btn-navy" id="emlSendBtn" onclick="sendQuoteEmail()">Send</button></div>'+
     '</div></div>');
+}
+function emlFileChosen(event){
+  const files=[...(event.target.files||[])];event.target.value='';
+  const errEl=document.getElementById('emlErr');
+  for(const f of files){
+    if(EML.attachments.length>=EML_MAX_COUNT){errEl.textContent='You can attach at most '+EML_MAX_COUNT+' files.';errEl.style.display='block';break;}
+    if(f.size>EML_MAX_FILE_BYTES){errEl.textContent='"'+f.name+'" is over '+emlFmtSize(EML_MAX_FILE_BYTES)+' — please attach a smaller file.';errEl.style.display='block';continue;}
+    const totalSoFar=EML.attachments.reduce((n,a)=>n+a.size,0);
+    if(totalSoFar+f.size>EML_MAX_TOTAL_BYTES){errEl.textContent='Attached files would total over '+emlFmtSize(EML_MAX_TOTAL_BYTES)+' combined — please attach fewer/smaller files.';errEl.style.display='block';continue;}
+    const reader=new FileReader();
+    reader.onload=()=>{
+      EML.attachments.push({filename:f.name,content_type:f.type,size:f.size,data:reader.result});
+      renderEmlAttachList();
+    };
+    reader.readAsDataURL(f);
+  }
+}
+function removeEmlAttachment(i){EML.attachments.splice(i,1);renderEmlAttachList();}
+function renderEmlAttachList(){
+  const el=document.getElementById('emlAttachList');if(!el)return;
+  el.innerHTML=EML.attachments.map((a,i)=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;border:1px solid var(--gray-200);border-radius:6px;margin-bottom:6px;font-size:13px">
+    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📄 ${esc(a.filename)} <span style="color:var(--gray-500)">(${emlFmtSize(a.size)})</span></span>
+    <button onclick="removeEmlAttachment(${i})" title="Remove" style="border:none;background:none;cursor:pointer;color:var(--gray-500);font-size:15px;padding:0 2px">✕</button>
+  </div>`).join('');
 }
 function closeEmailQuoteModal(){const el=document.getElementById('emlOverlay');if(el)el.remove();}
 async function sendQuoteEmail(){
@@ -1964,7 +1996,8 @@ async function sendQuoteEmail(){
     const saved=await saveQuote();
     if(!saved){errEl.textContent='Could not save your latest changes ('+(A._lastSaveError||'unknown error')+') — not sending with a stale version. Please try again.';errEl.style.display='block';return;}
     const html=buildExportHTML();
-    const r=await api('POST','/api/quotes/'+A.activeQuote.id+'/email',{to,subject,message,html,from_email});
+    const attachments=EML.attachments.map(a=>({filename:a.filename,content_type:a.content_type,data:a.data}));
+    const r=await api('POST','/api/quotes/'+A.activeQuote.id+'/email',{to,subject,message,html,from_email,attachments});
     if(r.error){errEl.textContent=r.error;errEl.style.display='block';return;}
     if(A.user)A.user.ms365_email=from_email; // remember it for next time without a re-login
     if(A.activeQuote){
@@ -2158,7 +2191,7 @@ function draw(){
   if(A.page==='team'){setTimeout(loadTeam,50);}
   if(A.page==='integrations'){setTimeout(loadIntegrations,50);setTimeout(loadSyncConfig,50);}
   if(A.page==='platform'){setTimeout(loadPlatformCompanies,50);}
-  if(A.page==='companyProfile'){setTimeout(loadCompanyProfile,50);}
+  if(A.page==='companyProfile'){setTimeout(loadCompanyProfile,50);setTimeout(loadQuoteNumbering,50);}
   if(A.page==='rolesPermissions'){setTimeout(loadRolesPermissions,50);}
   if(A.page==='print'){ensurePrintCompany();}
   if(A.page==='products')setTimeout(loadProducts,50);
@@ -2798,7 +2831,7 @@ function editorHTML(){
       <div class="fld2"><label>Quote title</label><input value="${esc(q.title)}" oninput="A.activeQuote.title=this.value;schedSave()"></div>
       <div class="fld2" style="position:relative"><label>Customer</label><input id="custInput" value="${esc(q.customer)}" autocomplete="off" style="padding-right:36px" oninput="A.activeQuote.customer=this.value;schedSave();zohoSearch(this.value)" onblur="setTimeout(hideCustDrop,180)" placeholder="Type or search Zoho Books…"><button class="cust-search-btn" title="Search customers in Zoho Books" onclick="openCustModal()">🔍</button><div id="custDrop" class="cust-drop" style="display:none"></div></div>
       <div class="fld2"><label>Option label</label><input value="${esc(o.label)}" oninput="opts()[A.activeOpt].label=this.value;draw()"></div>
-      <div class="fld2"><label>Quote ref</label><input value="${esc(o.ref||'')}" oninput="opts()[A.activeOpt].ref=this.value;schedSave()"></div>
+      <div class="fld2"><label>Quote ref</label><input value="${esc(q.quote_ref||o.ref||'')}" readonly title="Auto-generated — configure the prefix or number range in Company Profile → Quotation numbering"></div>
     </div>
     <div class="field-grid g4">
       <div class="fld2"><label>Date</label><input type="date" value="${o.date||''}" oninput="opts()[A.activeOpt].date=this.value;schedSave()"></div>
@@ -3024,7 +3057,7 @@ function buildExportHTML(){
 // reminder in case pages get separated after printing.
 function pdfFooterHTML(){
   const q=A.activeQuote;
-  const ref=q?.quote_data?.[0]?.ref||q?.title||'';
+  const ref=q?.quote_ref||q?.quote_data?.[0]?.ref||q?.title||'';
   const web=PRINTCO?.website||'';
   const left=[ref,web].filter(Boolean).join(' · ');
   const dark=getPrintTheme().dark;
@@ -3039,8 +3072,14 @@ async function downloadPDF(){
   if(b){b.disabled=true;b.textContent='⏳ Generating…';}
   try{
     const html=buildExportHTML();
-    const r=await fetch('/api/pdf/render',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+A.token},
-      body:JSON.stringify({html, filename:'Quotation-'+(q.quote_data?.[0]?.ref||q.title||'quote').replace(/[^\w\-]+/g,'-')+'.pdf', footer_html:pdfFooterHTML(), footer_start_at:2})});
+    // Self-hosted Puppeteer/Chromium route (api/pdf-render.js) -- swapped in
+    // from the old PDFShift-backed /api/pdf/render after PDFShift's free
+    // monthly credits ran out. Same "render the real on-screen HTML" approach,
+    // just no third-party quota. footer_html/footer_start_at were PDFShift-
+    // specific (page.pdf() builds its own repeating footer instead), so they're
+    // no longer sent. Old route/pdfFooterHTML() left in place as a fallback.
+    const r=await fetch('/api/pdf/render2',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+A.token},
+      body:JSON.stringify({html, filename:'Quotation-'+(q.quote_ref||q.quote_data?.[0]?.ref||q.title||'quote').replace(/[^\w\-]+/g,'-')+'.pdf'})});
     if(!r.ok){const e=await r.json().catch(()=>({}));alert(e.error||'PDF generation failed');return;}
     const blob=await r.blob();
     const cd=r.headers.get('Content-Disposition')||'';
@@ -3232,7 +3271,7 @@ function printHTML(forExport){
       const cellB='border-right:1px solid #e9ecf2';
       s.items.forEach((it,idx)=>{const c=calcItem(it);const vatAmt=o.vatEnabled?c.tp*((o.vatRate||5)/100):null;srows+=`<tr style="background:${idx%2===0?'#fff':TH.bg};page-break-inside:avoid">
         <td style="padding:${DP('10px 8px')};font-size:${SZ(11,'table')}px;color:#a8b0bd;text-align:center;${cellB};border-bottom:1px solid #eef1f5">${rn++}</td>
-        ${IMG?`<td style="padding:${DP('4px 6px')};text-align:center;${cellB};border-bottom:1px solid #eef1f5">${it.img?`<img src="${esc(it.img)}" style="width:32px;height:32px;object-fit:contain;border-radius:4px;border:1px solid #e2e6ec">`:''}</td>`:''}
+        ${IMG?`<td style="padding:${DP('4px 6px')};text-align:center;${cellB};border-bottom:1px solid #eef1f5">${it.img?`<div style="width:32px;height:32px;border-radius:4px;border:1px solid #e2e6ec;overflow:hidden;display:inline-block"><img src="${esc(it.img)}" style="width:100%;height:100%;object-fit:contain;display:block"></div>`:''}</td>`:''}
         <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;white-space:nowrap;${cellB};border-bottom:1px solid #eef1f5">${esc(it.brand)}</td>
         <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;white-space:nowrap;${cellB};border-bottom:1px solid #eef1f5">${esc(it.model)}</td>
         <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#555;white-space:pre-line;${cellB};border-bottom:1px solid #eef1f5">${esc(it.desc)}</td>
@@ -3274,7 +3313,7 @@ function printHTML(forExport){
         </td>
       </tr></table>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin:16px 0 18px">
-        <div style="background:${TH.bg};color:${TH.text};font-size:${SZ(11,'body')}px;font-weight:700;padding:5px 14px;border-radius:20px">${esc(o.ref)}</div>
+        <div style="background:${TH.bg};color:${TH.text};font-size:${SZ(11,'body')}px;font-weight:700;padding:5px 14px;border-radius:20px">${esc(q.quote_ref||o.ref||'')}</div>
         <div style="background:#f2f6fc;color:#5a6475;font-size:${SZ(11,'body')}px;font-weight:600;padding:5px 14px;border-radius:20px">${o.date}</div>
         
         ${!multi&&(q.quote_data||[]).length>1?`<div style="background:#fef3c7;color:#92400e;font-size:${SZ(11,'body')}px;font-weight:700;padding:5px 14px;border-radius:20px">${esc(o.label)}</div>`:''}
@@ -3311,10 +3350,10 @@ function printHTML(forExport){
           ${printBankRows().map(([l1,v1,l2,v2])=>`<tr><td style="color:#555;width:130px;padding:2px 0">${l1}</td><td style="font-weight:600">${esc(v1||'—')}</td><td style="width:20px"></td><td style="color:#555;width:130px;padding:2px 0">${l2}</td><td style="font-weight:600">${esc(v2||'—')}</td></tr>`).join('')}
         </table>
       </div>`:''}
-      ${forExport?'':`<div class="print-footer-div" style="border-top:2px solid ${TH.dark};padding-top:8px;margin-top:16px;display:flex;justify-content:space-between;align-items:center;font-size:${SZ(10,'body')}px;color:#888">
+      <div class="print-footer-div" style="border-top:2px solid ${TH.dark};padding-top:8px;margin-top:16px;display:flex;justify-content:space-between;align-items:center;font-size:${SZ(10,'body')}px;color:#888">
         <span>${esc(printAddrLines().slice(0,2).join(' | '))}</span>
         <span style="font-weight:700;color:${TH.dark};font-size:${SZ(11,'body')}px">${esc(PRINTCO?.website||'')}</span>
-      </div>`}`:''}
+      </div>`:''}
       </div>
     </div>`;
   });
@@ -4144,6 +4183,15 @@ function propFileChosen(e){
   reader.onload=()=>{PROP.file={filename:f.name,data:reader.result};};
   reader.readAsDataURL(f);
 }
+function propCoverFileChosen(e){
+  const f=e.target.files&&e.target.files[0];e.target.value='';if(!f)return;
+  if(f.size>4*1024*1024){alert('Cover image must be under 4 MB.');return;}
+  const reader=new FileReader();
+  reader.onload=()=>{PROP.content.cover_image=reader.result;renderProposalModal();};
+  reader.readAsDataURL(f);
+}
+function propRemoveCoverImage(){PROP.content.cover_image=null;renderProposalModal();}
+function propSetTemplateStyle(style){PROP.content.template_style=style;renderProposalModal();}
 function propBulletsToText(arr){return (arr||[]).join('\n');}
 function propTextToBullets(str){return (str||'').split('\n').map(s=>s.trim()).filter(Boolean);}
 
@@ -4208,6 +4256,17 @@ function proposalReviewHTML(){
   return `<div style="max-height:52vh;overflow-y:auto;padding-right:8px;margin-top:8px">
     <div class="fld2" style="margin-bottom:10px"><label>Title</label><input value="${esc(c.title||'')}" oninput="PROP.content.title=this.value"></div>
     <div class="fld2" style="margin-bottom:10px"><label>Subtitle</label><input value="${esc(c.subtitle||'')}" oninput="PROP.content.subtitle=this.value"></div>
+
+    <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Cover image (optional)</label>
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px">
+      <label class="btn" style="cursor:pointer">📷 ${c.cover_image?'Change image':'Upload image'}<input type="file" accept="image/png,image/jpeg,image/webp" style="display:none" onchange="propCoverFileChosen(event)"></label>
+      ${c.cover_image?`<div style="position:relative;width:64px;height:56px;border-radius:6px;overflow:hidden;border:1.5px solid var(--gray-200)"><img src="${c.cover_image}" style="width:100%;height:100%;object-fit:cover"><button onclick="propRemoveCoverImage()" title="Remove image" style="position:absolute;top:2px;right:2px;width:16px;height:16px;border:none;border-radius:50%;background:#fff;color:#333;font-size:10px;line-height:16px;cursor:pointer;padding:0">✕</button></div>`:`<span style="font-size:12px;color:var(--gray-500)">Room photo, rendering, or client logo shown on the cover page</span>`}
+    </div>
+
+    <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Template style</label>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+      ${[['modern','Modern'],['corporate','Corporate'],['technical','Technical'],['executive','Executive']].map(([key,lbl])=>{const sel=(c.template_style||'modern')===key;return `<div onclick="propSetTemplateStyle('${key}')" style="cursor:pointer;padding:7px 4px;border-radius:8px;border:2px solid ${sel?'var(--navy)':'var(--gray-200)'};text-align:center;font-size:12px;font-weight:${sel?'700':'500'};color:${sel?'var(--navy)':'var(--gray-500)'}">${lbl}</div>`;}).join('')}
+    </div>
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Sections to include</label>
     <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">
@@ -4607,7 +4666,66 @@ function companyProfileHTML(){return`<div class="card" style="max-width:640px">
   <div class="card-title">Company Profile</div>
   <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">This appears on your Quotation PDFs and generated proposals. Admin only.</div>
   <div id="cpBox"><div style="color:var(--gray-500)">Loading…</div></div>
+</div>
+<div class="card" style="max-width:640px;margin-top:16px">
+  <div class="card-title">Quotation numbering</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">New quotes get an auto-generated reference like QT-2026-001. The counter resets every calendar year. Admin only.</div>
+  <div id="qnBox"><div style="color:var(--gray-500)">Loading…</div></div>
 </div>`;}
+let QN={};
+async function loadQuoteNumbering(){
+  const el=document.getElementById('qnBox');if(!el)return;
+  const r=await api('GET','/api/quotes/numbering');
+  if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  QN=r;
+  const seqByYear={};(r.sequences||[]).forEach(s=>seqByYear[s.year]=s.next_number);
+  if(!(r.current_year in seqByYear))seqByYear[r.current_year]=1;
+  const years=Object.keys(seqByYear).map(Number).sort((a,b)=>b-a);
+  el.innerHTML=`
+    <div style="display:flex;gap:12px">
+      <div class="fld" style="max-width:160px"><label>Prefix</label><input id="qnPrefix" maxlength="20" value="${esc(r.prefix)}"></div>
+      <div class="fld" style="max-width:160px"><label>Digits (zero-padding)</label><input id="qnPadding" type="number" min="1" max="6" value="${esc(r.padding)}"></div>
+    </div>
+    <button class="btn btn-navy btn-sm" onclick="saveQuoteNumberingFormat()">Save format</button>
+
+    <div style="font-weight:600;font-size:14px;margin:18px 0 10px;border-top:1px solid var(--gray-100);padding-top:16px">Number ranges by year</div>
+    ${years.map(y=>`<div style="display:flex;gap:10px;align-items:center;margin-bottom:8px">
+      <span style="width:60px;font-weight:600">${y}${y===r.current_year?' (current)':''}</span>
+      <span style="color:var(--gray-500);font-size:13px">Next number:</span>
+      <input id="qnNext_${y}" type="number" min="1" value="${seqByYear[y]}" style="width:110px">
+      <button class="btn btn-sm" onclick="saveQuoteYearNumber(${y})">Save</button>
+      <span style="font-size:12px;color:var(--gray-500)">→ next ref will be ${esc(r.prefix)}-${y}-${String(seqByYear[y]).padStart(r.padding,'0')}</span>
+    </div>`).join('')}
+
+    <div style="display:flex;gap:10px;align-items:center;margin-top:12px;border-top:1px solid var(--gray-100);padding-top:14px">
+      <span style="font-size:13px;color:var(--gray-500)">Pre-set a year:</span>
+      <input id="qnNewYear" type="number" placeholder="2027" style="width:90px">
+      <input id="qnNewStart" type="number" min="1" placeholder="Starting number" style="width:130px">
+      <button class="btn btn-sm" onclick="addQuoteYearRange()">Add</button>
+    </div>
+  `;
+}
+async function saveQuoteNumberingFormat(){
+  const prefix=document.getElementById('qnPrefix').value;
+  const padding=document.getElementById('qnPadding').value;
+  const r=await api('PATCH','/api/quotes/numbering',{prefix,padding});
+  if(r.error){alert(r.error);return;}
+  QN=r;loadQuoteNumbering();
+}
+async function saveQuoteYearNumber(year){
+  const next_number=document.getElementById('qnNext_'+year).value;
+  const r=await api('PATCH','/api/quotes/numbering',{year,next_number});
+  if(r.error){alert(r.error);return;}
+  loadQuoteNumbering();
+}
+async function addQuoteYearRange(){
+  const year=document.getElementById('qnNewYear').value;
+  const next_number=document.getElementById('qnNewStart').value;
+  if(!year||!next_number){alert('Enter both a year and a starting number.');return;}
+  const r=await api('PATCH','/api/quotes/numbering',{year,next_number});
+  if(r.error){alert(r.error);return;}
+  loadQuoteNumbering();
+}
 let CP={logo_url:''};
 async function loadCompanyProfile(){
   const el=document.getElementById('cpBox');if(!el)return;

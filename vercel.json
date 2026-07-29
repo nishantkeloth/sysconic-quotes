@@ -2,7 +2,7 @@
   "version": 2,
   "builds": [
     { "src": "api/auth.py",   "use": "@vercel/python" },
-    { "src": "api/quotes.py", "use": "@vercel/python" },
+    { "src": "api/quotes.py", "use": "@vercel/python", "config": { "maxDuration": 45 } },
     { "src": "api/ai.py",     "use": "@vercel/python" },
     { "src": "api/pdf.py", "use": "@vercel/python" },
     { "src": "api/products.py", "use": "@vercel/python" },
@@ -13,9 +13,11 @@
     { "src": "api/platform.py", "use": "@vercel/python" },
     { "src": "api/proposal.py", "use": "@vercel/python" },
     { "src": "api/projects.py", "use": "@vercel/python" },
+    { "src": "api/pdf-render.js", "use": "@vercel/node", "config": { "maxLambdaSize": "250mb", "maxDuration": 30, "memory": 3009 } },
         { "src": "index.html",    "use": "@vercel/static" }
   ],
   "routes": [
+    { "src": "/api/pdf/render2", "dest": "api/pdf-render.js" },
     { "src": "/api/auth/(.*)",   "dest": "api/auth.py" },
     { "src": "/api/quotes/(.*)", "dest": "api/quotes.py" },
     { "src": "/api/quotes",      "dest": "api/quotes.py" },

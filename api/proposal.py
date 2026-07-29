@@ -428,15 +428,85 @@ def bom_table(sections, CW, cur, with_price, pricing_type='markup'):
     return flow
 
 # ── Cover page (drawn directly on the canvas — content is fixed, not flowing) ───
+MAX_COVER_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB decoded
+
+def _cover_image_reader(data_url):
+    """Decode a base64 cover-photo data URL (uploaded client-side, same
+    pattern as the schematic image) into a ReportLab ImageReader. Returns
+    None on any problem -- the proposal must never fail because of a
+    bad/missing cover image."""
+    try:
+        if not data_url:
+            return None
+        raw = data_url
+        if ',' in raw: raw = raw.split(',', 1)[1]
+        import base64
+        img_bytes = base64.b64decode(raw)
+        if not img_bytes or len(img_bytes) > MAX_COVER_IMAGE_BYTES:
+            return None
+        reader = ImageReader(io.BytesIO(img_bytes))
+        if not reader.getSize()[0]:
+            return None
+        return reader
+    except Exception:
+        return None
+
+def _img_cover_rect(iw, ih, box_w, box_h):
+    """(draw_w, draw_h) that fully covers box_w x box_h, cropping overflow."""
+    img_ratio = iw / float(ih); box_ratio = box_w / float(box_h)
+    if img_ratio > box_ratio:
+        draw_h = box_h; draw_w = draw_h * img_ratio
+    else:
+        draw_w = box_w; draw_h = draw_w / img_ratio
+    return draw_w, draw_h
+
+def _img_contain_rect(iw, ih, box_w, box_h):
+    """(draw_w, draw_h) that fits inside box_w x box_h, letterboxed (no crop)."""
+    img_ratio = iw / float(ih); box_ratio = box_w / float(box_h)
+    if img_ratio > box_ratio:
+        draw_w = box_w; draw_h = draw_w / img_ratio
+    else:
+        draw_h = box_h; draw_w = draw_h * img_ratio
+    return draw_w, draw_h
+
+COVER_STYLES = ('modern', 'corporate', 'technical', 'executive')
+
 def _draw_cover(canvas, doc):
+    """Dispatches to the selected template style. 'modern' (default) matches
+    the original design exactly when no cover image is attached."""
+    data = doc.proposal_data
+    style = data.get('template_style') or 'modern'
+    if style not in COVER_STYLES: style = 'modern'
+    cover_img = _cover_image_reader(data.get('cover_image'))
+    {
+        'modern': _draw_cover_modern,
+        'corporate': _draw_cover_corporate,
+        'technical': _draw_cover_technical,
+        'executive': _draw_cover_executive,
+    }[style](canvas, doc, cover_img)
+
+def _draw_cover_modern(canvas, doc, cover_img):
     data = doc.proposal_data; company = doc.proposal_company; logo_bytes = doc.proposal_logo
     w, h = A4
     canvas.saveState()
-    canvas.setFillColor(NAVY); canvas.rect(0, 0, w, h, fill=1, stroke=0)
-    canvas.setFillAlpha(0.10); canvas.setFillColor(white)
-    canvas.circle(w-10*mm, h-30*mm, 95*mm, fill=1, stroke=0)
-    canvas.circle(-10*mm, 25*mm, 70*mm, fill=1, stroke=0)
+    if cover_img:
+        try:
+            iw, ih = cover_img.getSize()
+            dw, dh = _img_cover_rect(iw, ih, w, h)
+            canvas.drawImage(cover_img, (w-dw)/2, (h-dh)/2, dw, dh, mask='auto')
+        except Exception:
+            cover_img = None
+        canvas.setFillColor(NAVY); canvas.setFillAlpha(0.60 if cover_img else 1.0)
+        canvas.rect(0, 0, w, h, fill=1, stroke=0)
+    else:
+        canvas.setFillColor(NAVY); canvas.rect(0, 0, w, h, fill=1, stroke=0)
     canvas.restoreState()
+    if not cover_img:
+        canvas.saveState()
+        canvas.setFillAlpha(0.10); canvas.setFillColor(white)
+        canvas.circle(w-10*mm, h-30*mm, 95*mm, fill=1, stroke=0)
+        canvas.circle(-10*mm, 25*mm, 70*mm, fill=1, stroke=0)
+        canvas.restoreState()
 
     if logo_bytes:
         try:
@@ -498,6 +568,218 @@ def _draw_cover(canvas, doc):
     canvas.drawRightString(w-15*mm, 24*mm, f"Date: {data.get('date') or ''}")
     canvas.setFont('Helvetica-Bold', 9); canvas.setFillColor(white)
     canvas.drawRightString(w-15*mm, 18.5*mm, f"Prepared by: {(data.get('prepared_by') or company.get('name') or '')[:50]}")
+
+def _draw_cover_corporate(canvas, doc, cover_img):
+    data = doc.proposal_data; company = doc.proposal_company; logo_bytes = doc.proposal_logo
+    w, h = A4
+    canvas.saveState()
+    canvas.setFillColor(white); canvas.rect(0, 0, w, h, fill=1, stroke=0)
+    canvas.restoreState()
+    canvas.setStrokeColor(GOLD); canvas.setLineWidth(2.2)
+    canvas.line(15*mm, h-20*mm, w-15*mm, h-20*mm)
+
+    if logo_bytes:
+        try:
+            img = ImageReader(io.BytesIO(logo_bytes))
+            iw, ih = img.getSize(); ratio = iw/float(ih)
+            dh = 12*mm; dw = dh*ratio
+            if dw > 44*mm: dw = 44*mm; dh = dw/ratio
+            canvas.drawImage(img, 15*mm, h-20*mm-dh-6*mm, dw, dh, mask='auto')
+        except Exception:
+            pass
+
+    badge = (data.get('doc_label') or 'TECHNICAL PROPOSAL').upper()
+    canvas.setFont('Helvetica-Bold', 8.5)
+    bw = canvas.stringWidth(badge, 'Helvetica-Bold', 8.5) + 16
+    by = h - 96*mm
+    canvas.setStrokeColor(NAVY); canvas.setLineWidth(0.9)
+    canvas.roundRect(15*mm, by, bw, 7*mm, 3.5*mm, fill=0, stroke=1)
+    canvas.setFillColor(NAVY); canvas.drawString(15*mm+8, by+2.3*mm, badge)
+
+    canvas.setFillColor(NAVY); canvas.setFont('Helvetica-Bold', 23)
+    ty = h - 118*mm
+    for ln in textwrap.wrap(data.get('title') or 'Technical Proposal', width=28)[:3]:
+        canvas.drawString(15*mm, ty, ln); ty -= 9.5*mm
+
+    canvas.setFont('Helvetica', 10); canvas.setFillColor(GRAY)
+    for ln in textwrap.wrap(data.get('subtitle') or '', width=82)[:2]:
+        ty -= 6*mm
+        canvas.drawString(15*mm, ty, ln)
+
+    if cover_img:
+        try:
+            iw, ih = cover_img.getSize()
+            box_w, box_h = w - 30*mm, 46*mm
+            box_y = 82*mm
+            dw, dh = _img_contain_rect(iw, ih, box_w - 4*mm, box_h - 4*mm)
+            canvas.setStrokeColor(GRAYB); canvas.setLineWidth(0.8)
+            canvas.rect(15*mm, box_y, box_w, box_h, fill=0, stroke=1)
+            canvas.drawImage(cover_img, 15*mm+(box_w-dw)/2, box_y+(box_h-dh)/2, dw, dh, mask='auto')
+        except Exception:
+            pass
+
+    stats = (data.get('stats') or [])[:4]
+    if stats:
+        n = len(stats); gap = 8*mm
+        cw = (w - 30*mm - gap*(n-1)) / n
+        cx = 15*mm; cy = 52*mm
+        for s in stats:
+            canvas.setFillColor(TINT)
+            canvas.roundRect(cx, cy, cw, 24*mm, 2*mm, fill=1, stroke=0)
+            canvas.setFillColor(NAVY); canvas.setFont('Helvetica-Bold', 15)
+            canvas.drawCentredString(cx+cw/2, cy+14*mm, str(s.get('value',''))[:8])
+            canvas.setFillColor(GRAY); canvas.setFont('Helvetica-Bold', 6.2)
+            canvas.drawCentredString(cx+cw/2, cy+6.5*mm, str(s.get('label',''))[:22].upper())
+            cx += cw + gap
+
+    canvas.setStrokeColor(GRAYB); canvas.setLineWidth(0.6)
+    canvas.line(15*mm, 30*mm, w-15*mm, 30*mm)
+    canvas.setFont('Helvetica', 8); canvas.setFillColor(GRAY)
+    canvas.drawString(15*mm, 24*mm, 'Prepared for')
+    canvas.setFont('Helvetica-Bold', 10.5); canvas.setFillColor(NAVY)
+    canvas.drawString(15*mm, 18.5*mm, (data.get('customer_name') or '')[:60])
+    canvas.setFont('Helvetica', 8); canvas.setFillColor(GRAY)
+    canvas.drawRightString(w-15*mm, 24*mm, f"Date: {data.get('date') or ''}")
+    canvas.setFont('Helvetica-Bold', 9); canvas.setFillColor(NAVY)
+    canvas.drawRightString(w-15*mm, 18.5*mm, f"Prepared by: {(data.get('prepared_by') or company.get('name') or '')[:50]}")
+
+def _draw_cover_technical(canvas, doc, cover_img):
+    data = doc.proposal_data; company = doc.proposal_company; logo_bytes = doc.proposal_logo
+    w, h = A4
+    SB = 34*mm
+    canvas.saveState()
+    canvas.setFillColor(white); canvas.rect(0, 0, w, h, fill=1, stroke=0)
+    canvas.setFillColor(NAVY); canvas.rect(0, 0, SB, h, fill=1, stroke=0)
+    canvas.restoreState()
+
+    badge = (data.get('doc_label') or 'TECHNICAL PROPOSAL').upper()
+    canvas.saveState()
+    canvas.translate(SB/2 + 3, h/2)
+    canvas.rotate(90)
+    canvas.setFillColor(GOLD); canvas.setFont('Helvetica-Bold', 10)
+    canvas.drawCentredString(0, 0, badge)
+    canvas.restoreState()
+
+    if logo_bytes:
+        try:
+            img = ImageReader(io.BytesIO(logo_bytes))
+            iw, ih = img.getSize(); ratio = iw/float(ih)
+            dw = SB - 10*mm; dh = dw/ratio
+            if dh > 16*mm: dh = 16*mm; dw = dh*ratio
+            canvas.drawImage(img, (SB-dw)/2, h-16*mm-dh, dw, dh, mask='auto')
+        except Exception:
+            pass
+
+    MX = SB + 15*mm
+    CWd = w - MX - 15*mm
+
+    canvas.setFillColor(NAVY); canvas.setFont('Helvetica-Bold', 20)
+    ty = h - 40*mm
+    for ln in textwrap.wrap(data.get('title') or 'Technical Proposal', width=32)[:3]:
+        canvas.drawString(MX, ty, ln); ty -= 8.5*mm
+
+    canvas.setFont('Helvetica', 9.5); canvas.setFillColor(GRAY)
+    for ln in textwrap.wrap(data.get('subtitle') or '', width=88)[:2]:
+        ty -= 5.5*mm
+        canvas.drawString(MX, ty, ln)
+
+    ty -= 6*mm
+    canvas.setStrokeColor(GRAYB); canvas.setLineWidth(0.6)
+    canvas.line(MX, ty, w-15*mm, ty)
+
+    if cover_img:
+        try:
+            iw, ih = cover_img.getSize()
+            box_w, box_h = CWd, 60*mm
+            box_y = ty - 8*mm - box_h
+            dw, dh = _img_cover_rect(iw, ih, box_w, box_h)
+            canvas.saveState()
+            p = canvas.beginPath(); p.rect(MX, box_y, box_w, box_h)
+            canvas.clipPath(p, stroke=0, fill=0)
+            canvas.drawImage(cover_img, MX+(box_w-dw)/2, box_y+(box_h-dh)/2, dw, dh, mask='auto')
+            canvas.restoreState()
+            canvas.setStrokeColor(GRAYB); canvas.setLineWidth(0.6)
+            canvas.rect(MX, box_y, box_w, box_h, fill=0, stroke=1)
+        except Exception:
+            pass
+
+    stats = (data.get('stats') or [])[:4]
+    if stats:
+        n = len(stats); gap = 6*mm
+        cw = (CWd - gap*(n-1)) / n
+        cx = MX; cy = 30*mm
+        for s in stats:
+            canvas.setFillColor(CARDBG); canvas.rect(cx, cy, cw, 20*mm, fill=1, stroke=0)
+            canvas.setFillColor(NAVY); canvas.setFont('Helvetica-Bold', 13)
+            canvas.drawCentredString(cx+cw/2, cy+12*mm, str(s.get('value',''))[:8])
+            canvas.setFillColor(GRAY); canvas.setFont('Helvetica-Bold', 5.8)
+            canvas.drawCentredString(cx+cw/2, cy+5.5*mm, str(s.get('label',''))[:22].upper())
+            cx += cw + gap
+
+    canvas.setFont('Helvetica', 7.5); canvas.setFillColor(GRAY)
+    canvas.drawString(MX, 14*mm, f"Prepared for {(data.get('customer_name') or '')[:50]}")
+    canvas.drawRightString(w-15*mm, 14*mm, f"Date: {data.get('date') or ''}")
+
+def _draw_cover_executive(canvas, doc, cover_img):
+    data = doc.proposal_data; company = doc.proposal_company; logo_bytes = doc.proposal_logo
+    w, h = A4
+    canvas.saveState()
+    canvas.setFillColor(white); canvas.rect(0, 0, w, h, fill=1, stroke=0)
+    canvas.restoreState()
+
+    if logo_bytes:
+        try:
+            img = ImageReader(io.BytesIO(logo_bytes))
+            iw, ih = img.getSize(); ratio = iw/float(ih)
+            dh = 13*mm; dw = dh*ratio
+            if dw > 46*mm: dw = 46*mm; dh = dw/ratio
+            canvas.drawImage(img, (w-dw)/2, h-45*mm, dw, dh, mask='auto')
+        except Exception:
+            pass
+
+    badge = (data.get('doc_label') or 'TECHNICAL PROPOSAL').upper()
+    canvas.setFont('Helvetica-Bold', 8); canvas.setFillColor(GRAY)
+    canvas.drawCentredString(w/2, h-62*mm, badge)
+
+    canvas.setFillColor(NAVY); canvas.setFont('Helvetica-Bold', 26)
+    ty = h - 90*mm
+    for ln in textwrap.wrap(data.get('title') or 'Technical Proposal', width=24)[:3]:
+        canvas.drawCentredString(w/2, ty, ln); ty -= 11*mm
+
+    canvas.setFont('Helvetica', 10.5); canvas.setFillColor(GRAY)
+    for ln in textwrap.wrap(data.get('subtitle') or '', width=70)[:2]:
+        ty -= 6.5*mm
+        canvas.drawCentredString(w/2, ty, ln)
+
+    canvas.setStrokeColor(GOLD); canvas.setLineWidth(1.4)
+    canvas.line(w/2-14*mm, ty-8*mm, w/2+14*mm, ty-8*mm)
+
+    stats = (data.get('stats') or [])[:2]
+    if stats:
+        n = len(stats); gap = 14*mm; cw = 42*mm
+        total_w = cw*n + gap*(n-1)
+        cx = (w-total_w)/2; cy = ty - 34*mm
+        for s in stats:
+            canvas.setFillColor(NAVY); canvas.setFont('Helvetica-Bold', 17)
+            canvas.drawCentredString(cx+cw/2, cy+7*mm, str(s.get('value',''))[:8])
+            canvas.setFillColor(GRAY); canvas.setFont('Helvetica-Bold', 6.5)
+            canvas.drawCentredString(cx+cw/2, cy, str(s.get('label',''))[:22].upper())
+            cx += cw + gap
+
+    if cover_img:
+        try:
+            iw, ih = cover_img.getSize()
+            box_w, box_h = 60*mm, 34*mm
+            box_x, box_y = (w-box_w)/2, 26*mm
+            dw, dh = _img_contain_rect(iw, ih, box_w, box_h)
+            canvas.drawImage(cover_img, box_x+(box_w-dw)/2, box_y+(box_h-dh)/2, dw, dh, mask='auto')
+        except Exception:
+            pass
+
+    canvas.setStrokeColor(GRAYB); canvas.setLineWidth(0.6)
+    canvas.line(15*mm, 16*mm, w-15*mm, 16*mm)
+    canvas.setFont('Helvetica', 8); canvas.setFillColor(GRAY)
+    canvas.drawCentredString(w/2, 11*mm, f"Prepared for {(data.get('customer_name') or '')[:40]}  ·  {data.get('date') or ''}")
 
 def _content_footer(canvas, doc):
     company = doc.proposal_company
