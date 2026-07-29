@@ -317,9 +317,26 @@ def recalculate_project(company_id, project_id):
         + sum(_num(e.get('amount')) for e in expenses)
     actual_cost = po_based_cost + non_po_based_cost
 
-    pos = sb.table('zoho_purchase_orders').select('total,billed_total,status').eq('project_id', project_id).execute().data or []
-    committed_cost = sum(max(0.0, _num(po.get('total')) - _num(po.get('billed_total'))) for po in pos
-                          if (po.get('status') or '').lower() not in ('cancelled', 'void', 'deleted'))
+    pos = sb.table('zoho_purchase_orders').select('zoho_purchase_order_id,total,billed_total,status').eq('project_id', project_id).execute().data or []
+    # Committed Cost should only be the *unbilled* remainder of a PO -- but
+    # a PO's own billed_total (Zoho's total_invoiced_amount/billed_amount,
+    # captured in fetch_purchase_orders) doesn't reliably update when a Bill
+    # is entered without formally "converting" that PO in Zoho's own UI.
+    # When that happens, the same real purchase gets counted twice: once in
+    # full here as still-Committed, and again in Actual Cost above via
+    # po_based_cost (which reads the Bill's own zoho_purchase_order_id link
+    # directly). Cross-referencing that same link here and taking whichever
+    # billed figure is higher closes that gap without depending on Zoho's
+    # field being populated correctly.
+    billed_by_po = {}
+    for b in bills:
+        po_zid = b.get('zoho_purchase_order_id')
+        if po_zid:
+            billed_by_po[po_zid] = billed_by_po.get(po_zid, 0.0) + _num(b.get('total'))
+    committed_cost = sum(
+        max(0.0, _num(po.get('total')) - max(_num(po.get('billed_total')), billed_by_po.get(po.get('zoho_purchase_order_id'), 0.0)))
+        for po in pos if (po.get('status') or '').lower() not in ('cancelled', 'void', 'deleted')
+    )
 
     forecasts = sb.table('project_forecasts').select('amount').eq('project_id', project_id).eq('status', 'active').execute().data or []
     forecast_remaining = sum(_num(f.get('amount')) for f in forecasts)
