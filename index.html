@@ -359,9 +359,12 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .ptotal-val.grand{font-size:21px}
 .pfooter{margin-top:28px;padding-top:14px;border-top:1px solid var(--gray-200);font-size:11px;color:var(--gray-400);text-align:center}
 
-/* ── Responsive: hamburger + off-canvas sidebar for tablet/phone ── */
-.sb-toggle{display:none;background:none;border:none;font-size:22px;color:var(--navy);cursor:pointer;padding:4px 8px;line-height:1;flex-shrink:0}
+/* ── Sidebar hide toggle (desktop) + hamburger/off-canvas (tablet/phone) ── */
+.sb-toggle{display:inline-flex;align-items:center;background:none;border:none;font-size:22px;color:var(--navy);cursor:pointer;padding:4px 8px;line-height:1;flex-shrink:0}
 .sb-overlay{display:none}
+@media (min-width:901px){
+  .sidebar.collapsed{width:0;min-width:0;overflow:hidden;border-right:none}
+}
 
 /* ── Contextual Help drawer ── */
 .help-fab{position:fixed;bottom:22px;right:22px;width:46px;height:46px;border-radius:50%;background:#f59e0b;color:#1e3a5f;border:none;font-size:19px;font-weight:700;cursor:pointer;box-shadow:var(--shadow-lg);z-index:400;display:flex;align-items:center;justify-content:center;line-height:1;transition:filter .15s}
@@ -478,8 +481,19 @@ let _n=1; const uid=()=>'i'+ _n++;
 const A={screen:'login',token:null,user:null,company:null,
   page:'dashboard',quotes:[],activeQuote:null,view:'internal',cur:'AED',rate:1,
   activeOpt:0,saveStatus:'',searchQ:'',filterStatus:'all',sbOpen:false,
+  sbCollapsed:localStorage.getItem('sq_sidebar_collapsed')==='1',
   portfolio:null,ppFilters:{},ppDetail:null,ppDetailId:null,ppDetailTab:'overview'};
 function toggleSidebar(){A.sbOpen=!A.sbOpen;draw();}
+// Single hamburger button handles both layouts: on narrow screens it slides
+// the off-canvas drawer (sbOpen, unchanged); on desktop it fully hides the
+// 240px sidebar instead (sbCollapsed) so the main content can use that
+// space -- persisted so the choice survives a page reload.
+function toggleSidebarBtn(){
+  if(window.innerWidth<=900){toggleSidebar();return;}
+  A.sbCollapsed=!A.sbCollapsed;
+  localStorage.setItem('sq_sidebar_collapsed',A.sbCollapsed?'1':'0');
+  draw();
+}
 function parseJwt(t){try{return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));}catch(e){return {};}}
 function hasFeature(f){return !!(A.token&&(parseJwt(A.token).features||{})[f]);}
 function hasPageAccess(pageKey){if(A.user?.role==='admin')return true;if(!A.token)return true;const rp=parseJwt(A.token).role_permissions;if(rp===null||rp===undefined)return true;return !!rp[pageKey];}
@@ -2624,7 +2638,7 @@ function appHTML(){
   const inEditor=['editor','terms','summary','vendor','print','log'].includes(A.page);
 
   const nav=(page,cb)=>`A.page='${page}';${cb||''}closeSidebar();draw()`;
-  const sidebar=`<div class="sidebar${A.sbOpen?' open':''}">
+  const sidebar=`<div class="sidebar${A.sbOpen?' open':''}${A.sbCollapsed?' collapsed':''}">
     <div class="sb-brand">
       <img src="${LOGO_SRC}" class="sb-logo" alt="Sysconic">
       <div><div class="sb-co">${esc(A.company?.name||'')}</div></div>
@@ -2691,7 +2705,7 @@ function appHTML(){
   }
 
   return`<div class="shell">${sidebar}${sbOverlay}${helpFabHTML()}${helpDrawerHTML()}<div class="main">
-    <div class="topbar"><div style="display:flex;align-items:center;gap:6px;min-width:0"><button class="sb-toggle" onclick="toggleSidebar()" aria-label="Menu">☰</button><div class="topbar-title">${PAGE_TITLES[A.page]||''}</div></div><div class="topbar-right">${topbarRight}</div></div>
+    <div class="topbar"><div style="display:flex;align-items:center;gap:6px;min-width:0"><button class="sb-toggle" onclick="toggleSidebarBtn()" aria-label="${A.sbCollapsed?'Show sidebar':'Hide sidebar'}" title="${A.sbCollapsed?'Show sidebar':'Hide sidebar'}">☰</button><div class="topbar-title">${PAGE_TITLES[A.page]||''}</div></div><div class="topbar-right">${topbarRight}</div></div>
     ${cstrip}
     <div class="content">${pageContent}</div>
   </div></div>`;
