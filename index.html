@@ -4233,11 +4233,62 @@ function saveDiagramToQuote(){
 // ── Proposal generator ───────────────────────────────────────────────────────────
 // Two-step flow: draft the AI content first (no PDF yet) so it can be reviewed
 // and edited, then generate Technical / Commercial / Combined independently.
-let PROP={busy:false,file:null,step:'input',content:null,brief:'',which:'all',model:'gemini-3.5-flash'};
+let PROP={busy:false,file:null,step:'input',content:null,brief:'',which:'all',model:'gemini-3.5-flash',briefAuto:true};
+
+// Drafts a plain-language project-scope sentence straight from the quote's own
+// BOM (sections/brands/models/qty) so the "Describe the project" box in the
+// proposal modal isn't a blank field the user has to fill in by hand every
+// time -- it's pre-populated from real quote data, and they can still edit or
+// add context (use case, floors, timeline) on top of it before drafting.
+function propAutoBriefFromBOM(which){
+  const allOpts=opts();
+  if(!allOpts.length)return '';
+  let selected;
+  if(which==='all'){ selected=allOpts; }
+  else { const idx=parseInt(which,10); selected=allOpts[idx]?[allOpts[idx]]:allOpts.slice(0,1); }
+  const sectionNames=[]; const brandCounts={}; let totalQty=0; const itemLines=[];
+  selected.forEach(o=>{
+    (o.sections||[]).forEach(s=>{
+      if(s.name)sectionNames.push(s.name);
+      (s.items||[]).forEach(it=>{
+        const qty=Number(it.qty)||0; totalQty+=qty;
+        const b=(it.brand||'').trim(); if(b)brandCounts[b]=(brandCounts[b]||0)+1;
+        const label=[it.brand,it.model].filter(Boolean).join(' ').trim();
+        if(label)itemLines.push(`${qty>0?qty+'x ':''}${label}`.trim());
+      });
+    });
+  });
+  if(!itemLines.length && !sectionNames.length) return '';
+  const uniqSections=[...new Set(sectionNames)];
+  const brands=Object.keys(brandCounts).sort((a,b)=>brandCounts[b]-brandCounts[a]);
+  const parts=['Supply, installation, and commissioning of an AV/IT solution'];
+  if(uniqSections.length){
+    parts.push(`covering ${uniqSections.length} area${uniqSections.length>1?'s':''} (${uniqSections.slice(0,6).join(', ')}${uniqSections.length>6?', and more':''})`);
+  }
+  if(brands.length){
+    parts.push(`primarily using ${brands.slice(0,4).join(', ')}${brands.length>4?' and other':''} equipment`);
+  }
+  if(totalQty>0){
+    parts.push(`totaling ${totalQty} unit${totalQty===1?'':'s'} across the bill of materials`);
+  }
+  let brief=parts.join(', ')+'.';
+  if(itemLines.length){
+    const top=itemLines.slice(0,6);
+    brief+=` Key equipment includes: ${top.join(', ')}${itemLines.length>6?', and additional supporting items':''}.`;
+  }
+  return brief;
+}
+function propRegenBriefFromBOM(){
+  PROP.brief=propAutoBriefFromBOM(PROP.which);
+  PROP.briefAuto=true;
+  renderProposalModal();
+}
 
 function openProposalModal(){
   if(!A.activeQuote)return;
-  PROP={busy:false,file:null,step:'input',content:null,brief:'',which:String(A.activeOpt)};
+  const which=String(A.activeOpt);
+  PROP={busy:false,file:null,step:'input',content:null,brief:'',which,model:'gemini-3.5-flash',briefAuto:true};
+  PROP.brief=propAutoBriefFromBOM(which);
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="propOverlay" onclick="if(event.target===this)closeProposalModal()">
     <div class="modal" style="max-width:700px;max-height:88vh;overflow-y:auto" id="propModalBox"></div></div>`);
   renderProposalModal();
@@ -4358,15 +4409,19 @@ function renderProposalModal(){
   const opts_=opts();
   box.innerHTML=`
     <div class="modal-title">📑 Generate Technical & Commercial Proposal</div>
-    <div class="modal-sub">Describe the project (or attach a brief/spec document) — AI drafts the content first so you can review and edit it before anything is generated.</div>
-    <textarea id="propBrief" rows="4" style="width:100%;padding:10px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit;resize:vertical;margin-bottom:12px" placeholder="e.g. Signage and interactive flat panel rollout across 3 floors, includes control system and 1-year warranty" oninput="PROP.brief=this.value">${esc(PROP.brief||'')}</textarea>
+    <div class="modal-sub">Scope is auto-drafted from this quote's bill of materials below — edit it, add context (use case, floors, timeline), or attach a brief/spec document. AI drafts the content first so you can review and edit it before anything is generated.</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <label style="font-size:13px;font-weight:600;color:var(--gray-500)">Project scope</label>
+      <button type="button" onclick="propRegenBriefFromBOM()" title="Redraft this from the BOM, discarding your edits" style="padding:3px 9px;border-radius:6px;border:1px solid var(--gray-200);background:transparent;color:var(--navy);font-size:11.5px;font-weight:600;cursor:pointer">🪄 Redraft from BOM</button>
+    </div>
+    <textarea id="propBrief" rows="4" style="width:100%;padding:10px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit;resize:vertical;margin-bottom:12px" placeholder="e.g. Signage and interactive flat panel rollout across 3 floors, includes control system and 1-year warranty" oninput="PROP.brief=this.value;PROP.briefAuto=false;">${esc(PROP.brief||'')}</textarea>
     <div style="margin-bottom:12px">
       <label style="font-size:13px;font-weight:600;color:var(--gray-500);display:block;margin-bottom:6px">Attachment (optional — PDF, Word, or text)</label>
       <input type="file" id="propFile" accept=".pdf,.docx,.txt" onchange="propFileChosen(event)">
       ${PROP.file?`<div style="font-size:12px;color:var(--gray-500);margin-top:4px">Attached: ${esc(PROP.file.filename)}</div>`:''}
     </div>
     <div class="fld2" style="margin-bottom:6px"><label>Option to price</label>
-      <select id="propWhich" onchange="PROP.which=this.value">
+      <select id="propWhich" onchange="PROP.which=this.value;if(PROP.briefAuto){PROP.brief=propAutoBriefFromBOM(PROP.which);}renderProposalModal();">
         ${opts_.map((op,i)=>`<option value="${i}" ${String(i)===PROP.which?'selected':''}>${esc(op.label)}</option>`).join('')}
         <option value="all" ${PROP.which==='all'?'selected':''}>All options</option>
       </select>
