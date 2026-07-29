@@ -257,7 +257,7 @@ class ZohoAdapter:
         return ids
 
     def create_estimate(self, creds, customer_id, reference_number, quote_date, line_items,
-                         salesperson_name=None, total_gp=None, margin_pct=None):
+                         salesperson_name=None, total_gp=None, margin_pct=None, zoho_project_id=None):
         """line_items: [{'description': str, 'rate': float, 'quantity': float,
         'tax_rate': float|None, 'brand': str|None, 'model': str|None}, ...]
         -- already-computed sell prices from QTcal's own calc_item(),
@@ -269,7 +269,13 @@ class ZohoAdapter:
         silently omitted if the org's field labels don't match what was
         guessed. total_gp (QTcal's "Total GP", ts-tc in AED) and margin_pct
         (fraction, e.g. 0.167) map the same way onto the header-level
-        Profit Margin / Profit Margin % custom fields when found."""
+        Profit Margin / Profit Margin % custom fields when found.
+        zoho_project_id links this estimate to the Zoho Project created
+        alongside it -- Zoho's Estimates API documents a native `project_id`
+        field for exactly this (project-based billing/tracking/reporting),
+        confirmed against Zoho's own API reference. Passed straight through
+        (unlike Brand/Model/Profit Margin, this isn't a custom field, so no
+        org-specific discovery step is needed)."""
         cf_ids = self._line_item_custom_field_ids(creds) if any(li.get('brand') or li.get('model') for li in line_items) else {}
         zoho_items = []
         for li in line_items:
@@ -300,6 +306,8 @@ class ZohoAdapter:
         }
         if quote_date:
             body['date'] = quote_date
+        if zoho_project_id:
+            body['project_id'] = str(zoho_project_id)
         if salesperson_name:
             sp_id = self._salesperson_id_for_name(creds, salesperson_name)
             if sp_id:
@@ -964,6 +972,7 @@ def zoho_create_project():
                         salesperson_name=option.get('by') or None,
                         total_gp=total_gp,
                         margin_pct=margin_pct,
+                        zoho_project_id=zoho_project_id,
                     )
                     zoho_estimate_id = zoho_est['estimate_id']
                     sb.table('projects').update({'zoho_estimate_id': zoho_estimate_id}).eq('id', pid).eq('company_id', claims['company_id']).execute()
