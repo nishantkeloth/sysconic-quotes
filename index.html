@@ -1923,8 +1923,12 @@ function defaultEmailDraft(){
   lines.push('','Please let us know if you have any questions or would like to proceed.','','Best regards,',A.user?.name||'');
   return lines.join('\n');
 }
+let EML={attachments:[]};
+const EML_MAX_FILE_BYTES=3*1024*1024, EML_MAX_TOTAL_BYTES=10*1024*1024, EML_MAX_COUNT=5;
+function emlFmtSize(b){return b<1024*1024?Math.round(b/1024)+' KB':(b/1024/1024).toFixed(1)+' MB';}
 function showEmailQuoteModal(){
   if(!A.activeQuote)return;
+  EML={attachments:[]};
   const fromVal=A.user?.ms365_email||A.user?.email||'';
   document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="emlOverlay" onclick="if(event.target===this)closeEmailQuoteModal()">'+
     '<div class="modal" style="max-width:480px">'+
@@ -1939,9 +1943,37 @@ function showEmailQuoteModal(){
     '<input id="emlSubject" class="iinput" style="width:100%;border:1.5px solid var(--gray-200);border-radius:8px;padding:10px;box-sizing:border-box" value="Quotation — '+esc(A.activeQuote.title||'')+'">'+
     '<label style="font-size:13px;font-weight:600;color:var(--gray-500);display:block;margin:12px 0 6px">Message (editable draft)</label>'+
     '<textarea id="emlMessage" class="iinput" style="width:100%;min-height:180px;border:1.5px solid var(--gray-200);border-radius:8px;padding:10px;box-sizing:border-box">'+esc(defaultEmailDraft())+'</textarea>'+
+    '<label style="font-size:13px;font-weight:600;color:var(--gray-500);display:block;margin:12px 0 6px">Attach files (optional — datasheets, brochures)</label>'+
+    '<label class="btn" style="cursor:pointer;display:inline-block">📎 Attach from desktop<input type="file" multiple style="display:none" onchange="emlFileChosen(event)"></label>'+
+    '<div style="font-size:12px;color:var(--gray-500);margin-top:4px">Up to '+EML_MAX_COUNT+' files, '+emlFmtSize(EML_MAX_FILE_BYTES)+' each, '+emlFmtSize(EML_MAX_TOTAL_BYTES)+' combined.</div>'+
+    '<div id="emlAttachList" style="margin-top:8px"></div>'+
     '<div id="emlErr" class="auth-err" style="display:none;margin-top:10px"></div>'+
     '<div class="modal-actions"><button class="btn" onclick="closeEmailQuoteModal()">Cancel</button><button class="btn btn-navy" id="emlSendBtn" onclick="sendQuoteEmail()">Send</button></div>'+
     '</div></div>');
+}
+function emlFileChosen(event){
+  const files=[...(event.target.files||[])];event.target.value='';
+  const errEl=document.getElementById('emlErr');
+  for(const f of files){
+    if(EML.attachments.length>=EML_MAX_COUNT){errEl.textContent='You can attach at most '+EML_MAX_COUNT+' files.';errEl.style.display='block';break;}
+    if(f.size>EML_MAX_FILE_BYTES){errEl.textContent='"'+f.name+'" is over '+emlFmtSize(EML_MAX_FILE_BYTES)+' — please attach a smaller file.';errEl.style.display='block';continue;}
+    const totalSoFar=EML.attachments.reduce((n,a)=>n+a.size,0);
+    if(totalSoFar+f.size>EML_MAX_TOTAL_BYTES){errEl.textContent='Attached files would total over '+emlFmtSize(EML_MAX_TOTAL_BYTES)+' combined — please attach fewer/smaller files.';errEl.style.display='block';continue;}
+    const reader=new FileReader();
+    reader.onload=()=>{
+      EML.attachments.push({filename:f.name,content_type:f.type,size:f.size,data:reader.result});
+      renderEmlAttachList();
+    };
+    reader.readAsDataURL(f);
+  }
+}
+function removeEmlAttachment(i){EML.attachments.splice(i,1);renderEmlAttachList();}
+function renderEmlAttachList(){
+  const el=document.getElementById('emlAttachList');if(!el)return;
+  el.innerHTML=EML.attachments.map((a,i)=>`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;border:1px solid var(--gray-200);border-radius:6px;margin-bottom:6px;font-size:13px">
+    <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📄 ${esc(a.filename)} <span style="color:var(--gray-500)">(${emlFmtSize(a.size)})</span></span>
+    <button onclick="removeEmlAttachment(${i})" title="Remove" style="border:none;background:none;cursor:pointer;color:var(--gray-500);font-size:15px;padding:0 2px">✕</button>
+  </div>`).join('');
 }
 function closeEmailQuoteModal(){const el=document.getElementById('emlOverlay');if(el)el.remove();}
 async function sendQuoteEmail(){
@@ -1964,7 +1996,8 @@ async function sendQuoteEmail(){
     const saved=await saveQuote();
     if(!saved){errEl.textContent='Could not save your latest changes ('+(A._lastSaveError||'unknown error')+') — not sending with a stale version. Please try again.';errEl.style.display='block';return;}
     const html=buildExportHTML();
-    const r=await api('POST','/api/quotes/'+A.activeQuote.id+'/email',{to,subject,message,html,from_email});
+    const attachments=EML.attachments.map(a=>({filename:a.filename,content_type:a.content_type,data:a.data}));
+    const r=await api('POST','/api/quotes/'+A.activeQuote.id+'/email',{to,subject,message,html,from_email,attachments});
     if(r.error){errEl.textContent=r.error;errEl.style.display='block';return;}
     if(A.user)A.user.ms365_email=from_email; // remember it for next time without a re-login
     if(A.activeQuote){

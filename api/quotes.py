@@ -17,7 +17,6 @@ JWT_SECRET   = os.environ.get('JWT_SECRET')
 MS_TENANT_ID = os.environ.get('MS_TENANT_ID', 'b36855d2-9d26-43a4-bec6-82268a7713fb')
 MS_CLIENT_ID = os.environ.get('MS_CLIENT_ID', '491f22c7-9dee-4c30-b828-acf8ba8d948c')
 MS_CLIENT_SECRET = os.environ.get('MS_CLIENT_SECRET')
-PDFSHIFT_API_KEY = os.environ.get('PDFSHIFT_API_KEY')
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -1070,14 +1069,49 @@ def reassign_reviewers(qid, vid):
 # registration to have Mail.Send application permission across the tenant
 # (already true today, since the same setup already sends invite emails as a
 # fixed sender) — no per-user OAuth needed.
+#
+# Extra attachments (e.g. product datasheets picked from the user's desktop)
+# ride alongside the auto-generated quote PDF in the same Graph fileAttachment
+# array. Graph's plain JSON sendMail payload (no upload session) tops out
+# around 3 MB per file / ~25 MB per message once base64 overhead is counted --
+# these caps are deliberately conservative so a send fails fast client-side
+# with a clear message instead of a confusing Graph API error.
+MAX_EMAIL_ATTACHMENT_BYTES = 3 * 1024 * 1024        # per extra attachment
+MAX_EMAIL_ATTACHMENTS_TOTAL_BYTES = 10 * 1024 * 1024  # all extra attachments combined
+MAX_EMAIL_ATTACHMENTS_COUNT = 5
+
+def _safe_attachment_name(name):
+    name = re.sub(r'[\r\n\t]+', ' ', (name or 'attachment')).strip()
+    return name[:150] or 'attachment'
+
+def _decode_email_attachment(att):
+    """One {filename, content_type, data} entry from the frontend -> a Graph
+    fileAttachment dict, or (None, error_message) if it fails validation.
+    Never raises -- a bad attachment should produce a clear 400, not a 500."""
+    data_url = att.get('data') or ''
+    raw = data_url.split(',', 1)[1] if ',' in data_url else data_url
+    try:
+        content_bytes = base64.b64decode(raw)
+    except Exception:
+        return None, f"Could not read attachment \"{att.get('filename') or ''}\" -- it may be corrupted."
+    if not content_bytes:
+        return None, f"Attachment \"{att.get('filename') or ''}\" is empty."
+    if len(content_bytes) > MAX_EMAIL_ATTACHMENT_BYTES:
+        mb = MAX_EMAIL_ATTACHMENT_BYTES // (1024*1024)
+        return None, f"\"{att.get('filename') or 'Attachment'}\" is over {mb} MB -- please attach a smaller file."
+    return {
+        '@odata.type': '#microsoft.graph.fileAttachment',
+        'name': _safe_attachment_name(att.get('filename')),
+        'contentType': att.get('content_type') or 'application/octet-stream',
+        'contentBytes': base64.b64encode(content_bytes).decode('ascii'),
+    }, None
+
 @app.route('/api/quotes/<qid>/email', methods=['POST'])
 def email_quote(qid):
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
     if not MS_CLIENT_SECRET:
         return jsonify({'error': 'Email sending is not configured (missing MS_CLIENT_SECRET)'}), 500
-    if not PDFSHIFT_API_KEY:
-        return jsonify({'error': 'PDF rendering is not configured (missing PDFSHIFT_API_KEY)'}), 500
 
     q = sb.table('quotes').select(
         'id,title,customer,status,currency,exchange_rate,quote_data,terms_data,vendor_data,customer_version,created_by'
@@ -1100,6 +1134,21 @@ def email_quote(qid):
     if not html:
         return jsonify({'error': 'No quote HTML provided to render'}), 400
 
+    extra_attachments = d.get('attachments') or []
+    if len(extra_attachments) > MAX_EMAIL_ATTACHMENTS_COUNT:
+        return jsonify({'error': f'Attach at most {MAX_EMAIL_ATTACHMENTS_COUNT} files.'}), 400
+    graph_extra_attachments = []
+    total_extra_bytes = 0
+    for att in extra_attachments:
+        graph_att, err = _decode_email_attachment(att)
+        if err:
+            return jsonify({'error': err}), 400
+        total_extra_bytes += len(base64.b64decode(graph_att['contentBytes']))
+        if total_extra_bytes > MAX_EMAIL_ATTACHMENTS_TOTAL_BYTES:
+            mb = MAX_EMAIL_ATTACHMENTS_TOTAL_BYTES // (1024*1024)
+            return jsonify({'error': f'Attached files total over {mb} MB combined -- please attach fewer/smaller files.'}), 400
+        graph_extra_attachments.append(graph_att)
+
     sender = sb.table('users').select('email,name,ms365_email').eq('id', claims['user_id']).execute()
     if not sender.data:
         return jsonify({'error': 'Could not look up your account'}), 500
@@ -1114,21 +1163,33 @@ def email_quote(qid):
         sender_email = sender.data[0].get('ms365_email') or sender.data[0]['email']
     sender_name = sender.data[0].get('name') or sender_email
 
-    # Render the exact same HTML the browser shows, to a PDF, via PDFShift.
+    fname = re.sub(r'[^\w\-]+', '-', f"Quotation-{quote.get('title') or qid[:8]}") + '.pdf'
+
+    # Render the exact same HTML the browser shows, to a PDF -- same
+    # self-hosted Puppeteer/Chromium route the "Download PDF" button uses
+    # (api/pdf-render.js), called server-to-server instead of PDFShift (whose
+    # free monthly credits ran out; see downloadPDF()'s comment in
+    # index.html). This is an internal hop to a sibling Vercel function, not
+    # a third party, so the incoming request's own Bearer token is forwarded
+    # as-is -- both functions verify against the same JWT_SECRET.
     try:
         pdf_resp = requests.post(
-            'https://api.pdfshift.io/v3/convert/pdf',
-            json={'source': html, 'use_print': True, 'format': 'A4', 'sandbox': False},
-            headers={'X-API-Key': PDFSHIFT_API_KEY, 'Content-Type': 'application/json'},
-            timeout=25
+            request.host_url.rstrip('/') + '/api/pdf/render2',
+            json={'html': html, 'filename': fname},
+            headers={'Authorization': request.headers.get('Authorization', ''), 'Content-Type': 'application/json'},
+            timeout=40
         )
         if pdf_resp.status_code != 200:
-            return jsonify({'error': f'PDF service error ({pdf_resp.status_code}): {pdf_resp.text[:300]}'}), 502
+            try:
+                err_detail = pdf_resp.json().get('error') or pdf_resp.text[:300]
+            except Exception:
+                err_detail = pdf_resp.text[:300]
+            return jsonify({'error': f'PDF generation failed ({pdf_resp.status_code}): {err_detail}'}), 502
         pdf_b64 = base64.b64encode(pdf_resp.content).decode('ascii')
+    except requests.exceptions.Timeout:
+        return jsonify({'error': 'PDF generation timed out — please try again.'}), 504
     except Exception as e:
         return jsonify({'error': f'PDF generation failed: {str(e)[:200]}'}), 500
-
-    fname = re.sub(r'[^\w\-]+', '-', f"Quotation-{quote.get('title') or qid[:8]}") + '.pdf'
 
     token = get_ms_token()
     if not token:
@@ -1152,7 +1213,7 @@ def email_quote(qid):
                 'name': fname,
                 'contentType': 'application/pdf',
                 'contentBytes': pdf_b64,
-            }],
+            }] + graph_extra_attachments,
         },
         'saveToSentItems': True,
     }

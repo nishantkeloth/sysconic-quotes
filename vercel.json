@@ -2,7 +2,7 @@
   "version": 2,
   "builds": [
     { "src": "api/auth.py",   "use": "@vercel/python" },
-    { "src": "api/quotes.py", "use": "@vercel/python" },
+    { "src": "api/quotes.py", "use": "@vercel/python", "config": { "maxDuration": 45 } },
     { "src": "api/ai.py",     "use": "@vercel/python" },
     { "src": "api/pdf.py", "use": "@vercel/python" },
     { "src": "api/products.py", "use": "@vercel/python" },
