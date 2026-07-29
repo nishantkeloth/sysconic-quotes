@@ -1240,11 +1240,17 @@ def _zoho_project_patch(company_id, row, zp):
         baseline = _quote_baseline_for_zoho(company_id, zp['zoho_project_id'], zp.get('zoho_project_no'))
         if baseline:
             patch.update(baseline)
-        elif not _num(row.get('revenue_forecast')):
-            # No linked quote either -- fall back to Zoho's Total Project
-            # Cost as the Value stand-in, as before.
+        else:
+            # No linked quote either -- Zoho's own Total Project Cost is the
+            # only source of truth for Value on a baseline-less imported
+            # project. Kept live on every sync (not just backfilled once
+            # when empty, as before) -- otherwise an edit to Total Project
+            # Cost inside Zoho after the initial import never reaches
+            # QTcal, which is exactly what Nish hit after correcting a
+            # VAT-inclusive figure in Zoho and re-syncing: the old cached
+            # value just sat there unchanged.
             cost = _num(zp.get('total_project_cost'))
-            if cost:
+            if cost and cost != _num(row.get('revenue_forecast')):
                 patch['revenue_forecast'] = cost
                 patch['original_selling_price'] = cost
     return patch
@@ -1410,6 +1416,30 @@ def pp_run_sync():
         project = proj.data[0]
         allowed = can_manage(claims) or claims['user_id'] in (project.get('project_manager_id'), project.get('salesperson_id'))
         if not allowed: return jsonify({'error': 'Forbidden'}), 403
+        # Refresh this project's own Zoho header fields (name, customer,
+        # Project No, and -- for baseline-less imported projects -- Total
+        # Project Cost/Value) before syncing actuals below. Previously this
+        # per-project "Sync Now" button only ever synced POs/Bills/Expenses/
+        # Invoices/Payments; it never re-fetched the Zoho Project record
+        # itself, so an edit made directly in Zoho (e.g. correcting Total
+        # Project Cost) never showed up here no matter how many times this
+        # button was clicked -- only a full portfolio import or the
+        # admin-only "Sync Selected" flow ever called fetch_project/
+        # _zoho_project_patch. Best-effort: a failure here never blocks the
+        # actuals sync that follows.
+        if project.get('zoho_project_id'):
+            creds = _get_zoho_creds(company_id)
+            if creds and ZOHO.is_configured(creds):
+                try:
+                    zp = ZOHO.fetch_project(creds, project['zoho_project_id'])
+                    if zp:
+                        patch = _zoho_project_patch(company_id, project, zp)
+                        if patch:
+                            sb.table('projects').update(patch).eq('id', pid).eq('company_id', company_id).execute()
+                            _mirror_zoho_no_to_quote(company_id, project, patch)
+                            project.update(patch)
+                except Exception:
+                    traceback.print_exc()
         projects = [project]
     elif zoho_ids_filter:
         # Targeted test sync -- only the named Zoho Project IDs, so testing
