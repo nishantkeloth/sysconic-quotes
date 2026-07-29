@@ -897,6 +897,29 @@ function ppCostControlTab(d){
   </tr>`).join('');
   const variance=(p.original_estimated_cost||0)-(p.estimate_at_completion||0);
 
+  // PO vs Quoted Cost — each synced PO line next to the quoted (baseline)
+  // line item it was text-matched to (see _match_baseline_line in
+  // api/projects.py), so a distributor discount negotiated at PO time
+  // shows up as a per-line saving instead of only moving the aggregate
+  // Committed Cost figure above. Unmatched lines still show (best-effort
+  // text match, not a guaranteed join) with '—' in place of the quoted columns.
+  const poComp=d.po_line_comparison||[];
+  const poCompRows=poComp.map(c=>{
+    const savingsColor=(c.savings_amount||0)>0?'var(--green)':((c.savings_amount||0)<0?'var(--red)':'var(--gray-500)');
+    const quotedAs=[c.quoted_brand,c.quoted_model].filter(Boolean).join(' ');
+    return `<tr style="border-bottom:1px solid var(--gray-100)">
+      <td style="padding:8px">${esc(c.po_number||'')}</td>
+      <td style="padding:8px">${esc(c.vendor_name||'')}</td>
+      <td style="padding:8px">${esc(c.item_name||'')}${quotedAs?`<div style="color:var(--gray-500);font-size:11.5px">Quoted as: ${esc(quotedAs)}</div>`:''}</td>
+      <td style="padding:8px;text-align:right">${fmt(c.quantity||0)}</td>
+      <td style="padding:8px;text-align:right">${c.matched?'AED '+fmt(c.quoted_unit_cost||0):'<span style="color:var(--gray-400)">—</span>'}</td>
+      <td style="padding:8px;text-align:right">AED ${fmt(c.rate||0)}</td>
+      <td style="padding:8px;text-align:right">AED ${fmt(c.total||0)}</td>
+      <td style="padding:8px;text-align:right;font-weight:600;color:${savingsColor}">${c.matched?(c.savings_amount>=0?'+':'')+'AED '+fmt(c.savings_amount||0)+' ('+(c.savings_pct>=0?'+':'')+(c.savings_pct||0).toFixed(1)+'%)':'<span style="color:var(--gray-400);font-weight:400">Not matched to a quote line</span>'}</td>
+    </tr>`;
+  }).join('');
+  const totalPoSavings=poComp.reduce((s,c)=>s+(c.matched?(c.savings_amount||0):0),0);
+
   return `<div class="card">
     <div class="card-title">Cost Control — by Category</div>
     <table style="width:100%;border-collapse:collapse;font-size:14px">
@@ -910,6 +933,15 @@ function ppCostControlTab(d){
       <span>EAC: <b>AED ${fmt(p.estimate_at_completion||0)}</b></span>
       <span>Forecast Variance: <b style="${variance<0?'color:var(--red)':'color:var(--green)'}">AED ${fmt(variance)}</b></span>
     </div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <div class="card-title">PO vs Quoted Cost</div>
+    <div style="color:var(--gray-500);font-size:13px;margin-bottom:10px">Every synced PO line next to what that item was originally quoted to cost. A positive Savings figure means the PO landed below the quote — e.g. an extra discount negotiated with the distributor at PO time.</div>
+    <table style="width:100%;border-collapse:collapse;font-size:13.5px">
+      <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200)"><th style="padding:8px">PO #</th><th style="padding:8px">Vendor</th><th style="padding:8px">Item</th><th style="padding:8px;text-align:right">Qty</th><th style="padding:8px;text-align:right">Quoted Unit Cost</th><th style="padding:8px;text-align:right">PO Rate</th><th style="padding:8px;text-align:right">PO Total</th><th style="padding:8px;text-align:right">Savings</th></tr></thead>
+      <tbody>${poCompRows||'<tr><td colspan="8" style="padding:12px;color:var(--gray-500)">No PO line items synced yet.</td></tr>'}</tbody>
+    </table>
+    ${poComp.length?`<div style="margin-top:12px;padding-top:12px;border-top:1.5px solid var(--gray-200)">Total captured savings (matched lines): <b style="color:${totalPoSavings>=0?'var(--green)':'var(--red)'}">AED ${fmt(totalPoSavings)}</b></div>`:''}
   </div>
   <div class="card" style="margin-top:16px">
     <div class="card-title">Forecast Remaining Cost</div>

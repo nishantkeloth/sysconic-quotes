@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
-import os, jwt, traceback, json, time, secrets
+import os, jwt, traceback, json, time, secrets, re
 import urllib.request, urllib.error, urllib.parse
 from datetime import datetime, timezone, timedelta
 from supabase import create_client
@@ -178,6 +178,67 @@ def _num(v, d=0.0):
         return float(v) if v not in (None, '') else d
     except (TypeError, ValueError):
         return d
+
+# ── PO/Bill line -> quoted (baseline) line matching ─────────────────────────
+# QTcal's own quote line items (frozen into project_baseline_lines at award
+# time) and Zoho's Item master are two separate systems with no shared ID --
+# there's no FK to join a Zoho PO/Bill line back to "the item we quoted" by
+# key, only free text (Zoho's item_name/description vs our brand/model/
+# description). This is a best-effort text match, not an exact join: it lets
+# the Cost Control view show, per PO line, what we originally quoted that
+# item to cost vs what we actually paid the distributor -- e.g. catching an
+# extra discount negotiated at PO time. Wrong is worse than blank, so this
+# only returns a match above a reasonable confidence bar; otherwise the PO
+# line still syncs and still counts toward Actual/Committed cost as before,
+# it just won't show a quoted-cost comparison.
+_WORD_RE = re.compile(r'[a-z0-9]+')
+
+def _norm_tokens(s):
+    return set(_WORD_RE.findall((s or '').lower()))
+
+def _match_baseline_line(item_name, baseline_lines):
+    """baseline_lines: [{'id','brand','model','description'}, ...] for one
+    project's frozen baseline. Brand+model both appearing as substrings in
+    the Zoho item name is treated as a confident match (AV/systems-
+    integrator item names are usually "<Brand> <Model> <description>", e.g.
+    "Sony VPL-FHZ75 Laser Projector"); otherwise falls back to word-overlap
+    against the line's description (+ brand/model as extra tokens), scored
+    as a fraction of the baseline line's own distinguishing words. Returns
+    None (no match) below a 0.5 overlap score."""
+    name = (item_name or '').lower().strip()
+    if not name or not baseline_lines:
+        return None
+    name_tokens = _norm_tokens(name)
+    best_id, best_score = None, 0.0
+    for bl in baseline_lines:
+        brand = (bl.get('brand') or '').lower().strip()
+        model = (bl.get('model') or '').lower().strip()
+        if brand and model and brand in name and model in name:
+            score = 2.0  # brand+model both present -- outranks any token-overlap score (max 1.0)
+        else:
+            desc_tokens = _norm_tokens(bl.get('description') or '') | _norm_tokens(brand) | _norm_tokens(model)
+            score = (len(name_tokens & desc_tokens) / len(desc_tokens)) if desc_tokens else 0.0
+        if score > best_score:
+            best_score, best_id = score, bl.get('id')
+    return best_id if best_score >= 0.5 else None
+
+def _project_baseline_lines(project_id):
+    """This project's frozen baseline lines (brand/model/description/costs),
+    used both to populate quotation_line_id during sync and to build the
+    PO-vs-quoted comparison in pp_project_detail(). Uses the latest baseline
+    if more than one exists (shouldn't normally happen -- a baseline is
+    frozen once at award time)."""
+    baseline_row = sb.table('project_commercial_baselines').select('id').eq('project_id', project_id)\
+        .order('created_at', desc=True).limit(1).execute()
+    if not baseline_row.data:
+        return []
+    baseline_id = baseline_row.data[0]['id']
+    sections = sb.table('project_baseline_sections').select('id').eq('baseline_id', baseline_id).execute().data or []
+    section_ids = [s['id'] for s in sections]
+    if not section_ids:
+        return []
+    return sb.table('project_baseline_lines').select('id,brand,model,description,quantity,estimated_unit_cost,estimated_total_cost')\
+        .in_('section_id', section_ids).execute().data or []
 
 def _require_pp(claims):
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
@@ -499,11 +560,48 @@ def pp_project_detail(pid):
             b = breakdown.setdefault(key, {'cost_category_id': f.get('cost_category_id'), 'name': cat_name.get(f.get('cost_category_id'), 'Uncategorized'), 'actual': 0.0, 'committed': 0.0, 'forecast_remaining': 0.0})
             b['forecast_remaining'] += _num(f.get('amount'))
 
+    # PO vs Quoted Cost — every synced PO line next to the quoted (baseline)
+    # line it was matched to at sync time (see _match_baseline_line /
+    # _sync_project_actuals), so a PO that came in cheaper than what was
+    # quoted (e.g. an extra distributor discount negotiated at PO stage)
+    # shows up as a per-line saving instead of only moving the aggregate
+    # Committed Cost number. Unmatched lines still show (rate/total only) --
+    # matching is best-effort text matching, not a guaranteed join.
+    po_line_rows = sb.table('zoho_purchase_order_lines').select('*').in_('purchase_order_id', [po['id'] for po in pos]).execute().data if pos else []
+    matched_ids = list({li['quotation_line_id'] for li in po_line_rows if li.get('quotation_line_id')})
+    baseline_lookup = {}
+    if matched_ids:
+        blines = sb.table('project_baseline_lines').select('id,brand,model,description,estimated_unit_cost,estimated_total_cost')\
+            .in_('id', matched_ids).execute().data or []
+        baseline_lookup = {b['id']: b for b in blines}
+    po_by_id = {po['id']: po for po in pos}
+    po_line_comparison = []
+    for li in po_line_rows:
+        po = po_by_id.get(li.get('purchase_order_id'), {})
+        bl = baseline_lookup.get(li.get('quotation_line_id'))
+        qty = _num(li.get('quantity'), 1) or 1
+        rate = _num(li.get('rate'))
+        quoted_unit_cost = _num(bl.get('estimated_unit_cost')) if bl else None
+        # Savings are computed on the quantity actually bought via this PO
+        # (not the originally quoted quantity), so a partial PO still shows
+        # an accurate dirham figure rather than one scaled to the full BOQ line.
+        savings_amount = ((quoted_unit_cost - rate) * qty) if quoted_unit_cost is not None else None
+        savings_pct = ((quoted_unit_cost - rate) / quoted_unit_cost * 100.0) if quoted_unit_cost else None
+        po_line_comparison.append({
+            'po_number': po.get('po_number'), 'vendor_name': po.get('vendor_name'), 'po_date': po.get('po_date'),
+            'item_name': li.get('item_name'), 'quantity': qty, 'rate': rate, 'total': _num(li.get('total')),
+            'quoted_brand': bl.get('brand') if bl else None, 'quoted_model': bl.get('model') if bl else None,
+            'quoted_description': bl.get('description') if bl else None,
+            'quoted_unit_cost': quoted_unit_cost, 'quoted_total_cost': _num(bl.get('estimated_total_cost')) if bl else None,
+            'savings_amount': savings_amount, 'savings_pct': savings_pct, 'matched': bl is not None,
+        })
+
     return jsonify({
         'project': project,
         'baseline': baseline,
         'baseline_sections': baseline_sections,
         'purchase_orders': pos,
+        'po_line_comparison': po_line_comparison,
         'bills': bills,
         'expenses': expenses,
         'invoices': invoices,
@@ -956,6 +1054,9 @@ def _sync_project_actuals(company_id, project):
 
     project_id = project['id']
     results = []
+    # Fetched once per sync and reused for both PO and Bill lines below --
+    # the baseline is immutable after award, so this never changes mid-sync.
+    baseline_lines = _project_baseline_lines(project_id)
 
     def _log(resource, status, count, err=None):
         sb.table('pp_sync_logs').insert({
@@ -982,6 +1083,7 @@ def _sync_project_actuals(company_id, project):
                         'zoho_purchase_order_line_id': li.get('zoho_purchase_order_line_id'),
                         'zoho_item_id': li.get('zoho_item_id'), 'item_name': li.get('item_name'),
                         'quantity': li.get('quantity'), 'rate': li.get('rate'), 'total': li.get('total'),
+                        'quotation_line_id': _match_baseline_line(li.get('item_name'), baseline_lines),
                         'raw': li.get('raw'),
                     })
                 if line_rows:
@@ -1007,7 +1109,9 @@ def _sync_project_actuals(company_id, project):
                         'company_id': company_id, 'bill_id': bill_uuid,
                         'zoho_bill_line_id': li.get('zoho_bill_line_id'), 'zoho_item_id': li.get('zoho_item_id'),
                         'item_name': li.get('item_name'), 'quantity': li.get('quantity'),
-                        'rate': li.get('rate'), 'total': li.get('total'), 'raw': li.get('raw'),
+                        'rate': li.get('rate'), 'total': li.get('total'),
+                        'quotation_line_id': _match_baseline_line(li.get('item_name'), baseline_lines),
+                        'raw': li.get('raw'),
                     })
                 if line_rows:
                     sb.table('zoho_bill_lines').delete().in_('bill_id', list(id_by_zoho.values())).execute()
