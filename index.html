@@ -4305,7 +4305,9 @@ function proposalReviewHTML(){
   while((c.mobilization_phases||(c.mobilization_phases=[])).length<4)c.mobilization_phases.push({title:'',bullets:[]});
   while((c.exclusions||(c.exclusions=[])).length<3)c.exclusions.push({title:'',text:''});
 
+  const tierLabels={small:'Small scope',medium:'Medium scope',large:'Large scope',enterprise:'Enterprise scope'};
   return `<div style="max-height:52vh;overflow-y:auto;padding-right:8px;margin-top:8px">
+    ${c.scope_tier?`<div style="display:inline-block;font-size:11px;font-weight:700;color:var(--navy);background:var(--navy-light);padding:3px 9px;border-radius:20px;margin-bottom:10px">${tierLabels[c.scope_tier]||c.scope_tier} detected — content depth matched to it</div>`:''}
     <div class="fld2" style="margin-bottom:10px"><label>Title</label><input value="${esc(c.title||'')}" oninput="PROP.content.title=this.value"></div>
     <div class="fld2" style="margin-bottom:10px"><label>Subtitle</label><input value="${esc(c.subtitle||'')}" oninput="PROP.content.subtitle=this.value"></div>
 

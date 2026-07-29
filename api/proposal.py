@@ -169,27 +169,68 @@ def extract_attachment_text(filename, data):
         return ''
 
 # ── Gemini: draft the technical narrative content ───────────────────────────────
-SYSTEM_PROMPT = """You are a senior AV/IT solutions consultant drafting the TEXT CONTENT for a professional technical proposal document (not the pricing — that's handled separately). Given a project brief, optional reference material, and a summary of the actual equipment being proposed (brands/models/categories from a real bill of materials), draft compelling, specific, professional proposal content.
-
-Return ONLY valid JSON matching exactly this shape (no markdown fences, no commentary):
-{
-  "title": "Short punchy solution title, e.g. 'Signage & Interactive Flat Panel (IFP) Solution'",
-  "subtitle": "One descriptive line about what the system does and where",
-  "stats": [{"label":"SHORT LABEL","value":"short value e.g. 3 or 20+"} ...exactly 4 items, derived from the real equipment summary provided...],
-  "executive_summary": "2-4 sentence professional paragraph summarizing the solution",
-  "feature_cards": [{"title":"...", "description":"1-2 sentences"} ...exactly 4 items describing the key components/subsystems...],
-  "scope_cards": [{"title":"...", "description":"1-2 sentences"} ...exactly 4 items describing scope of work streams (supply, installation, integration, testing etc.)...],
-  "control_testing": [{"title":"Control & Automation","bullets":["...","..."]}, {"title":"Testing & Commissioning","bullets":["...","..."]}],
-  "architecture_items": [{"label":"Category e.g. Display","value":"brands/models e.g. Samsung QM43C"} ...exactly 6 items...],
-  "architecture_note": "1-2 sentence paragraph about how the layers fit together",
-  "mobilization_phases": [{"title":"Project Initiation","bullets":["...","...","..."]} ...exactly 4 phases, standard AV project rollout phases...],
-  "warranty_years": "e.g. 1 Year or 3 Years, infer from context or default to 1 Year",
-  "support_bullets": ["...", "...", "... 4-6 short bullet points of what's covered during warranty"],
-  "exclusions": [{"title":"Mishandling / misuse","text":"..."}, {"title":"Environmental","text":"..."}, {"title":"Third-party scope","text":"..."}],
-  "general_notes": ["...", "... 4-6 short standard proposal disclaimer bullet points"]
+# Content depth scales with the real scope of the quote instead of asking for
+# the same fixed counts (4 feature cards, 6 architecture items, etc.) no
+# matter how small or large the job is -- see _scope_tier()/SCOPE_TARGETS
+# below. total_line_items already comes from get_equipment_summary(), which
+# reads the quote's real bill of materials, so this can't be gamed by a
+# verbose brief on a tiny job or vice versa.
+SCOPE_TIERS = [  # (min_line_items, tier) — checked in order, first match wins
+    (60, 'enterprise'),
+    (25, 'large'),
+    (10, 'medium'),
+    (0,  'small'),
+]
+SCOPE_TARGETS = {
+    'small':      {'feature_cards': 3, 'scope_cards': 3, 'control_testing': 2, 'architecture_items': 4,  'mobilization_phases': 3, 'exclusions': 3},
+    'medium':     {'feature_cards': 4, 'scope_cards': 4, 'control_testing': 2, 'architecture_items': 6,  'mobilization_phases': 4, 'exclusions': 3},
+    'large':      {'feature_cards': 6, 'scope_cards': 6, 'control_testing': 3, 'architecture_items': 9,  'mobilization_phases': 5, 'exclusions': 4},
+    'enterprise': {'feature_cards': 8, 'scope_cards': 8, 'control_testing': 4, 'architecture_items': 12, 'mobilization_phases': 6, 'exclusions': 5},
 }
 
-Ground every claim in the real equipment summary provided — never invent brands/models that aren't in it. Keep tone professional and concise, matching enterprise AV/IT proposal writing."""
+def _scope_tier(equipment_summary):
+    n = (equipment_summary or {}).get('total_line_items') or 0
+    for min_items, tier in SCOPE_TIERS:
+        if n >= min_items:
+            return tier
+    return 'small'
+
+_TIER_GUIDANCE = {
+    'small': "This is a SMALL, focused scope. Keep content tight and specific — don't pad it out with generic filler to look bigger than it is.",
+    'medium': "This is a MODERATE scope covering several subsystems. Give each section clear, specific detail grounded in the real equipment.",
+    'large': "This is a LARGE, multi-subsystem scope. Write a genuinely comprehensive proposal: break the architecture and scope out into more granular, specific items rather than broad generalizations.",
+    'enterprise': "This is an ENTERPRISE-scale, multi-system deployment. Write an in-depth, comprehensive proposal that covers every major subsystem/category distinctly — favor specificity and granularity throughout rather than brevity.",
+}
+
+def _build_system_prompt(tier, targets):
+    summary_len = '2-4 sentences' if tier in ('small', 'medium') else '4-6 sentences, genuinely comprehensive'
+    note_len = '1-2 sentences' if tier in ('small', 'medium') else '2-4 sentences, covering how the subsystems integrate with each other'
+    closing = ('Favor conciseness — this is a smaller job and padding it out with generic language will look inflated.'
+               if tier == 'small' else
+               'Favor genuine depth and specificity throughout — this is a substantial scope and the proposal should read as comprehensive, not a shortened summary.')
+    return f"""You are a senior AV/IT solutions consultant drafting the TEXT CONTENT for a professional technical proposal document (not the pricing — that's handled separately). Given a project brief, optional reference material, and a summary of the actual equipment being proposed (brands/models/categories from a real bill of materials), draft compelling, specific, professional proposal content.
+
+This project's scope has been assessed as {tier.upper()} based on its real bill of materials (line item count, section count, and brand diversity). {_TIER_GUIDANCE[tier]}
+
+Return ONLY valid JSON matching exactly this shape (no markdown fences, no commentary):
+{{
+  "title": "Short punchy solution title, e.g. 'Signage & Interactive Flat Panel (IFP) Solution'",
+  "subtitle": "One descriptive line about what the system does and where",
+  "stats": [{{"label":"SHORT LABEL","value":"short value e.g. 3 or 20+"}} ...exactly 4 items, derived from the real equipment summary provided...],
+  "executive_summary": "{summary_len} professional paragraph summarizing the solution",
+  "feature_cards": [{{"title":"...", "description":"1-2 sentences"}} ...exactly {targets['feature_cards']} items, each describing a distinct key component/subsystem actually present in the equipment summary...],
+  "scope_cards": [{{"title":"...", "description":"1-2 sentences"}} ...exactly {targets['scope_cards']} items describing distinct scope of work streams (supply, installation, integration, testing, training, etc.)...],
+  "control_testing": [{{"title":"...","bullets":["...","..."]}} ...exactly {targets['control_testing']} items — distinct control/testing/assurance topics (e.g. Control & Automation, Testing & Commissioning, and for larger scopes also Redundancy & Failover, Cybersecurity & Network Hardening, Documentation & As-Builts)...],
+  "architecture_items": [{{"label":"Category e.g. Display","value":"brands/models e.g. Samsung QM43C"}} ...exactly {targets['architecture_items']} items, one per distinct subsystem/category actually present in the equipment summary — for larger scopes, break categories out more granularly (e.g. separate Displays / Video Processing / Audio DSP / Amplification / Control / Network / Cabling Infrastructure / Power & Racks) rather than lumping them together...],
+  "architecture_note": "{note_len}",
+  "mobilization_phases": [{{"title":"Project Initiation","bullets":["...","...","..."]}} ...exactly {targets['mobilization_phases']} phases, standard AV project rollout phases scaled to project complexity...],
+  "warranty_years": "e.g. 1 Year or 3 Years, infer from context or default to 1 Year",
+  "support_bullets": ["...", "...", "... 4-6 short bullet points of what's covered during warranty (more for larger scopes)"],
+  "exclusions": [{{"title":"Mishandling / misuse","text":"..."}} ...exactly {targets['exclusions']} items...],
+  "general_notes": ["...", "... 4-6 short standard proposal disclaimer bullet points"]
+}}
+
+Ground every claim in the real equipment summary provided — never invent brands/models that aren't in it. Keep tone professional, matching enterprise AV/IT proposal writing. {closing}"""
 
 def _gemini_request_with_retry(req):
     # Gemini occasionally returns 503 (overloaded) or 429 (rate-limited) even
@@ -220,19 +261,29 @@ def draft_proposal_content(brief, attachment_text, equipment_summary, currency, 
     if not GEMINI_API_KEY:
         raise RuntimeError('Proposal generation is not configured yet (GEMINI_API_KEY is missing)')
 
+    tier = _scope_tier(equipment_summary)
+    targets = SCOPE_TARGETS[tier]
+    system_prompt = _build_system_prompt(tier, targets)
+
     user_msg = json.dumps({
         'project_brief': brief[:4000],
         'reference_material': (attachment_text or '')[:6000],
         'equipment_summary': equipment_summary,
+        'scope_tier': tier,
         'currency': currency,
     }, ensure_ascii=False)
 
+    # Larger tiers are asked for meaningfully more content (more cards, more
+    # architecture items, longer summaries) -- give them headroom so Gemini
+    # doesn't truncate mid-JSON and produce an unparseable response.
+    max_tokens = {'small': 8000, 'medium': 8000, 'large': 11000, 'enterprise': 14000}[tier]
+
     body = json.dumps({
-        'systemInstruction': {'parts': [{'text': SYSTEM_PROMPT}]},
+        'systemInstruction': {'parts': [{'text': system_prompt}]},
         'contents': [{'role': 'user', 'parts': [{'text': user_msg}]}],
         'generationConfig': {
             'temperature': 0.4,
-            'maxOutputTokens': 8000,
+            'maxOutputTokens': max_tokens,
             'responseMimeType': 'application/json',
             'thinkingConfig': {'thinkingLevel': 'minimal'},
         },
@@ -256,9 +307,11 @@ def draft_proposal_content(brief, attachment_text, equipment_summary, currency, 
         if text.lower().startswith('json'): text = text[4:].strip()
 
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
     except Exception:
         raise RuntimeError('Could not parse the AI response. Please try again.')
+    parsed['scope_tier'] = tier  # surfaced to the frontend so the review modal can show what depth was targeted
+    return parsed
 
 # ── Pull the linked quote's real data (never AI-invented) ───────────────────────
 def get_equipment_summary(quote, which):
@@ -885,19 +938,30 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
         if not _section_on(content, 'scope'): del E[_sc_start:]
         if _section_on(content, 'quality') and content.get('control_testing'):
             E += [section_badge('QUALITY')] + heading('Control, Testing & Documentation', S)
-            cells = []
-            for ct in content['control_testing'][:2]:
+            # Wraps 2-per-row instead of a fixed single row of exactly 2 --
+            # larger-scope proposals ask the AI for 3-4 distinct control/
+            # testing topics (see SCOPE_TARGETS), which a hardcoded 2-column
+            # single row would have silently dropped past the 2nd item.
+            ct_rows, ct_row = [], []
+            for ct in content['control_testing']:
                 bullets = '<br/>'.join(f"•  {esc_p(b)}" for b in (ct.get('bullets') or []))
-                cells.append(Paragraph(f"<b>{esc_p(ct.get('title',''))}</b><br/>{bullets}", S['body']))
-            while len(cells) < 2: cells.append(Paragraph('', S['body']))
-            t = Table([cells], colWidths=[CW/2, CW/2])
-            t.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('RIGHTPADDING',(0,0),(0,0),8)]))
+                ct_row.append(Paragraph(f"<b>{esc_p(ct.get('title',''))}</b><br/>{bullets}", S['body']))
+                if len(ct_row) == 2: ct_rows.append(ct_row); ct_row = []
+            if ct_row:
+                ct_row.append(Paragraph('', S['body']))
+                ct_rows.append(ct_row)
+            t = Table(ct_rows, colWidths=[CW/2, CW/2])
+            t.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('RIGHTPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
             E.append(t)
 
         if _section_on(content, 'system_design') and content.get('architecture_items'):
             E.append(PageBreak())
             E += [section_badge('SYSTEM DESIGN')] + heading('Solution Architecture', S)
-            items = content['architecture_items'][:6]
+            # No cap here (previously hardcoded to [:6]) -- the grid below
+            # already wraps to as many rows of 3 as needed, so a larger-scope
+            # proposal's extra architecture_items (see SCOPE_TARGETS) render
+            # in full instead of being silently cut off past the 6th.
+            items = content['architecture_items']
             rows, row = [], []
             for it in items:
                 cell = Table([[Paragraph(f"<b>{esc_p(it.get('label',''))}</b>", ParagraphStyle('al', fontName='Helvetica-Bold', fontSize=8.5, textColor=NAVY))],
@@ -963,14 +1027,17 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
         E += [section_badge('ASSURANCE')] + heading('Warranty, Support & General Notes', S)
         left_bits = [Paragraph(f"<b>Warranty Coverage — {esc_p(content.get('warranty_years') or '1 Year')}</b>", ParagraphStyle('wc', fontName='Helvetica-Bold', fontSize=9.5, textColor=white))]
         left_bits.append(Spacer(1, 2*mm))
-        for b in (content.get('support_bullets') or [])[:8]:
+        for b in (content.get('support_bullets') or [])[:12]:
             left_bits.append(Paragraph(f"•  {esc_p(b)}", ParagraphStyle('wb', fontName='Helvetica', fontSize=8, textColor=white, leading=11)))
         left = Table([[left_bits]], colWidths=[CW*0.48])
         left.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),NAVY),('TOPPADDING',(0,0),(-1,-1),10),
                                   ('BOTTOMPADDING',(0,0),(-1,-1),10),('LEFTPADDING',(0,0),(-1,-1),10),('RIGHTPADDING',(0,0),(-1,-1),10)]))
         right_rows = []
         colors_ex = [HexColor('#fdf3d8'), HexColor('#fdeceb'), HexColor('#e9eefb')]
-        for i, ex in enumerate((content.get('exclusions') or [])[:3]):
+        # No hardcoded cap here (previously [:3]) -- the boxes just stack
+        # vertically in this single-column table, so a larger-scope
+        # proposal's extra exclusions (see SCOPE_TARGETS) render in full.
+        for i, ex in enumerate(content.get('exclusions') or []):
             box = Table([[Paragraph(f"<b>{esc_p(ex.get('title',''))}</b><br/>{esc_p(ex.get('text',''))}", ParagraphStyle('exb', fontName='Helvetica', fontSize=8, textColor=TXT, leading=11))]], colWidths=[CW*0.48])
             box.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors_ex[i % 3]),('TOPPADDING',(0,0),(-1,-1),7),
                                      ('BOTTOMPADDING',(0,0),(-1,-1),7),('LEFTPADDING',(0,0),(-1,-1),9),('RIGHTPADDING',(0,0),(-1,-1),9)]))
