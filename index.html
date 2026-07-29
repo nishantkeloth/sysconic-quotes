@@ -2158,7 +2158,7 @@ function draw(){
   if(A.page==='team'){setTimeout(loadTeam,50);}
   if(A.page==='integrations'){setTimeout(loadIntegrations,50);setTimeout(loadSyncConfig,50);}
   if(A.page==='platform'){setTimeout(loadPlatformCompanies,50);}
-  if(A.page==='companyProfile'){setTimeout(loadCompanyProfile,50);}
+  if(A.page==='companyProfile'){setTimeout(loadCompanyProfile,50);setTimeout(loadQuoteNumbering,50);}
   if(A.page==='rolesPermissions'){setTimeout(loadRolesPermissions,50);}
   if(A.page==='print'){ensurePrintCompany();}
   if(A.page==='products')setTimeout(loadProducts,50);
@@ -4633,7 +4633,66 @@ function companyProfileHTML(){return`<div class="card" style="max-width:640px">
   <div class="card-title">Company Profile</div>
   <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">This appears on your Quotation PDFs and generated proposals. Admin only.</div>
   <div id="cpBox"><div style="color:var(--gray-500)">Loading…</div></div>
+</div>
+<div class="card" style="max-width:640px;margin-top:16px">
+  <div class="card-title">Quotation numbering</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">New quotes get an auto-generated reference like QT-2026-001. The counter resets every calendar year. Admin only.</div>
+  <div id="qnBox"><div style="color:var(--gray-500)">Loading…</div></div>
 </div>`;}
+let QN={};
+async function loadQuoteNumbering(){
+  const el=document.getElementById('qnBox');if(!el)return;
+  const r=await api('GET','/api/quotes/numbering');
+  if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  QN=r;
+  const seqByYear={};(r.sequences||[]).forEach(s=>seqByYear[s.year]=s.next_number);
+  if(!(r.current_year in seqByYear))seqByYear[r.current_year]=1;
+  const years=Object.keys(seqByYear).map(Number).sort((a,b)=>b-a);
+  el.innerHTML=`
+    <div style="display:flex;gap:12px">
+      <div class="fld" style="max-width:160px"><label>Prefix</label><input id="qnPrefix" maxlength="20" value="${esc(r.prefix)}"></div>
+      <div class="fld" style="max-width:160px"><label>Digits (zero-padding)</label><input id="qnPadding" type="number" min="1" max="6" value="${esc(r.padding)}"></div>
+    </div>
+    <button class="btn btn-navy btn-sm" onclick="saveQuoteNumberingFormat()">Save format</button>
+
+    <div style="font-weight:600;font-size:14px;margin:18px 0 10px;border-top:1px solid var(--gray-100);padding-top:16px">Number ranges by year</div>
+    ${years.map(y=>`<div style="display:flex;gap:10px;align-items:center;margin-bottom:8px">
+      <span style="width:60px;font-weight:600">${y}${y===r.current_year?' (current)':''}</span>
+      <span style="color:var(--gray-500);font-size:13px">Next number:</span>
+      <input id="qnNext_${y}" type="number" min="1" value="${seqByYear[y]}" style="width:110px">
+      <button class="btn btn-sm" onclick="saveQuoteYearNumber(${y})">Save</button>
+      <span style="font-size:12px;color:var(--gray-500)">→ next ref will be ${esc(r.prefix)}-${y}-${String(seqByYear[y]).padStart(r.padding,'0')}</span>
+    </div>`).join('')}
+
+    <div style="display:flex;gap:10px;align-items:center;margin-top:12px;border-top:1px solid var(--gray-100);padding-top:14px">
+      <span style="font-size:13px;color:var(--gray-500)">Pre-set a year:</span>
+      <input id="qnNewYear" type="number" placeholder="2027" style="width:90px">
+      <input id="qnNewStart" type="number" min="1" placeholder="Starting number" style="width:130px">
+      <button class="btn btn-sm" onclick="addQuoteYearRange()">Add</button>
+    </div>
+  `;
+}
+async function saveQuoteNumberingFormat(){
+  const prefix=document.getElementById('qnPrefix').value;
+  const padding=document.getElementById('qnPadding').value;
+  const r=await api('PATCH','/api/quotes/numbering',{prefix,padding});
+  if(r.error){alert(r.error);return;}
+  QN=r;loadQuoteNumbering();
+}
+async function saveQuoteYearNumber(year){
+  const next_number=document.getElementById('qnNext_'+year).value;
+  const r=await api('PATCH','/api/quotes/numbering',{year,next_number});
+  if(r.error){alert(r.error);return;}
+  loadQuoteNumbering();
+}
+async function addQuoteYearRange(){
+  const year=document.getElementById('qnNewYear').value;
+  const next_number=document.getElementById('qnNewStart').value;
+  if(!year||!next_number){alert('Enter both a year and a starting number.');return;}
+  const r=await api('PATCH','/api/quotes/numbering',{year,next_number});
+  if(r.error){alert(r.error);return;}
+  loadQuoteNumbering();
+}
 let CP={logo_url:''};
 async function loadCompanyProfile(){
   const el=document.getElementById('cpBox');if(!el)return;

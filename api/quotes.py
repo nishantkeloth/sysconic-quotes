@@ -203,6 +203,77 @@ def _quote_limit_exceeded(claims):
         .eq('company_id', claims['company_id']).gt('created_at', month_start).execute()
     return (count.count or 0) >= max_per_month
 
+# ── Quotation reference numbering (migration-quote-numbering.sql) ──────────
+# Auto-generated on every new quote as PREFIX-YEAR-NNN (e.g. QT-2026-001).
+# The counter resets each calendar year and is scoped per company. Prefix and
+# zero-padding width are per-company settings (defaults 'QT'/3 apply with no
+# settings row needed); the running number itself lives in
+# quote_number_sequences and is only ever touched atomically via the
+# get_next_quote_number() Postgres function -- never read-then-write from
+# Python, so concurrent quote creation can't hand out the same number twice.
+def _numbering_settings(company_id):
+    row = sb.table('quote_numbering_settings').select('prefix,padding').eq('company_id', company_id).execute()
+    if row.data:
+        return row.data[0].get('prefix') or 'QT', row.data[0].get('padding') or 3
+    return 'QT', 3
+
+def _next_quote_ref(company_id):
+    """Never raises -- a numbering hiccup must not block quote creation.
+    Returns None (same as today's manual quote_ref) if anything goes wrong."""
+    try:
+        year = datetime.now().year
+        prefix, padding = _numbering_settings(company_id)
+        n = sb.rpc('get_next_quote_number', {'p_company_id': company_id, 'p_year': year}).execute().data
+        if not n:
+            return None
+        return f"{prefix}-{year}-{str(n).zfill(padding)}"
+    except Exception:
+        traceback.print_exc()
+        return None
+
+@app.route('/api/quotes/numbering', methods=['GET'])
+def get_quote_numbering():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+    company_id = claims['company_id']
+    prefix, padding = _numbering_settings(company_id)
+    seq = sb.table('quote_number_sequences').select('year,next_number').eq('company_id', company_id).order('year').execute()
+    return jsonify({'prefix': prefix, 'padding': padding, 'current_year': datetime.now().year, 'sequences': seq.data or []})
+
+@app.route('/api/quotes/numbering', methods=['PATCH'])
+def update_quote_numbering():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+    company_id = claims['company_id']
+    d = request.json or {}
+
+    if 'prefix' in d or 'padding' in d:
+        prefix = (d.get('prefix') or 'QT').strip()[:20] or 'QT'
+        try:
+            padding = max(1, min(6, int(d.get('padding') or 3)))
+        except (TypeError, ValueError):
+            padding = 3
+        sb.table('quote_numbering_settings').upsert({
+            'company_id': company_id, 'prefix': prefix, 'padding': padding,
+            'updated_by': claims['user_id'], 'updated_at': datetime.utcnow().isoformat(),
+        }, on_conflict='company_id').execute()
+
+    if 'year' in d and 'next_number' in d:
+        try:
+            year = int(d['year']); next_number = int(d['next_number'])
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Invalid year or next_number'}), 400
+        if next_number < 1:
+            return jsonify({'error': 'next_number must be at least 1'}), 400
+        sb.table('quote_number_sequences').upsert({
+            'company_id': company_id, 'year': year, 'next_number': next_number,
+            'updated_at': datetime.utcnow().isoformat(),
+        }, on_conflict='company_id,year').execute()
+
+    return get_quote_numbering()
+
 @app.route('/api/quotes', methods=['POST'])
 def create_quote():
     claims = verify_token(request)
@@ -226,6 +297,7 @@ def create_quote():
         'total_sell':    d.get('total_sell', 0),
         'total_gp':      d.get('total_gp', 0),
         'margin':        d.get('margin', 0),
+        'quote_ref':     _next_quote_ref(claims['company_id']),
     }).execute()
     quote = row.data[0]
     _log_activity(quote['id'], claims['user_id'], 'created', f"Quote \"{quote.get('title') or 'Untitled'}\" created")
@@ -501,6 +573,7 @@ def duplicate_quote(qid):
         'total_sell':    o['total_sell'],
         'total_gp':      o['total_gp'],
         'margin':        o['margin'],
+        'quote_ref':     _next_quote_ref(claims['company_id']),
     }).execute()
     return jsonify({'quote': row.data[0]}), 201
 
