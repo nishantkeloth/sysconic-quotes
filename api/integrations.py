@@ -228,7 +228,36 @@ class ZohoAdapter:
         self._li_cf_cache = ids
         return ids
 
-    def create_estimate(self, creds, customer_id, reference_number, quote_date, line_items, salesperson_name=None):
+    def _header_custom_field_ids(self, creds):
+        """Same idea as _line_item_custom_field_ids() but for header-level
+        (entity=estimate) custom fields -- specifically 'Profit Margin' (an
+        AED amount) and 'Profit Margin %', seen in Nish's org as fields on
+        the New Estimate screen (Profit Margin is even marked required
+        there). IDs are per-org and matched by label, cached per request.
+        Best-effort: if the labels don't match what's guessed here, the
+        values are just omitted and estimate creation still proceeds --
+        matches the Brand/Model line-item mapping's fallback behavior."""
+        if getattr(self, '_hdr_cf_cache', None) is not None:
+            return self._hdr_cf_cache
+        ids = {}
+        try:
+            data = self._get(creds, '/settings/customfields', {'entity': 'estimate'})
+            fields = data.get('customfields') or data.get('customfieldsettings') or data.get('custom_fields') or []
+            for f in fields:
+                label = (f.get('label') or f.get('field_name') or f.get('placeholder') or '').strip().lower()
+                fid = f.get('customfield_id') or f.get('field_id') or f.get('customfield_id_formatted')
+                if not fid: continue
+                if label in ('profit margin %', 'profit margin(%)', 'profit margin percentage'):
+                    ids['profit_margin_pct'] = fid
+                elif label == 'profit margin':
+                    ids['profit_margin'] = fid
+        except Exception:
+            pass
+        self._hdr_cf_cache = ids
+        return ids
+
+    def create_estimate(self, creds, customer_id, reference_number, quote_date, line_items,
+                         salesperson_name=None, total_gp=None, margin_pct=None):
         """line_items: [{'description': str, 'rate': float, 'quantity': float,
         'tax_rate': float|None, 'brand': str|None, 'model': str|None}, ...]
         -- already-computed sell prices from QTcal's own calc_item(),
@@ -238,7 +267,9 @@ class ZohoAdapter:
         into the org's own Brand/Model No custom fields when a matching
         field is found (see _line_item_custom_field_ids) -- best-effort,
         silently omitted if the org's field labels don't match what was
-        guessed."""
+        guessed. total_gp (QTcal's "Total GP", ts-tc in AED) and margin_pct
+        (fraction, e.g. 0.167) map the same way onto the header-level
+        Profit Margin / Profit Margin % custom fields when found."""
         cf_ids = self._line_item_custom_field_ids(creds) if any(li.get('brand') or li.get('model') for li in line_items) else {}
         zoho_items = []
         for li in line_items:
@@ -273,6 +304,15 @@ class ZohoAdapter:
             sp_id = self._salesperson_id_for_name(creds, salesperson_name)
             if sp_id:
                 body['salesperson_id'] = sp_id
+        if total_gp is not None or margin_pct is not None:
+            hdr_ids = self._header_custom_field_ids(creds)
+            header_custom_fields = []
+            if total_gp is not None and hdr_ids.get('profit_margin'):
+                header_custom_fields.append({'customfield_id': hdr_ids['profit_margin'], 'value': round(float(total_gp), 2)})
+            if margin_pct is not None and hdr_ids.get('profit_margin_pct'):
+                header_custom_fields.append({'customfield_id': hdr_ids['profit_margin_pct'], 'value': round(float(margin_pct) * 100, 1)})
+            if header_custom_fields:
+                body['custom_fields'] = header_custom_fields
 
         r = self._post(creds, '/estimates', body)
         est = r.get('estimate') or {}
@@ -792,6 +832,26 @@ def _estimate_line_items(option, pricing_type):
             })
     return items
 
+def _estimate_totals(option, pricing_type):
+    """Mirrors index.html's calcOpt()/calcItem() exactly: per-line GP is
+    (sell - cost-after-discounts) x qty, subtotal is sell x qty summed, and
+    margin is GP/subtotal -- same figures shown in the app's own totals bar
+    ("Total GP", "Margin") that Nish wants reflected on the Zoho Estimate's
+    header-level Profit Margin fields. Computed separately from
+    _estimate_line_items() since those feed per-line custom fields while
+    this feeds header-level ones -- both read the same won option."""
+    ts = tc = 0.0
+    for s in (option.get('sections') or []):
+        for it in (s.get('items') or []):
+            cad = _num(it.get('cost')) * (1 - _num(it.get('disc'))/100.0) * (1 - _num(it.get('discAdd'))/100.0)
+            qty = _num(it.get('qty'), 1) or 1
+            up = _calc_item_sell(it, pricing_type)
+            ts += up * qty
+            tc += cad * qty
+    total_gp = ts - tc
+    margin_pct = (total_gp / ts) if ts > 0 else 0.0
+    return total_gp, margin_pct
+
 # ── Create a Zoho Books project (+ Estimate) from an app project ────────────
 # One click creates both: the Zoho Project (unchanged from before) and a
 # Zoho Estimate replicating the won option of the originating quote. The two
@@ -893,13 +953,17 @@ def zoho_create_project():
             if not option:
                 estimate_error = 'The originating quote has no line items -- estimate not created.'
             else:
+                pricing_type = quote.get('pricing_type') or 'markup'
+                total_gp, margin_pct = _estimate_totals(option, pricing_type)
                 try:
                     zoho_est = adapter.create_estimate(
                         creds, zoho_customer_id,
                         reference_number=quote.get('quote_ref') or '',
                         quote_date=option.get('date') or None,
-                        line_items=_estimate_line_items(option, quote.get('pricing_type') or 'markup'),
+                        line_items=_estimate_line_items(option, pricing_type),
                         salesperson_name=option.get('by') or None,
+                        total_gp=total_gp,
+                        margin_pct=margin_pct,
                     )
                     zoho_estimate_id = zoho_est['estimate_id']
                     sb.table('projects').update({'zoho_estimate_id': zoho_estimate_id}).eq('id', pid).eq('company_id', claims['company_id']).execute()
