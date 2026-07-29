@@ -3317,10 +3317,10 @@ function printHTML(forExport){
           ${printBankRows().map(([l1,v1,l2,v2])=>`<tr><td style="color:#555;width:130px;padding:2px 0">${l1}</td><td style="font-weight:600">${esc(v1||'—')}</td><td style="width:20px"></td><td style="color:#555;width:130px;padding:2px 0">${l2}</td><td style="font-weight:600">${esc(v2||'—')}</td></tr>`).join('')}
         </table>
       </div>`:''}
-      ${forExport?'':`<div class="print-footer-div" style="border-top:2px solid ${TH.dark};padding-top:8px;margin-top:16px;display:flex;justify-content:space-between;align-items:center;font-size:${SZ(10,'body')}px;color:#888">
+      <div class="print-footer-div" style="border-top:2px solid ${TH.dark};padding-top:8px;margin-top:16px;display:flex;justify-content:space-between;align-items:center;font-size:${SZ(10,'body')}px;color:#888">
         <span>${esc(printAddrLines().slice(0,2).join(' | '))}</span>
         <span style="font-weight:700;color:${TH.dark};font-size:${SZ(11,'body')}px">${esc(PRINTCO?.website||'')}</span>
-      </div>`}`:''}
+      </div>`:''}
       </div>
     </div>`;
   });
