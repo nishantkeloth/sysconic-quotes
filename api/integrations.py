@@ -156,6 +156,130 @@ class ZohoAdapter:
                     pass
         return proj
 
+    # ── Estimate (Quotation) replication ─────────────────────────────────────
+    # Fired alongside create_project() by the "Create Project & Quotation in
+    # Zoho" button -- one click, two Zoho objects. Estimates and Projects are
+    # separate, unlinked objects in Zoho Books (no native FK between them);
+    # both just reference the same customer_id, so a rep sees them side by
+    # side under that customer.
+    def _tax_id_for_rate(self, creds, rate_pct):
+        """Match a QTcal VAT rate (e.g. 5) against this org's configured Zoho
+        tax list by percentage. Zoho's line items want a tax_id reference,
+        not a raw percentage -- this is the resolution step. Returns None
+        (leave the line untaxed) rather than raising if no match is found;
+        wrong is worse than blocked, but an unmatched tax rate shouldn't
+        block the whole estimate from being created -- it's a one-click fix
+        inside Zoho afterward."""
+        try:
+            data = self._get(creds, '/settings/taxes', {})
+            for t in (data.get('taxes') or []):
+                if abs(float(t.get('tax_percentage') or 0) - float(rate_pct or 0)) < 0.01:
+                    return t.get('tax_id')
+        except Exception:
+            pass
+        return None
+
+    def _salesperson_id_for_name(self, creds, name):
+        """Best-effort match of QTcal's free-text 'Prepared by' name against
+        this org's fixed Zoho salesperson dropdown (case-insensitive,
+        substring-tolerant since the two systems don't share an identity --
+        e.g. QTcal 'Rajesh' vs Zoho 'Rajesh Kumar'). None on no match --
+        Zoho just leaves Salesperson blank, never a hard failure."""
+        if not name: return None
+        try:
+            data = self._get(creds, '/settings/salespersons', {})
+            needle = name.strip().lower()
+            if not needle: return None
+            for sp in (data.get('salespersons') or []):
+                sp_name = (sp.get('salesperson_name') or '').strip().lower()
+                if sp_name and (sp_name == needle or sp_name in needle or needle in sp_name):
+                    return sp.get('salesperson_id')
+        except Exception:
+            pass
+        return None
+
+    def _line_item_custom_field_ids(self, creds):
+        """Discovers this org's custom field IDs for 'Brand' and 'Model No'
+        on estimate line items, matched by label (case-insensitive) since
+        Zoho generates these IDs per-org -- they can't be hardcoded. Cached
+        on the adapter instance for the lifetime of one request (multiple
+        line items share the same lookup instead of repeating it).
+        `entity=estimate.line_item` is Zoho's documented parameter for
+        estimate-line-item-level custom fields, but hasn't been confirmed
+        against this specific org yet -- if the label match comes back
+        empty, brand/model just won't populate on the Zoho side (this never
+        blocks estimate creation either way)."""
+        if getattr(self, '_li_cf_cache', None) is not None:
+            return self._li_cf_cache
+        ids = {}
+        try:
+            data = self._get(creds, '/settings/customfields', {'entity': 'estimate.line_item'})
+            fields = data.get('customfields') or data.get('customfieldsettings') or data.get('custom_fields') or []
+            for f in fields:
+                label = (f.get('label') or f.get('field_name') or f.get('placeholder') or '').strip().lower()
+                fid = f.get('customfield_id') or f.get('field_id') or f.get('customfield_id_formatted')
+                if not fid: continue
+                if label == 'brand':
+                    ids['brand'] = fid
+                elif label in ('model no', 'model no.', 'model number', 'model'):
+                    ids['model'] = fid
+        except Exception:
+            pass
+        self._li_cf_cache = ids
+        return ids
+
+    def create_estimate(self, creds, customer_id, reference_number, quote_date, line_items, salesperson_name=None):
+        """line_items: [{'description': str, 'rate': float, 'quantity': float,
+        'tax_rate': float|None, 'brand': str|None, 'model': str|None}, ...]
+        -- already-computed sell prices from QTcal's own calc_item(),
+        post-discount, so Zoho's own per-line Discount is deliberately left
+        at 0 rather than trying to reverse-engineer an equivalent single
+        percentage from QTcal's two-layer discount. Brand/Model are pushed
+        into the org's own Brand/Model No custom fields when a matching
+        field is found (see _line_item_custom_field_ids) -- best-effort,
+        silently omitted if the org's field labels don't match what was
+        guessed."""
+        cf_ids = self._line_item_custom_field_ids(creds) if any(li.get('brand') or li.get('model') for li in line_items) else {}
+        zoho_items = []
+        for li in line_items:
+            item = {
+                'name': (li.get('description') or 'Item')[:200],
+                'description': li.get('description') or '',
+                'rate': float(li.get('rate') or 0),
+                'quantity': float(li.get('quantity') or 1),
+                'discount': 0,
+            }
+            custom_fields = []
+            if li.get('brand') and cf_ids.get('brand'):
+                custom_fields.append({'customfield_id': cf_ids['brand'], 'value': li['brand']})
+            if li.get('model') and cf_ids.get('model'):
+                custom_fields.append({'customfield_id': cf_ids['model'], 'value': li['model']})
+            if custom_fields:
+                item['custom_fields'] = custom_fields
+            if li.get('tax_rate'):
+                tax_id = self._tax_id_for_rate(creds, li['tax_rate'])
+                if tax_id:
+                    item['tax_id'] = tax_id
+            zoho_items.append(item)
+
+        body = {
+            'customer_id': str(customer_id),
+            'reference_number': (reference_number or '')[:100],
+            'line_items': zoho_items,
+        }
+        if quote_date:
+            body['date'] = quote_date
+        if salesperson_name:
+            sp_id = self._salesperson_id_for_name(creds, salesperson_name)
+            if sp_id:
+                body['salesperson_id'] = sp_id
+
+        r = self._post(creds, '/estimates', body)
+        est = r.get('estimate') or {}
+        if not est.get('estimate_id'):
+            raise RuntimeError('Zoho did not return an estimate id: ' + json.dumps(r)[:200])
+        return est
+
     # ── Project Performance actuals fetch ───────────────────────────────────
     # Everything below is scoped to one Zoho Books project at a time (via the
     # zoho_project_id already stored on the local `projects` row) rather than
@@ -629,7 +753,53 @@ def run_auto_sync():
             results.append({'company_id': cid, 'type': kind, 'provider': provider, 'synced': count, 'error': err})
     return jsonify({'companies_processed': len(companies.data or []), 'results': results})
 
-# ── Create a Zoho Books project from an app project ─────────────────────────────
+# ── Line-item pricing (mirrors index.html's calcItem() / api/proposal.py's
+# calc_item() -- duplicated here per this project's established pattern:
+# Vercel's Python builder doesn't bundle sibling modules, so every file
+# needing quote-line math carries its own copy) ─────────────────────────────
+def _num(v, d=0):
+    try: return float(v or 0)
+    except Exception: return d
+
+def _calc_item_sell(it, pricing_type):
+    cad = _num(it.get('cost')) * (1 - _num(it.get('disc'))/100.0) * (1 - _num(it.get('discAdd'))/100.0)
+    m = _num(it.get('margin'))
+    if pricing_type == 'margin':
+        mm = min(0.95, max(0.0, m))
+        up = int(cad / (1 - mm) + 0.5) if mm < 1 else 0
+    else:
+        up = int(cad * (1 + m) + 0.5)
+    return up
+
+def _estimate_line_items(option, pricing_type):
+    """The won option's items, flattened across sections (Zoho estimates
+    have no section-grouping equivalent) -- name/description is the item's
+    own description exactly as QTcal has it. Brand/model ride along
+    separately for ZohoAdapter.create_estimate() to place into the org's
+    Brand/Model No custom fields when it can find them."""
+    vat_on = bool(option.get('vatEnabled'))
+    vat_rate = _num(option.get('vatRate'), 5) if vat_on else None
+    items = []
+    for s in (option.get('sections') or []):
+        for it in (s.get('items') or []):
+            items.append({
+                'description': it.get('desc') or '',
+                'rate': _calc_item_sell(it, pricing_type),
+                'quantity': _num(it.get('qty'), 1) or 1,
+                'tax_rate': vat_rate,
+                'brand': it.get('brand') or None,
+                'model': it.get('model') or None,
+            })
+    return items
+
+# ── Create a Zoho Books project (+ Estimate) from an app project ────────────
+# One click creates both: the Zoho Project (unchanged from before) and a
+# Zoho Estimate replicating the won option of the originating quote. The two
+# are independent Zoho objects with no native link between them -- both
+# reference the same customer_id so they sit side by side in Zoho.
+# Idempotent per object: a second click never re-creates a project or
+# estimate that already exists, so a partial failure (e.g. project created,
+# estimate failed) can just be retried and only fills in what's missing.
 @app.route('/api/integrations/zoho/create-project', methods=['POST'])
 def zoho_create_project():
     claims = verify_token(request)
@@ -643,8 +813,9 @@ def zoho_create_project():
     row = sb.table('projects').select('*').eq('id', pid).eq('company_id', claims['company_id']).execute()
     if not row.data: return jsonify({'error': 'Project not found'}), 404
     proj = row.data[0]
-    if proj.get('zoho_project_id'):
-        return jsonify({'error': 'Already linked to Zoho', 'zoho_project_id': proj['zoho_project_id']}), 409
+    if proj.get('zoho_project_id') and proj.get('zoho_estimate_id'):
+        return jsonify({'error': 'Already linked to Zoho', 'zoho_project_id': proj['zoho_project_id'],
+                         'zoho_estimate_id': proj['zoho_estimate_id']}), 409
     creds = _get_creds_for(claims['company_id'], 'zoho')
     adapter = ADAPTERS.get('zoho')
     if not creds or not adapter or not adapter.is_configured(creds):
@@ -655,48 +826,91 @@ def zoho_create_project():
     match = sb.table('customers').select('external_contact_id,name').eq('company_id', claims['company_id']).ilike('name', customer_name).execute()
     if not match.data or not match.data[0].get('external_contact_id'):
         return jsonify({'error': f'Customer "{customer_name}" not found in the synced Zoho customer list. Sync customers or check the exact name.'}), 400
-    # adapter.create_project() (and the _post()/_get() it calls) raise plain
-    # RuntimeErrors on any Zoho API failure (bad auth, expired token, invalid
-    # field, org mismatch, etc). Uncaught, that fell through to Flask's
-    # default error handler, which returns a generic HTML 500 page instead
-    # of JSON -- the frontend then choked trying to parse it as JSON, and
-    # the *actual* Zoho error message (which _post()/_get() already capture)
-    # never reached the user. Catching it here and returning it as JSON is
-    # the fix -- this endpoint should never 500 with an opaque HTML page.
-    # Zoho requires `rate` (-> "Total Project Cost") up front for a
-    # fixed_cost_for_project project. This project came from an awarded
-    # quote, so its contract value was already frozen onto the row by
-    # _freeze_commercial_baseline() -- original_selling_price is the primary
-    # source, revenue_forecast is the same figure kept as a fallback.
-    rate = proj.get('original_selling_price') or proj.get('revenue_forecast')
-    if not rate:
-        return jsonify({'error': 'This project has no value set (original_selling_price/revenue_forecast) -- Zoho requires a project cost/rate to create a fixed-cost project.'}), 400
-    # Cost Budget = what the baseline estimated we'd spend; Revenue Budget =
-    # the contract value (same figure as `rate`).
-    cost_budget = proj.get('original_estimated_cost')
-    try:
-        zoho_proj = adapter.create_project(creds, proj['name'], match.data[0]['external_contact_id'],
-                                            rate=rate, cost_budget=cost_budget, revenue_budget=rate)
-    except Exception as e:
-        return jsonify({'error': f'Zoho project creation failed: {str(e)[:400]}'}), 502
-    # zoho_project_id is Zoho's internal id (required for every subsequent
-    # Zoho API call -- POs/bills/expenses/invoices are all fetched by it).
-    # zoho_project_no is the human-readable number staff actually use,
-    # stored in Zoho as the cf_project_no custom field. It may not be set
-    # yet at creation time (it's often filled in inside Zoho afterward) --
-    # that's fine, a later sync/import picks it up once it exists.
-    zoho_project_no = zoho_proj.get('cf_project_no') or None
-    sb.table('projects').update({
-        'zoho_project_id': zoho_proj['project_id'], 'zoho_project_no': zoho_project_no,
-    }).eq('id', pid).eq('company_id', claims['company_id']).execute()
-    # Mirror the link onto the originating quote too (if this project came
-    # from an awarded quote) so the Zoho project number is visible right on
-    # the quote itself, not only via the linked project.
-    if proj.get('quotation_id'):
-        sb.table('quotes').update({
-            'zoho_project_id': zoho_proj['project_id'], 'zoho_project_no': zoho_project_no,
-        }).eq('id', proj['quotation_id']).eq('company_id', claims['company_id']).execute()
-    return jsonify({'ok': True, 'zoho_project_id': zoho_proj['project_id'], 'zoho_project_no': zoho_project_no})
+    zoho_customer_id = match.data[0]['external_contact_id']
+
+    zoho_project_id = proj.get('zoho_project_id')
+    zoho_project_no = proj.get('zoho_project_no')
+
+    if not zoho_project_id:
+        # adapter.create_project() (and the _post()/_get() it calls) raise plain
+        # RuntimeErrors on any Zoho API failure (bad auth, expired token, invalid
+        # field, org mismatch, etc). Uncaught, that fell through to Flask's
+        # default error handler, which returns a generic HTML 500 page instead
+        # of JSON -- the frontend then choked trying to parse it as JSON, and
+        # the *actual* Zoho error message (which _post()/_get() already capture)
+        # never reached the user. Catching it here and returning it as JSON is
+        # the fix -- this endpoint should never 500 with an opaque HTML page.
+        # Zoho requires `rate` (-> "Total Project Cost") up front for a
+        # fixed_cost_for_project project. This project came from an awarded
+        # quote, so its contract value was already frozen onto the row by
+        # _freeze_commercial_baseline() -- original_selling_price is the primary
+        # source, revenue_forecast is the same figure kept as a fallback.
+        rate = proj.get('original_selling_price') or proj.get('revenue_forecast')
+        if not rate:
+            return jsonify({'error': 'This project has no value set (original_selling_price/revenue_forecast) -- Zoho requires a project cost/rate to create a fixed-cost project.'}), 400
+        # Cost Budget = what the baseline estimated we'd spend; Revenue Budget =
+        # the contract value (same figure as `rate`).
+        cost_budget = proj.get('original_estimated_cost')
+        try:
+            zoho_proj = adapter.create_project(creds, proj['name'], zoho_customer_id,
+                                                rate=rate, cost_budget=cost_budget, revenue_budget=rate)
+        except Exception as e:
+            return jsonify({'error': f'Zoho project creation failed: {str(e)[:400]}'}), 502
+        # zoho_project_id is Zoho's internal id (required for every subsequent
+        # Zoho API call -- POs/bills/expenses/invoices are all fetched by it).
+        # zoho_project_no is the human-readable number staff actually use,
+        # stored in Zoho as the cf_project_no custom field. It may not be set
+        # yet at creation time (it's often filled in inside Zoho afterward) --
+        # that's fine, a later sync/import picks it up once it exists.
+        zoho_project_id = zoho_proj['project_id']
+        zoho_project_no = zoho_proj.get('cf_project_no') or None
+        sb.table('projects').update({
+            'zoho_project_id': zoho_project_id, 'zoho_project_no': zoho_project_no,
+        }).eq('id', pid).eq('company_id', claims['company_id']).execute()
+        if proj.get('quotation_id'):
+            sb.table('quotes').update({
+                'zoho_project_id': zoho_project_id, 'zoho_project_no': zoho_project_no,
+            }).eq('id', proj['quotation_id']).eq('company_id', claims['company_id']).execute()
+
+    # Estimate creation is best-effort and never rolls back the project
+    # creation above -- a Zoho hiccup here (e.g. no matching tax rate) still
+    # leaves you with a usable, linked project. The error (if any) comes
+    # back in the response for the frontend to surface, not swallowed.
+    zoho_estimate_id = proj.get('zoho_estimate_id')
+    estimate_error = None
+    if not zoho_estimate_id:
+        quote = None
+        if proj.get('quotation_id'):
+            qrow = sb.table('quotes').select('quote_data,pricing_type,quote_ref').eq('id', proj['quotation_id']).eq('company_id', claims['company_id']).execute()
+            quote = qrow.data[0] if qrow.data else None
+        if not quote:
+            estimate_error = 'No originating quote found for this project -- estimate not created.'
+        else:
+            options = quote.get('quote_data') or []
+            won_idx = proj.get('won_option_index')
+            won_idx = won_idx if isinstance(won_idx, int) and 0 <= won_idx < len(options) else 0
+            option = options[won_idx] if options else None
+            if not option:
+                estimate_error = 'The originating quote has no line items -- estimate not created.'
+            else:
+                try:
+                    zoho_est = adapter.create_estimate(
+                        creds, zoho_customer_id,
+                        reference_number=quote.get('quote_ref') or '',
+                        quote_date=option.get('date') or None,
+                        line_items=_estimate_line_items(option, quote.get('pricing_type') or 'markup'),
+                        salesperson_name=option.get('by') or None,
+                    )
+                    zoho_estimate_id = zoho_est['estimate_id']
+                    sb.table('projects').update({'zoho_estimate_id': zoho_estimate_id}).eq('id', pid).eq('company_id', claims['company_id']).execute()
+                    sb.table('quotes').update({'zoho_estimate_id': zoho_estimate_id}).eq('id', proj['quotation_id']).eq('company_id', claims['company_id']).execute()
+                except Exception as e:
+                    estimate_error = f'Zoho estimate creation failed: {str(e)[:400]}'
+
+    return jsonify({
+        'ok': True, 'zoho_project_id': zoho_project_id, 'zoho_project_no': zoho_project_no,
+        'zoho_estimate_id': zoho_estimate_id, 'estimate_error': estimate_error,
+    })
 
 # Note: a live "/api/integrations/search-customers" route used to live here,
 # searching the connected provider (e.g. Zoho) directly on every keystroke.

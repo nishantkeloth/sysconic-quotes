@@ -1198,12 +1198,21 @@ function ppCreateProjectBtnHTML(){
     return `<span style="color:var(--gray-500);font-size:12px;font-weight:600">⏳ Creating project…</span>`;
   }
   if(!A.activeQuote.project_id){
-    return `<button class="btn btn-green" style="font-size:12px;padding:4px 10px;font-weight:700" onclick="ppCreateProjectFromQuote()">Create Project</button>`;
+    return `<button class="btn btn-green" style="font-size:12px;padding:4px 10px;font-weight:700" onclick="ppCreateProjectFromQuote()">Create Project & Quotation in Zoho</button>`;
   }
   const zohoNoVal=zohoNo(A.activeQuote);
+  const hasEstimate=!!A.activeQuote.zoho_estimate_id;
   const viewBtn=`<button class="btn btn-navy" style="font-size:12px;padding:4px 10px" onclick="openProjectPerformance('${A.activeQuote.project_id}')">View Project</button>`;
-  if(zohoNoVal){
-    return `${viewBtn}<span style="color:var(--green);font-size:12px;font-weight:600" title="Linked Zoho Books project">✓ Zoho ${esc(zohoNoVal)}</span>`;
+  if(zohoNoVal&&hasEstimate){
+    return `${viewBtn}<span style="color:var(--green);font-size:12px;font-weight:600" title="Linked Zoho Books project and quotation">✓ Zoho ${esc(zohoNoVal)} + Quotation</span>`;
+  }
+  if(zohoNoVal&&!hasEstimate){
+    // Project side succeeded; only the estimate is missing/failed. Retry
+    // re-hits the same idempotent endpoint, which skips re-creating the
+    // project and only (re)tries the estimate.
+    return `${viewBtn}<span style="color:var(--green);font-size:12px;font-weight:600" title="Linked Zoho Books project">✓ Zoho ${esc(zohoNoVal)}</span>`
+      +`<span style="color:var(--red);font-size:12px;font-weight:600;margin-left:6px" title="${esc(A.ppZohoError||'Quotation not yet created in Zoho.')}">⚠ Quotation not created</span>`
+      +`<button class="btn btn-red" style="font-size:12px;padding:4px 10px" onclick="ppRetryZohoLink()">Retry Quotation</button>`;
   }
   return `${viewBtn}<span style="color:var(--red);font-size:12px;font-weight:600" title="${esc(A.ppZohoError||'The local project was created, but linking it to Zoho Books failed.')}">⚠ Not created in Zoho</span>`
     +`<button class="btn btn-red" style="font-size:12px;padding:4px 10px" onclick="ppRetryZohoLink()">Retry Zoho</button>`;
@@ -1244,14 +1253,21 @@ async function ppLinkZoho(projectId){
     console.warn('Zoho project link failed:',zr.error);
     return false;
   }
-  A.ppZohoError=null;
+  // estimate_error is a soft failure -- the project side still succeeded,
+  // so this isn't a full failure, just something to surface in the badge.
+  A.ppZohoError=zr.estimate_error||null;
   if(zr.zoho_project_id){
     A.activeQuote.zoho_project_id=zr.zoho_project_id;
     A.activeQuote.zoho_project_no=zr.zoho_project_no||null;
     const qi=A.quotes.findIndex(qq=>qq.id===A.activeQuote.id);
     if(qi>=0){A.quotes[qi].zoho_project_id=zr.zoho_project_id;A.quotes[qi].zoho_project_no=zr.zoho_project_no||null;}
   }
-  return true;
+  if(zr.zoho_estimate_id){
+    A.activeQuote.zoho_estimate_id=zr.zoho_estimate_id;
+    const qi=A.quotes.findIndex(qq=>qq.id===A.activeQuote.id);
+    if(qi>=0)A.quotes[qi].zoho_estimate_id=zr.zoho_estimate_id;
+  }
+  return !zr.estimate_error;
 }
 async function ppRetryZohoLink(){
   if(!A.activeQuote||!A.activeQuote.project_id)return;
