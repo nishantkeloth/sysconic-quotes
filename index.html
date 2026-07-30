@@ -2419,6 +2419,25 @@ function resetPasswordHTML(){
 // extra mapping logic. Doubles as a jump-to-topic index for browsing any
 // other section's help without leaving the current page.
 const HELP_CONTENT={
+  deals:{title:'Deals',body:`
+    <p>A lightweight pipeline for tracking opportunities <strong>before</strong> they become a formal Quote — leads, qualification, negotiation, all the way to Won or Lost.</p>
+    <h4>The board</h4>
+    <ul>
+      <li>Each column is a <strong>stage</strong>; each card is a deal. Drag a card to a different column to move its stage.</li>
+      <li><strong>+ New Deal</strong> — title, customer name, estimated value, expected close date and notes. Simple by design — no pricing yet, that comes once it's a real Quote.</li>
+      <li>Clicking a card opens its detail: edit any field, add notes to its activity timeline, or mark it <strong>Won</strong>/<strong>Lost</strong> (with an optional reason).</li>
+      <li>A 💡 badge appears on a card when it needs attention — e.g. no activity in a while, or its expected close date has passed. This is a simple rule-based nudge, not a live AI call, so it's instant.</li>
+    </ul>
+    <h4>Converting to a Quote</h4>
+    <p><strong>→ Convert to Quote</strong> on a deal's detail creates a real Quote from it (same as "+ New quote") and links the two together — the deal keeps a shortcut back to that Quote afterward.</p>
+    <h4>Customers &amp; Zoho</h4>
+    <p>Typing a customer name on a new deal automatically matches it against your Customer Master (or creates a new entry), and — if Zoho Books is connected — replicates it there as a Contact too. This happens silently in the background; a Zoho hiccup never blocks the deal itself.</p>
+    <h4>Who sees what</h4>
+    <p>Same visibility rule as Quotes: you see your own deals, admins (or anyone flagged "view all quotes") see every deal in the company.</p>
+    <h4>Stages (admin only)</h4>
+    <p><strong>⚙ Manage stages</strong> lets you add, rename, reorder, or delete pipeline stages, and mark which ones count as Won or Lost. A stage can't be deleted while deals are still sitting in it.</p>
+    <div class="help-tip">💡 Whether this module even shows in your sidebar is controlled per role in Roles &amp; Permissions, same as every other page.</div>
+  `},
   dashboard:{title:'Quotes',body:`
     <p>This is your home page — every quote your company has created, in one list.</p>
     <h4>Metrics</h4>
@@ -2434,7 +2453,7 @@ const HELP_CONTENT={
   editor:{title:'Quote Editor',body:`
     <p>Where a quote actually gets built: customer details, one or more pricing <strong>options</strong>, and the item sections inside each option.</p>
     <h4>Quote details</h4>
-    <p>Title, Customer (type freely or search your Zoho Books customers), Option label, Quote ref, Date, Prepared by, Title/Role.</p>
+    <p>Title, Customer (type freely or search your Zoho Books customers), Option label, Quote ref, Date. <strong>Prepared by</strong> is automatic — always your own account name, not editable — and <strong>Title/Role</strong> defaults to "Sales Team" for everyone (you can still change it per quote if needed).</p>
     <h4>Options</h4>
     <p>The pill tabs above the details card. Use these when you want to offer the customer real alternatives (e.g. "Standard" vs "Premium") priced side by side — see them compared on the <strong>Summary</strong> tab. Most quotes only need one.</p>
     <h4>Sections &amp; items</h4>
@@ -2447,7 +2466,13 @@ const HELP_CONTENT={
     <ul>
       <li><strong>💾 Save</strong> — autosaves as you type too, this just forces it immediately.</li>
       <li><strong>📤 Send to Review</strong> — snapshot this quote and route it to chosen reviewers before it goes to a customer.</li>
-      <li><strong>📑 Generate Proposal</strong> — AI drafts a Technical/Commercial proposal document from this quote. Pick which sections to include, choose a different AI model if one is overloaded, and your company's certifications/founded year/notable clients (set once in Company Profile) appear automatically.</li>
+      <li><strong>📑 Generate Proposal</strong> — AI drafts a Technical/Commercial proposal document from this quote. The project scope description is auto-drafted from this quote's own bill of materials (rooms, brands, quantities) so you don't have to type it — edit it or hit 🪄 Redraft from BOM any time. Content depth automatically scales to the quote's size: a small quote gets a concise document, a large one gets proportionally more sections and detail. Pick which sections to include, choose a different AI model if one is overloaded, and your company's certifications/founded year/notable clients (set once in Company Profile) appear automatically.
+        <ul>
+          <li><strong>8 template styles</strong> (Modern, Corporate, Technical, Executive, Vibrant, Minimal, Classic, Midnight) — each with a live preview swatch so you see roughly what it looks like before generating, and each applies its colors/theme to the <em>whole</em> document, not just the cover page.</li>
+          <li>Product photos from your Product Catalog appear as thumbnails in the generated Bill of Materials table automatically, wherever a line item has one saved.</li>
+          <li>Feature cards, scope cards, architecture items, mobilization phases and exclusions all have <strong>+ Add</strong> / ✕ remove controls in the review step, so you're never stuck with exactly what the AI drafted.</li>
+        </ul>
+      </li>
       <li><strong>🔍 AI Review</strong> — an advisory completeness check (missing pricing, thin descriptions, etc.); nothing is changed automatically.</li>
       <li><strong>✨ Auto-BOM</strong> — describe a project in plain language and AI suggests a bill of materials, matching your Product Catalog where it can.</li>
       <li><strong>🧮 Price Check</strong> — sums cost × qty by vendor per option, letting you cross-check against the distributor's quoted totals before sending.</li>
@@ -2567,7 +2592,7 @@ const HELP_CONTENT={
     <ul>
       <li><strong>Overview</strong> — KPI cards, the Health Score breakdown, and open alerts.</li>
       <li><strong>Financial Performance</strong> — original vs. current profitability, plus a margin trend table that builds up with every sync.</li>
-      <li><strong>Cost Control</strong> — cost by category (Actual / Committed / Forecast Remaining / EAC), and your own manually-added Forecast Remaining Cost entries.</li>
+      <li><strong>Cost Control</strong> — cost by category (Actual / Committed / Forecast Remaining / EAC), your own manually-added Forecast Remaining Cost entries, and a <strong>PO vs Quoted Cost</strong> table matching every purchase order line back to what it was originally quoted at — so a better price negotiated with a distributor at PO time shows up as a per-line saving instead of getting lost.</li>
       <li><strong>Billing &amp; Collection</strong> — Invoice % and Collection %, plus the invoice list.</li>
       <li><strong>Cash Position</strong> — cash received from the customer vs. paid to vendors/expenses, and the net position.</li>
     </ul>
@@ -2583,6 +2608,15 @@ const HELP_CONTENT={
     <p>Admin only. Your company's users and their roles.</p>
     <p><strong>+ Invite member</strong> sends an email invite — the person sets their own password via the link, nothing to configure on their behalf beyond the invite itself.</p>
   `},
+  rolesPermissions:{title:'Roles & Permissions',body:`
+    <p>Admin only. Create custom roles and choose exactly which pages each one can see — Quotes, Deals, Products, Customers, Vendors, Projects, Project Performance, Review Queue, Testimonials, Team, Integrations, Company Profile.</p>
+    <ul>
+      <li><strong>+ Add role</strong> creates a role with nothing checked (no pages) to start — tick the boxes you want it to have access to.</li>
+      <li>Assign a role to someone on the <strong>Team</strong> page. A team member with <strong>no role assigned</strong> keeps full access to everything, exactly as before this feature existed — restriction only kicks in once you actually assign them a role.</li>
+      <li>Deleting a role falls anyone assigned to it back to no restriction, same as having no role.</li>
+    </ul>
+    <div class="help-tip">💡 This only controls whether a page is visible at all. Finer-grained rules — like only seeing your own Quotes/Deals vs. everyone's — are separate, per-person flags set on the Team page.</div>
+  `},
   integrations:{title:'Integrations',body:`
     <p>Admin only. Connect an accounting/CRM system (e.g. Zoho Books) so Customers and Vendors sync in automatically instead of manual entry, and so Zoho Projects, Bills and Invoices feed the Project Performance module.</p>
     <p>Each company's credentials are kept completely separate — nothing here is shared with other companies on this platform.</p>
@@ -2597,7 +2631,7 @@ const HELP_CONTENT={
     <p><strong>+ Onboard company</strong> creates a new tenant. Suspending a company blocks that team from logging in (existing sessions may remain valid briefly) until it's reactivated.</p>
   `},
 };
-const HELP_ORDER=['dashboard','editor','terms','summary','vendor','print','log','reviewQueue','testimonials','products','customers','vendorMaster','projects','projectPerformance','projectPerformanceDetail','team','integrations','companyProfile','platform'];
+const HELP_ORDER=['dashboard','deals','editor','terms','summary','vendor','print','log','reviewQueue','testimonials','products','customers','vendorMaster','projects','projectPerformance','projectPerformanceDetail','team','integrations','companyProfile','rolesPermissions','platform'];
 function currentHelpKey(){
   if(A.helpViewTopic&&HELP_CONTENT[A.helpViewTopic])return A.helpViewTopic;
   return HELP_CONTENT[A.page]?A.page:'dashboard';
@@ -2635,7 +2669,7 @@ function helpDrawerHTML(){
 // ── App shell ─────────────────────────────────────────────────────────────────
 function appHTML(){
   const init=(A.user?.name||'U').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
-  const PAGE_TITLES={dashboard:'Dashboard',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',log:'Activity Log',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master',integrations:'Integrations',platform:'All Companies',companyProfile:'Company Profile',rolesPermissions:'Roles & Permissions',reviewQueue:'Review Queue',projectPerformance:'Project Performance',projectPerformanceDetail:'Project Detail'};
+  const PAGE_TITLES={dashboard:'Dashboard',deals:'Deals',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',log:'Activity Log',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master',integrations:'Integrations',platform:'All Companies',companyProfile:'Company Profile',rolesPermissions:'Roles & Permissions',reviewQueue:'Review Queue',testimonials:'Testimonials',projectPerformance:'Project Performance',projectPerformanceDetail:'Project Detail'};
   const inEditor=['editor','terms','summary','vendor','print','log'].includes(A.page);
 
   const nav=(page,cb)=>`A.page='${page}';${cb||''}closeSidebar();draw()`;
