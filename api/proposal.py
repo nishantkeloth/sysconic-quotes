@@ -521,22 +521,37 @@ def numbered_phases(phases, CW, TH=None):
 
 BOM_IMG_COL_MM = 15  # width of the BOM table's "Img" column
 BOM_IMG_BOX_MM = 12  # square box the thumbnail itself is fit inside
+BOM_IMG_FETCH_TIMEOUT = 5      # per-image network timeout (seconds)
+BOM_IMG_MAX_COUNT = 40         # hard cap on distinct product photos fetched per document
+BOM_IMG_TIME_BUDGET_SECONDS = 20  # wall-clock budget for ALL image fetches combined across one render
+
+# api/proposal.py has a 60s maxDuration on Vercel (vercel.json) covering the AI
+# draft call AND, separately, PDF rendering -- a BOM with many distinct product
+# photos fetched serially could otherwise burn most of that budget on network
+# I/O alone. The cap + time budget below make a missing/slow photo degrade
+# gracefully (blank cell) instead of risking a function timeout on a large BOM.
 
 def _bom_item_image(url, cache):
     """Fetches a product photo (the same signed product-images URL saved on the
     quote line as it.img) for one BOM row and returns a small fixed-size
-    ReportLab Image flowable, or '' if there's no image or the fetch/decode
-    fails -- a missing/broken product photo must never break BOM generation.
+    ReportLab Image flowable, or '' if there's no image, the fetch/decode
+    fails, or the per-document image budget (count or wall-clock time) has
+    been exhausted -- a missing/broken product photo must never break BOM
+    generation or risk timing out the whole PDF render.
     `cache` is a dict shared across every bom_table() call within one PDF
     render so the same product repeated across sections/options is only
-    downloaded once."""
+    downloaded once, and also carries the shared '__budget__' tracker."""
     if not url:
         return ''
     if url in cache:
         return cache[url]
+    budget = cache.setdefault('__budget__', {'deadline': time.time() + BOM_IMG_TIME_BUDGET_SECONDS, 'fetched': 0})
+    if budget['fetched'] >= BOM_IMG_MAX_COUNT or time.time() >= budget['deadline']:
+        cache[url] = ''  # budget exhausted -- stop fetching further images for the rest of this render
+        return ''
     flow = ''
     try:
-        img_bytes = _fetch_bytes(url, timeout=8)
+        img_bytes = _fetch_bytes(url, timeout=BOM_IMG_FETCH_TIMEOUT)
         if img_bytes:
             reader = ImageReader(io.BytesIO(img_bytes))
             iw, ih = reader.getSize()
@@ -546,6 +561,7 @@ def _bom_item_image(url, cache):
                 flow = Image(io.BytesIO(img_bytes), width=dw, height=dh)
     except Exception:
         flow = ''
+    budget['fetched'] += 1
     cache[url] = flow
     return flow
 
