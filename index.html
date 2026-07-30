@@ -2247,9 +2247,9 @@ function draw(){
   if(A.screen==='feedbackForm'){document.getElementById('app').innerHTML=feedbackFormHTML();return;}if(A.screen==='acceptInvite'){document.getElementById('app').innerHTML=acceptInviteHTML();return;}
   if(A.screen==='forgotPassword'){document.getElementById('app').innerHTML=forgotPasswordHTML();return;}
   if(A.screen==='resetPassword'){document.getElementById('app').innerHTML=resetPasswordHTML();return;}
-  const PAGE_KEY_MAP={dashboard:'quotes',products:'products',customers:'customers',vendorMaster:'vendors',projects:'projects',projectPerformance:'projectPerformance',projectPerformanceDetail:'projectPerformance',reviewQueue:'reviewQueue',testimonials:'testimonials'};
+  const PAGE_KEY_MAP={dashboard:'quotes',deals:'deals',products:'products',customers:'customers',vendorMaster:'vendors',projects:'projects',projectPerformance:'projectPerformance',projectPerformanceDetail:'projectPerformance',reviewQueue:'reviewQueue',testimonials:'testimonials'};
   if(PAGE_KEY_MAP[A.page]&&!hasPageAccess(PAGE_KEY_MAP[A.page])){
-    const fallbackOrder=['dashboard','products','customers','vendorMaster','projects','projectPerformance','reviewQueue','testimonials'];
+    const fallbackOrder=['dashboard','deals','products','customers','vendorMaster','projects','projectPerformance','reviewQueue','testimonials'];
     A.page=fallbackOrder.find(p=>hasPageAccess(PAGE_KEY_MAP[p]))||'dashboard';
   }
   document.getElementById('app').innerHTML=appHTML();
@@ -2260,6 +2260,7 @@ function draw(){
   if(A.page==='companyProfile'){setTimeout(loadCompanyProfile,50);setTimeout(loadQuoteNumbering,50);}
   if(A.page==='rolesPermissions'){setTimeout(loadRolesPermissions,50);}
   if(A.page==='print'){ensurePrintCompany();}
+  if(A.page==='deals')setTimeout(loadDealsPage,50);
   if(A.page==='products')setTimeout(loadProducts,50);
   if(A.page==='customers')setTimeout(loadCustomersPage,50);
   if(A.page==='projects'&&A.projects==null)setTimeout(loadProjectsPage,50);
@@ -2647,6 +2648,7 @@ function appHTML(){
       ${A.user?.is_platform_admin?'':`
       <div class="sb-sec">Workspace</div>
       ${hasPageAccess('quotes')?`<div class="sb-item ${A.page==='dashboard'?'active':''}" onclick="${nav('dashboard')}"><span class="sb-icon">🏠</span>Quotes</div>`:''}
+      ${hasPageAccess('deals')?`<div class="sb-item ${A.page==='deals'?'active':''}" onclick="${nav('deals')}"><span class="sb-icon">🤝</span>Deals</div>`:''}
       ${hasPageAccess('products')?`<div class="sb-item ${A.page==='products'?'active':''}" onclick="${nav('products')}"><span class="sb-icon">📦</span>Products</div>`:''}
       ${hasPageAccess('customers')?`<div class="sb-item ${A.page==='customers'?'active':''}" onclick="${nav('customers')}"><span class="sb-icon">👤</span>Customers</div>`:''}
       ${hasPageAccess('vendors')?`<div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="${nav('vendorMaster')}"><span class="sb-icon">🏭</span>Vendors</div>`:''}
@@ -2682,6 +2684,7 @@ function appHTML(){
   else if(A.page==='vendor')pageContent=vendorHTML();
   else if(A.page==='print')pageContent=printHTML();
   else if(A.page==='log')pageContent=logHTML();
+  else if(A.page==='deals')pageContent=dealsHTML();
   else if(A.page==='products')pageContent=productsHTML();
   else if(A.page==='customers')pageContent=customersHTML();
   else if(A.page==='projects')pageContent=projectsHTML();
@@ -4695,6 +4698,284 @@ function importCustomers(event){
   reader.readAsBinaryString(file);
 }
 
+// ── Deals (lightweight CRM pipeline that feeds into Quotes) ───────────────────
+let DEALS={list:[],stages:[],dragId:null};
+
+function dealsHTML(){return`<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+    <div>
+      <div class="card-title" style="margin-bottom:2px">Deals</div>
+      <div style="font-size:13px;color:var(--gray-500)">A simple pipeline for tracking opportunities before they become a Quote. Drag a card to move its stage.</div>
+    </div>
+    <div style="display:flex;gap:8px">
+      ${A.user?.role==='admin'?`<button class="btn" onclick="showDealStagesModal()">⚙ Manage stages</button>`:''}
+      <button class="btn btn-navy" onclick="showDealModal()">+ New Deal</button>
+    </div>
+  </div>
+  <div id="dealsBoard" style="overflow-x:auto"><div style="color:var(--gray-500)">Loading…</div></div>
+</div>`;}
+
+async function loadDealsPage(){
+  const el=document.getElementById('dealsBoard');if(!el)return;
+  const r=await api('GET','/api/deals');
+  if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  DEALS.list=r.deals||[];DEALS.stages=(r.stages||[]).slice().sort((a,b)=>a.sort_order-b.sort_order);
+  renderDealsBoard();
+}
+
+function dealFmtValue(d){
+  const n=Number(d.value)||0;
+  return `${d.currency||'AED'} ${n.toLocaleString(undefined,{maximumFractionDigits:0})}`;
+}
+
+function renderDealsBoard(){
+  const el=document.getElementById('dealsBoard');if(!el)return;
+  if(!DEALS.stages.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">Setting up your pipeline…</div>`;return;}
+  const byStage={};
+  DEALS.stages.forEach(s=>byStage[s.id]=[]);
+  DEALS.list.forEach(d=>{if(byStage[d.stage_id])byStage[d.stage_id].push(d);});
+  el.innerHTML=`<div style="display:flex;gap:12px;min-width:${DEALS.stages.length*268}px">
+    ${DEALS.stages.map(s=>{
+      const cards=byStage[s.id]||[];
+      const total=cards.reduce((sum,d)=>sum+(Number(d.value)||0),0);
+      return `<div style="flex:0 0 252px;background:var(--gray-50);border-radius:10px;padding:10px" ondragover="event.preventDefault()" ondrop="dealDrop(event,'${s.id}')">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;padding:0 2px">
+          <div style="font-weight:700;font-size:13px;color:var(--gray-700)">${esc(s.name)}${s.is_won?' 🏆':s.is_lost?' ✕':''}</div>
+          <div style="font-size:11px;color:var(--gray-500)">${cards.length}</div>
+        </div>
+        ${total>0?`<div style="font-size:11px;color:var(--gray-500);margin-bottom:8px;padding:0 2px">${cards[0]?.currency||'AED'} ${total.toLocaleString(undefined,{maximumFractionDigits:0})}</div>`:''}
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${cards.map(d=>`<div draggable="true" ondragstart="dealDragStart(event,'${d.id}')" onclick="showDealModal('${d.id}')"
+              style="background:#fff;border:1px solid var(--gray-200);border-radius:8px;padding:10px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,.04)">
+            <div style="font-weight:600;font-size:13px;margin-bottom:4px">${esc(d.title)}</div>
+            ${d.customer_name?`<div style="font-size:12px;color:var(--gray-500);margin-bottom:4px">${esc(d.customer_name)}</div>`:''}
+            <div style="font-size:12px;font-weight:600;color:var(--navy)">${dealFmtValue(d)}</div>
+            ${d.suggestion?`<div style="margin-top:6px;font-size:11px;color:var(--amber);background:var(--amber-light);padding:4px 6px;border-radius:5px">💡 ${esc(d.suggestion)}</div>`:''}
+          </div>`).join('')}
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function dealDragStart(ev,id){DEALS.dragId=id;ev.dataTransfer.effectAllowed='move';}
+async function dealDrop(ev,stageId){
+  ev.preventDefault();
+  const id=DEALS.dragId;DEALS.dragId=null;
+  if(!id)return;
+  const deal=DEALS.list.find(d=>d.id===id);
+  if(!deal||deal.stage_id===stageId)return;
+  deal.stage_id=stageId;renderDealsBoard(); // optimistic
+  const r=await api('PUT','/api/deals/'+id,{stage_id:stageId});
+  if(r.error){alert(r.error);}
+  loadDealsPage();
+}
+
+function showDealModal(dealId){
+  const d=dealId?DEALS.list.find(x=>x.id===dealId):null;
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="dealModalOverlay" onclick="if(event.target===this)closeDealModal()">
+    <div class="modal" style="max-width:560px;max-height:88vh;overflow-y:auto" id="dealModalBox">Loading…</div></div>`);
+  renderDealModal(d, dealId?null:undefined);
+  if(dealId)loadDealDetail(dealId);
+}
+function closeDealModal(){const el=document.getElementById('dealModalOverlay');if(el)el.remove();}
+
+async function loadDealDetail(dealId){
+  const r=await api('GET','/api/deals/'+dealId);
+  if(r.error){alert(r.error);closeDealModal();return;}
+  renderDealModal(r.deal,r.activity||[]);
+}
+
+function renderDealModal(d,activity){
+  const box=document.getElementById('dealModalBox');if(!box)return;
+  const isNew=!d;
+  const stageOpts=DEALS.stages.map(s=>`<option value="${s.id}" ${d&&d.stage_id===s.id?'selected':''}>${esc(s.name)}</option>`).join('');
+  box.innerHTML=`
+    <div class="modal-title">${isNew?'New Deal':esc(d.title)}</div>
+    <div class="fld2" style="margin-bottom:10px"><label>Title</label><input id="dfTitle" value="${esc(d?.title||'')}" placeholder="e.g. Video conferencing rollout — Acme HQ"></div>
+    <div class="field-grid g2" style="margin-bottom:10px">
+      <div class="fld2"><label>Customer</label><input id="dfCustomer" value="${esc(d?.customer_name||'')}" placeholder="Customer or company name"></div>
+      <div class="fld2"><label>Estimated value</label><input id="dfValue" type="number" value="${d?.value??''}" placeholder="0"></div>
+    </div>
+    <div class="field-grid g2" style="margin-bottom:10px">
+      <div class="fld2"><label>Expected close date</label><input id="dfClose" type="date" value="${d?.expected_close_date||''}"></div>
+      ${!isNew?`<div class="fld2"><label>Stage</label><select id="dfStage">${stageOpts}</select></div>`:''}
+    </div>
+    <div class="fld2" style="margin-bottom:10px"><label>Notes</label><textarea id="dfNotes" rows="2" style="width:100%;padding:8px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px">${esc(d?.notes||'')}</textarea></div>
+    ${!isNew&&d.suggestion?`<div style="font-size:12px;color:var(--amber);background:var(--amber-light);padding:6px 9px;border-radius:6px;margin-bottom:10px">💡 ${esc(d.suggestion)}</div>`:''}
+    ${!isNew&&d.status!=='open'?`<div style="font-size:12px;font-weight:700;color:${d.status==='won'?'var(--green)':'var(--red)'};margin-bottom:10px">${d.status==='won'?'🏆 Won':'✕ Lost'}${d.lost_reason?` — ${esc(d.lost_reason)}`:''}</div>`:''}
+    ${!isNew?`<div style="margin-bottom:10px">
+      ${d.converted_quote_id?`<button class="btn" onclick="openConvertedQuote('${d.converted_quote_id}')">📄 Open linked Quote</button>`:`<button class="btn" onclick="convertDealToQuote('${d.id}')">→ Convert to Quote</button>`}
+      ${d.status==='open'?`<button class="btn" style="color:var(--green)" onclick="markDeal('${d.id}','won')">🏆 Mark Won</button>`:''}
+      ${d.status==='open'?`<button class="btn" style="color:var(--red)" onclick="markDeal('${d.id}','lost')">✕ Mark Lost</button>`:''}
+    </div>
+    <div style="border-top:1px solid var(--gray-100);padding-top:10px;margin-bottom:10px">
+      <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Activity</label>
+      <div style="display:flex;gap:8px;margin-bottom:10px"><input id="dfNote" placeholder="Add a note…" style="flex:1"><button class="btn btn-sm" onclick="addDealNote('${d.id}')">Add</button></div>
+      <div style="max-height:160px;overflow-y:auto;font-size:12px;color:var(--gray-700)">
+        ${(activity||[]).map(a=>`<div style="padding:6px 0;border-bottom:1px solid var(--gray-100)"><span style="color:var(--gray-500)">${new Date(a.created_at).toLocaleString()}</span> — ${esc(a.body||a.type)}</div>`).join('')||'<div style="color:var(--gray-500)">No activity yet.</div>'}
+      </div>
+    </div>`:''}
+    <div class="modal-actions">
+      <button class="btn" onclick="closeDealModal()">Cancel</button>
+      ${!isNew?`<button class="btn" style="color:var(--red)" onclick="deleteDeal('${d.id}')">Delete</button>`:''}
+      <button class="btn btn-navy" onclick="saveDealModal(${isNew?'null':`'${d.id}'`})">${isNew?'Create Deal':'Save'}</button>
+    </div>`;
+}
+
+async function saveDealModal(dealId){
+  const body={
+    title:(document.getElementById('dfTitle')?.value||'').trim(),
+    customer_name:document.getElementById('dfCustomer')?.value||'',
+    value:Number(document.getElementById('dfValue')?.value)||0,
+    expected_close_date:document.getElementById('dfClose')?.value||null,
+    notes:document.getElementById('dfNotes')?.value||'',
+  };
+  if(!body.title){alert('Deal title is required.');return;}
+  if(dealId){
+    const stageSel=document.getElementById('dfStage');
+    if(stageSel)body.stage_id=stageSel.value;
+    const r=await api('PUT','/api/deals/'+dealId,body);
+    if(r.error){alert(r.error);return;}
+  }else{
+    const r=await api('POST','/api/deals',body);
+    if(r.error){alert(r.error);return;}
+    // Best-effort, non-blocking: replicate this deal's customer into the
+    // Customer Master (and from there, into Zoho Books if connected) the
+    // moment the deal is created — never lets a Zoho hiccup stop the deal
+    // itself from being created.
+    if(body.customer_name && body.customer_name.trim()){
+      try{ await syncDealCustomerToZoho(body.customer_name.trim(), r.deal.id); }catch(e){}
+    }
+  }
+  closeDealModal();loadDealsPage();
+}
+
+// Finds or creates a Customer Master row matching this deal's typed customer
+// name, pushes it to Zoho Books (POST /api/integrations/zoho/push-customer —
+// a no-op if Zoho isn't connected for this company), then links the deal to
+// that customer record. Every step is best-effort: this must never block or
+// break deal creation, which has already succeeded by the time this runs.
+async function syncDealCustomerToZoho(name, dealId){
+  const found=await api('GET','/api/customers?limit=5&search='+encodeURIComponent(name));
+  let customer=(found.customers||[]).find(c=>(c.name||'').trim().toLowerCase()===name.toLowerCase());
+  if(!customer){
+    const created=await api('POST','/api/customers',{name});
+    if(created.error||!created.customer)return;
+    customer=created.customer;
+  }
+  if(!customer.external_contact_id){
+    await api('POST','/api/integrations/zoho/push-customer',{customer_id:customer.id});
+  }
+  await api('PUT','/api/deals/'+dealId,{customer_id:customer.id});
+}
+
+async function addDealNote(dealId){
+  const inp=document.getElementById('dfNote');
+  const body=(inp?.value||'').trim();
+  if(!body)return;
+  const r=await api('POST',`/api/deals/${dealId}/notes`,{body});
+  if(r.error){alert(r.error);return;}
+  if(inp)inp.value='';
+  loadDealDetail(dealId);
+}
+
+async function markDeal(dealId,status){
+  let lost_reason=null;
+  if(status==='lost'){lost_reason=prompt('Reason lost (optional):','')||'';}
+  const r=await api('PUT','/api/deals/'+dealId,{status,lost_reason});
+  if(r.error){alert(r.error);return;}
+  loadDealDetail(dealId);loadDealsPage();
+}
+
+async function deleteDeal(dealId){
+  if(!confirm('Delete this deal? This cannot be undone.'))return;
+  const r=await api('DELETE','/api/deals/'+dealId);
+  if(r.error){alert(r.error);return;}
+  closeDealModal();loadDealsPage();
+}
+
+// Converts a deal into a real Quote using the exact same creation call
+// "New Quote" uses (mkOption/DEFAULT_TERMS), then links the deal to it —
+// deliberately not duplicated server-side quote-creation logic.
+async function convertDealToQuote(dealId){
+  const deal=DEALS.list.find(d=>d.id===dealId) || (await api('GET','/api/deals/'+dealId)).deal;
+  if(!deal)return;
+  const r=await api('POST','/api/quotes',{title:deal.title,customer:deal.customer_name||'',quote_data:[mkOption('Option 1')],terms_data:[...DEFAULT_TERMS],vendor_data:[],currency:deal.currency||'AED',exchange_rate:1});
+  if(r.error){alert(r.error);return;}
+  await api('PUT','/api/deals/'+dealId,{converted_quote_id:r.quote.id});
+  closeDealModal();
+  A.quotes.unshift(r.quote);openQuote(r.quote);
+}
+function openConvertedQuote(quoteId){
+  closeDealModal();
+  const q=A.quotes.find(x=>x.id===quoteId)||{id:quoteId};
+  openQuote(q);
+}
+
+function showDealStagesModal(){
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="dealStagesOverlay" onclick="if(event.target===this)document.getElementById('dealStagesOverlay').remove()">
+    <div class="modal" style="max-width:520px" id="dealStagesBox"></div></div>`);
+  renderDealStagesModal();
+}
+function renderDealStagesModal(){
+  const box=document.getElementById('dealStagesBox');if(!box)return;
+  box.innerHTML=`
+    <div class="modal-title">Manage pipeline stages</div>
+    <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px">Reorder, rename, or mark a stage as Won/Lost. Deals must be moved out of a stage before it can be deleted.</div>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
+      ${DEALS.stages.map((s,i)=>`<div style="display:flex;gap:6px;align-items:center;border:1px solid var(--gray-200);border-radius:8px;padding:8px">
+        <div style="display:flex;flex-direction:column">
+          <button class="btn btn-sm" style="padding:1px 6px" ${i===0?'disabled':''} onclick="moveDealStage('${s.id}',-1)">↑</button>
+          <button class="btn btn-sm" style="padding:1px 6px" ${i===DEALS.stages.length-1?'disabled':''} onclick="moveDealStage('${s.id}',1)">↓</button>
+        </div>
+        <input value="${esc(s.name)}" style="flex:1" onchange="renameDealStage('${s.id}',this.value)">
+        <label style="font-size:11px;display:flex;align-items:center;gap:3px"><input type="checkbox" ${s.is_won?'checked':''} onchange="toggleStageFlag('${s.id}','is_won',this.checked)">Won</label>
+        <label style="font-size:11px;display:flex;align-items:center;gap:3px"><input type="checkbox" ${s.is_lost?'checked':''} onchange="toggleStageFlag('${s.id}','is_lost',this.checked)">Lost</label>
+        <button class="btn btn-sm" style="color:var(--red)" onclick="deleteDealStage('${s.id}')">✕</button>
+      </div>`).join('')}
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <input id="newStageName" placeholder="New stage name" style="flex:1">
+      <button class="btn btn-navy" onclick="addDealStage()">+ Add stage</button>
+    </div>
+    <div class="modal-actions"><button class="btn" onclick="document.getElementById('dealStagesOverlay').remove();loadDealsPage()">Done</button></div>`;
+}
+async function addDealStage(){
+  const inp=document.getElementById('newStageName');
+  const name=(inp?.value||'').trim();
+  if(!name)return;
+  const r=await api('POST','/api/deals/stages',{name});
+  if(r.error){alert(r.error);return;}
+  const stages=await api('GET','/api/deals/stages');
+  DEALS.stages=(stages.stages||[]).slice().sort((a,b)=>a.sort_order-b.sort_order);
+  renderDealStagesModal();
+}
+async function renameDealStage(id,name){
+  if(!name.trim())return;
+  await api('PUT','/api/deals/stages/'+id,{name:name.trim()});
+  const s=DEALS.stages.find(x=>x.id===id);if(s)s.name=name.trim();
+}
+async function toggleStageFlag(id,flag,checked){
+  await api('PUT','/api/deals/stages/'+id,{[flag]:checked});
+  const s=DEALS.stages.find(x=>x.id===id);if(s)s[flag]=checked;
+}
+async function moveDealStage(id,dir){
+  const i=DEALS.stages.findIndex(s=>s.id===id);
+  const j=i+dir;
+  if(i<0||j<0||j>=DEALS.stages.length)return;
+  [DEALS.stages[i],DEALS.stages[j]]=[DEALS.stages[j],DEALS.stages[i]];
+  await Promise.all(DEALS.stages.map((s,idx)=>api('PUT','/api/deals/stages/'+s.id,{sort_order:idx})));
+  renderDealStagesModal();
+}
+async function deleteDealStage(id){
+  if(!confirm('Delete this stage?'))return;
+  const r=await api('DELETE','/api/deals/stages/'+id);
+  if(r.error){alert(r.error);return;}
+  DEALS.stages=DEALS.stages.filter(s=>s.id!==id);
+  renderDealStagesModal();
+}
+
 // ── Vendor Master (standalone reference list) ─────────────────────────────────
 let VENDS={list:[],total:0,search:'',t:null};
 
@@ -4800,7 +5081,7 @@ function importVendorsMaster(event){
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────
-const RBAC_PAGE_LABELS = {quotes:'Quotes',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile'};
+const RBAC_PAGE_LABELS = {quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile'};
 let RBAC_PAGE_KEYS_FE = [];
 let RBAC_ROLES_CACHE = [];
 

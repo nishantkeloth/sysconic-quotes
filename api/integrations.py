@@ -93,6 +93,34 @@ class ZohoAdapter:
         contacts = self.fetch_customers(creds)
         return {'ok': True, 'sample_count': len(contacts)}
 
+    def create_customer(self, creds, name, company_name=None, email=None, phone=None):
+        """Pushes a brand-new customer to Zoho Books as a Contact (contact_type
+        'customer'), used when a Deal is created with a customer name that
+        doesn't already exist in the synced Customer Master (see
+        push_customer_to_zoho() below). Deliberately minimal -- Deals only
+        collect a plain customer name, not the full Zoho "New Customer" form
+        (Business/Individual type, Primary Contact first/last name, Customer
+        Number, etc, as seen in Nish's Zoho org) -- so this only sets
+        contact_name/company_name/email/phone and leaves everything else to
+        Zoho's own defaults. customer_sub_type defaults to 'business' since
+        this app's customers are virtually always companies, not individuals.
+        Zoho auto-assigns the Customer Number; we never set it ourselves.
+        Raises RuntimeError on any Zoho API failure (via _post()) -- caller
+        decides whether that should block anything or just be surfaced."""
+        body = {
+            'contact_name': str(name)[:200],
+            'company_name': str(company_name or name)[:200],
+            'contact_type': 'customer',
+            'customer_sub_type': 'business',
+        }
+        if email: body['email'] = str(email)[:200]
+        if phone: body['phone'] = str(phone)[:50]
+        r = self._post(creds, '/contacts', body)
+        contact = r.get('contact') or {}
+        if not contact.get('contact_id'):
+            raise RuntimeError('Zoho did not return a contact id: ' + json.dumps(r)[:200])
+        return contact
+
     def _post(self, creds, path, body):
         params = urllib.parse.urlencode({'organization_id': creds['org_id']})
         url = f"{ZOHO_API}{path}?{params}"
@@ -755,6 +783,51 @@ def sync_customers():
     count, err = _sync_contacts(claims['company_id'], provider, 'customers')
     if err: return jsonify({'error': err}), 502
     return jsonify({'synced': count})
+
+# ── Push a single locally-created customer to Zoho Books ────────────────────────
+# Used by the Deals module (api/quotes.py -> index.html): when a deal is created
+# with a brand-new customer name, the frontend creates the local customers row
+# first (POST /api/customers, unchanged), then calls this to replicate it into
+# Zoho as a Contact and store the returned id back onto that row -- mirroring
+# the existing pull-direction sync (_sync_contacts) but in the push direction,
+# for exactly one record at a time rather than a bulk import. Any authenticated
+# user can call this (not admin-only) since it's a side effect of an action
+# (creating a deal) that Deals RBAC already gates -- there's nothing extra to
+# protect here beyond normal company scoping.
+@app.route('/api/integrations/zoho/push-customer', methods=['POST'])
+def push_customer_to_zoho():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    cid = (request.json or {}).get('customer_id')
+    if not cid: return jsonify({'error': 'customer_id is required'}), 400
+
+    row = sb.table('customers').select('*').eq('id', cid).eq('company_id', claims['company_id']).execute()
+    if not row.data: return jsonify({'error': 'Customer not found'}), 404
+    customer = row.data[0]
+    if customer.get('external_contact_id'):
+        return jsonify({'ok': True, 'external_contact_id': customer['external_contact_id'], 'already_synced': True})
+
+    creds = _get_creds_for(claims['company_id'], 'zoho')
+    adapter = ADAPTERS.get('zoho')
+    if not creds or not adapter or not adapter.is_configured(creds):
+        # Not an error -- Zoho Books may simply not be connected for this
+        # company. The local customer record is still perfectly usable.
+        return jsonify({'ok': True, 'skipped': 'Zoho Books is not connected.'})
+
+    try:
+        contact = adapter.create_customer(
+            creds, customer.get('name') or '', company_name=customer.get('company_name'),
+            email=customer.get('email'), phone=customer.get('phone'),
+        )
+    except Exception as e:
+        # Best-effort: the customer already exists locally regardless of
+        # whether this push succeeds, so this is a soft error, not a 500.
+        return jsonify({'ok': False, 'error': f'Zoho customer creation failed: {str(e)[:300]}'}), 502
+
+    sb.table('customers').update({
+        'external_contact_id': contact['contact_id'], 'source': 'zoho',
+    }).eq('id', cid).eq('company_id', claims['company_id']).execute()
+    return jsonify({'ok': True, 'external_contact_id': contact['contact_id']})
 
 # ── Generic sync: vendors ───────────────────────────────────────────────────────
 @app.route('/api/integrations/sync-vendors', methods=['POST'])

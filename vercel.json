@@ -11,7 +11,7 @@
     { "src": "api/vendors.py", "use": "@vercel/python" },
     { "src": "api/integrations.py", "use": "@vercel/python" },
     { "src": "api/platform.py", "use": "@vercel/python" },
-    { "src": "api/proposal.py", "use": "@vercel/python" },
+    { "src": "api/proposal.py", "use": "@vercel/python", "config": { "maxDuration": 60 } },
     { "src": "api/projects.py", "use": "@vercel/python" },
     { "src": "api/pdf-render.js", "use": "@vercel/node", "config": { "maxLambdaSize": "250mb", "maxDuration": 30, "memory": 3009 } },
         { "src": "index.html",    "use": "@vercel/static" }
@@ -21,6 +21,8 @@
     { "src": "/api/auth/(.*)",   "dest": "api/auth.py" },
     { "src": "/api/quotes/(.*)", "dest": "api/quotes.py" },
     { "src": "/api/quotes",      "dest": "api/quotes.py" },
+    { "src": "/api/deals/(.*)", "dest": "api/quotes.py" },
+    { "src": "/api/deals",      "dest": "api/quotes.py" },
     { "src": "/api/ai/(.*)",     "dest": "api/ai.py" },
     { "src": "/api/pdf/(.*)", "dest": "api/pdf.py" },
     { "src": "/api/products/(.*)", "dest": "api/products.py" },

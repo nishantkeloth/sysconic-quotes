@@ -62,6 +62,8 @@ def _rbac_page_gate():
     path = request.path
     if path == '/api/quotes/review-queue' or path.endswith(_REVIEW_QUEUE_SUFFIXES):
         page_key = 'reviewQueue'
+    elif path.startswith('/api/deals'):
+        page_key = 'deals'
     else:
         page_key = 'quotes'
     if not has_page_access(claims, page_key):
@@ -1289,6 +1291,288 @@ def email_quote(qid):
     _log_activity(qid, claims['user_id'], 'emailed_to_customer', log_note)
 
     return jsonify({'ok': True, 'sent_from': sender_email, 'customer_version': next_customer_version})
+
+# ── CRM: Deals pipeline ──────────────────────────────────────────────────────
+# A lightweight, configurable sales pipeline that sits BEFORE a formal Quote
+# exists (see migration-crm-deals.sql for the table shapes). Routed here
+# (rather than a new api/deals.py) because Vercel's plan caps this project's
+# deployment at exactly 12 Python serverless functions and that cap is
+# already reached — see the same reasoning already applied to
+# api/projects.py (which also hosts the unrelated "testimonials" routes).
+# Deal-to-quote conversion deliberately does NOT duplicate quote-creation
+# logic here: the frontend calls the existing POST /api/quotes exactly like
+# "New Quote" does, then PATCHes the deal with the resulting quote id.
+
+DEFAULT_DEAL_STAGES = [
+    {'name': 'Lead',        'is_won': False, 'is_lost': False},
+    {'name': 'Qualified',   'is_won': False, 'is_lost': False},
+    {'name': 'Quote Sent',  'is_won': False, 'is_lost': False},
+    {'name': 'Negotiation', 'is_won': False, 'is_lost': False},
+    {'name': 'Won',         'is_won': True,  'is_lost': False},
+    {'name': 'Lost',        'is_won': False, 'is_lost': True},
+]
+
+def _can_view_all_deals(claims):
+    """Deliberately reuses the exact same users.can_view_all_quotes flag as
+    quotes (not a separate can_view_all_deals column) -- per the agreed v1
+    scope, deal visibility mirrors quote visibility exactly, and a company
+    admin shouldn't have to manage two nearly-identical toggles per person."""
+    return _can_view_all_quotes(claims)
+
+def _log_deal_activity(deal_id, company_id, actor_id, type_, body=None):
+    """Best-effort activity/notes entry for a deal's timeline. Never raises --
+    a logging failure must not block the actual action."""
+    try:
+        sb.table('deal_activity').insert({
+            'deal_id': deal_id, 'company_id': company_id, 'actor_id': actor_id,
+            'type': type_, 'body': body or None,
+        }).execute()
+    except Exception:
+        traceback.print_exc()
+
+def _ensure_default_stages(company_id):
+    """Lazily seeds a company's default stage set the first time its pipeline
+    is touched, instead of requiring a signup-time bootstrap step. Idempotent:
+    if stages already exist (even a partial/customized set from before),
+    nothing is created."""
+    existing = sb.table('deal_stages').select('id').eq('company_id', company_id).limit(1).execute()
+    if existing.data:
+        return
+    for i, s in enumerate(DEFAULT_DEAL_STAGES):
+        sb.table('deal_stages').insert({
+            'company_id': company_id, 'name': s['name'], 'sort_order': i,
+            'is_won': s['is_won'], 'is_lost': s['is_lost'],
+        }).execute()
+
+def _deal_suggestion(deal, stage_by_id):
+    """Deterministic (not LLM-based, by design for v1 -- see conversation with
+    Nish: ship the pipeline first, keep the first AI-ish feature cheap/fast/
+    free) next-best-action nudge shown as a small badge on a deal card.
+    Returns None when there's nothing worth surfacing."""
+    if deal.get('status') != 'open':
+        return None
+    stage = stage_by_id.get(deal.get('stage_id')) or {}
+    last_activity = deal.get('last_activity_at')
+    days_since = None
+    if last_activity:
+        try:
+            dt = datetime.fromisoformat(last_activity.replace('Z', '+00:00'))
+            days_since = (datetime.now(dt.tzinfo) - dt).days
+        except Exception:
+            days_since = None
+    close_date = deal.get('expected_close_date')
+    if close_date:
+        try:
+            cd = datetime.fromisoformat(close_date).date()
+            if cd < datetime.now().date():
+                return f"Expected close date ({close_date}) has passed — update or close this deal"
+        except Exception:
+            pass
+    if days_since is not None:
+        if days_since >= 14:
+            return f"No activity in {days_since} days — follow up or mark this deal lost"
+        if days_since >= 7:
+            return f"No activity in {days_since} days — time to follow up"
+        if stage.get('sort_order', 0) == 0 and days_since >= 3:
+            return "Still a new lead — reach out to qualify it"
+    return None
+
+def _deal_row_out(deal, stage_by_id):
+    d = dict(deal)
+    d['suggestion'] = _deal_suggestion(deal, stage_by_id)
+    return d
+
+# ── Stages ───────────────────────────────────────────────────────────────────
+@app.route('/api/deals/stages', methods=['GET'])
+def list_deal_stages():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    _ensure_default_stages(claims['company_id'])
+    rows = sb.table('deal_stages').select('*').eq('company_id', claims['company_id'])\
+        .order('sort_order').execute()
+    return jsonify({'stages': rows.data or []})
+
+@app.route('/api/deals/stages', methods=['POST'])
+def create_deal_stage():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+    d = request.json or {}
+    name = (d.get('name') or '').strip()
+    if not name: return jsonify({'error': 'Stage name is required'}), 400
+    existing = sb.table('deal_stages').select('sort_order').eq('company_id', claims['company_id'])\
+        .order('sort_order', desc=True).limit(1).execute()
+    next_order = (existing.data[0]['sort_order'] + 1) if existing.data else 0
+    row = sb.table('deal_stages').insert({
+        'company_id': claims['company_id'], 'name': name, 'sort_order': next_order,
+        'is_won': bool(d.get('is_won')), 'is_lost': bool(d.get('is_lost')),
+    }).execute()
+    return jsonify({'stage': row.data[0]}), 201
+
+@app.route('/api/deals/stages/<sid>', methods=['PUT'])
+def update_deal_stage(sid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+    row = sb.table('deal_stages').select('id').eq('id', sid).eq('company_id', claims['company_id']).execute()
+    if not row.data: return jsonify({'error': 'Not found'}), 404
+    d = request.json or {}
+    patch = {}
+    for k in ('name', 'sort_order', 'is_won', 'is_lost'):
+        if k in d: patch[k] = d[k]
+    if not patch: return jsonify({'error': 'Nothing to update'}), 400
+    sb.table('deal_stages').update(patch).eq('id', sid).execute()
+    return jsonify({'ok': True})
+
+@app.route('/api/deals/stages/<sid>', methods=['DELETE'])
+def delete_deal_stage(sid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+    row = sb.table('deal_stages').select('id').eq('id', sid).eq('company_id', claims['company_id']).execute()
+    if not row.data: return jsonify({'error': 'Not found'}), 404
+    in_use = sb.table('deals').select('id', count='exact').eq('stage_id', sid).execute()
+    if (in_use.count or 0) > 0:
+        return jsonify({'error': f'{in_use.count} deal(s) are still in this stage — move them first.'}), 400
+    sb.table('deal_stages').delete().eq('id', sid).execute()
+    return jsonify({'ok': True})
+
+# ── Deals ────────────────────────────────────────────────────────────────────
+@app.route('/api/deals', methods=['GET'])
+def list_deals():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    _ensure_default_stages(claims['company_id'])
+    q = sb.table('deals').select('*').eq('company_id', claims['company_id'])
+    if not _can_view_all_deals(claims):
+        q = q.eq('owner_id', claims['user_id'])
+    rows = q.order('updated_at', desc=True).execute()
+    stages = sb.table('deal_stages').select('*').eq('company_id', claims['company_id']).execute()
+    stage_by_id = {s['id']: s for s in (stages.data or [])}
+    deals_out = [_deal_row_out(r, stage_by_id) for r in (rows.data or [])]
+    return jsonify({'deals': deals_out, 'stages': stages.data or []})
+
+@app.route('/api/deals', methods=['POST'])
+def create_deal():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    d = request.json or {}
+    title = (d.get('title') or '').strip()
+    if not title: return jsonify({'error': 'Deal title is required'}), 400
+    _ensure_default_stages(claims['company_id'])
+    stage_id = d.get('stage_id')
+    if not stage_id:
+        first = sb.table('deal_stages').select('id').eq('company_id', claims['company_id'])\
+            .order('sort_order').limit(1).execute()
+        stage_id = first.data[0]['id'] if first.data else None
+    row = sb.table('deals').insert({
+        'company_id': claims['company_id'], 'created_by': claims['user_id'],
+        'owner_id': d.get('owner_id') or claims['user_id'],
+        'title': title,
+        'customer_id': d.get('customer_id') or None,
+        'customer_name': d.get('customer_name') or '',
+        'value': d.get('value') or 0,
+        'currency': d.get('currency') or 'AED',
+        'stage_id': stage_id,
+        'expected_close_date': d.get('expected_close_date') or None,
+        'notes': d.get('notes') or '',
+    }).execute()
+    deal = row.data[0]
+    _log_deal_activity(deal['id'], claims['company_id'], claims['user_id'], 'created', f"Deal \"{title}\" created")
+    return jsonify({'deal': deal}), 201
+
+def _get_deal_or_403(did, claims):
+    row = sb.table('deals').select('*').eq('id', did).eq('company_id', claims['company_id']).execute()
+    if not row.data: return None, (jsonify({'error': 'Not found'}), 404)
+    deal = row.data[0]
+    if deal.get('owner_id') != claims['user_id'] and not _can_view_all_deals(claims):
+        return None, (jsonify({'error': 'Forbidden'}), 403)
+    return deal, None
+
+@app.route('/api/deals/<did>', methods=['GET'])
+def get_deal(did):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    deal, err = _get_deal_or_403(did, claims)
+    if err: return err
+    activity = sb.table('deal_activity').select('*').eq('deal_id', did)\
+        .order('created_at', desc=True).execute()
+    stages = sb.table('deal_stages').select('*').eq('company_id', claims['company_id']).execute()
+    stage_by_id = {s['id']: s for s in (stages.data or [])}
+    return jsonify({'deal': _deal_row_out(deal, stage_by_id), 'activity': activity.data or []})
+
+@app.route('/api/deals/<did>', methods=['PUT'])
+def update_deal(did):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    deal, err = _get_deal_or_403(did, claims)
+    if err: return err
+    d = request.json or {}
+    patch = {}
+    for k in ('title', 'customer_id', 'customer_name', 'value', 'currency', 'expected_close_date',
+              'notes', 'owner_id', 'converted_quote_id'):
+        if k in d: patch[k] = d[k]
+
+    touched = False
+    if 'stage_id' in d and d['stage_id'] != deal.get('stage_id'):
+        patch['stage_id'] = d['stage_id']
+        stages = sb.table('deal_stages').select('*').eq('id', d['stage_id']).execute()
+        new_stage = stages.data[0] if stages.data else {}
+        old_stages = sb.table('deal_stages').select('name').eq('id', deal.get('stage_id')).execute()
+        old_name = old_stages.data[0]['name'] if old_stages.data else '—'
+        _log_deal_activity(did, claims['company_id'], claims['user_id'], 'stage_change',
+                            f"Moved from \"{old_name}\" to \"{new_stage.get('name','')}\"")
+        touched = True
+        # Auto-close the deal if the new stage is a designated won/lost stage,
+        # so status and stage never silently disagree with each other.
+        if new_stage.get('is_won'):
+            patch['status'] = 'won'
+        elif new_stage.get('is_lost'):
+            patch['status'] = 'lost'
+
+    if 'status' in d and d['status'] in ('open', 'won', 'lost') and d['status'] != deal.get('status'):
+        patch['status'] = d['status']
+        if d['status'] == 'lost' and d.get('lost_reason'):
+            patch['lost_reason'] = d['lost_reason']
+        _log_deal_activity(did, claims['company_id'], claims['user_id'],
+                            d['status'] if d['status'] in ('won', 'lost') else 'note',
+                            f"Marked {d['status']}" + (f" — {d.get('lost_reason')}" if d.get('lost_reason') else ''))
+        touched = True
+
+    if 'converted_quote_id' in d and d['converted_quote_id']:
+        _log_deal_activity(did, claims['company_id'], claims['user_id'], 'converted',
+                            'Converted to a Quote')
+        touched = True
+
+    if not patch:
+        return jsonify({'error': 'Nothing to update'}), 400
+    if touched or any(k in patch for k in ('title', 'value', 'notes')):
+        patch['last_activity_at'] = datetime.utcnow().isoformat()
+    patch['updated_at'] = datetime.utcnow().isoformat()
+    sb.table('deals').update(patch).eq('id', did).execute()
+    return jsonify({'ok': True})
+
+@app.route('/api/deals/<did>', methods=['DELETE'])
+def delete_deal(did):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    deal, err = _get_deal_or_403(did, claims)
+    if err: return err
+    sb.table('deals').delete().eq('id', did).execute()
+    return jsonify({'ok': True})
+
+@app.route('/api/deals/<did>/notes', methods=['POST'])
+def add_deal_note(did):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    deal, err = _get_deal_or_403(did, claims)
+    if err: return err
+    d = request.json or {}
+    body = (d.get('body') or '').strip()
+    if not body: return jsonify({'error': 'Note text is required'}), 400
+    _log_deal_activity(did, claims['company_id'], claims['user_id'], 'note', body)
+    sb.table('deals').update({'last_activity_at': datetime.utcnow().isoformat()}).eq('id', did).execute()
+    return jsonify({'ok': True}), 201
 
 if __name__ == '__main__':
     app.run(debug=True)
