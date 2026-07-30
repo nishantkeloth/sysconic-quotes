@@ -359,9 +359,12 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .ptotal-val.grand{font-size:21px}
 .pfooter{margin-top:28px;padding-top:14px;border-top:1px solid var(--gray-200);font-size:11px;color:var(--gray-400);text-align:center}
 
-/* ── Responsive: hamburger + off-canvas sidebar for tablet/phone ── */
-.sb-toggle{display:none;background:none;border:none;font-size:22px;color:var(--navy);cursor:pointer;padding:4px 8px;line-height:1;flex-shrink:0}
+/* ── Sidebar hide toggle (desktop) + hamburger/off-canvas (tablet/phone) ── */
+.sb-toggle{display:inline-flex;align-items:center;background:none;border:none;font-size:22px;color:var(--navy);cursor:pointer;padding:4px 8px;line-height:1;flex-shrink:0}
 .sb-overlay{display:none}
+@media (min-width:901px){
+  .sidebar.collapsed{width:0;min-width:0;overflow:hidden;border-right:none}
+}
 
 /* ── Contextual Help drawer ── */
 .help-fab{position:fixed;bottom:22px;right:22px;width:46px;height:46px;border-radius:50%;background:#f59e0b;color:#1e3a5f;border:none;font-size:19px;font-weight:700;cursor:pointer;box-shadow:var(--shadow-lg);z-index:400;display:flex;align-items:center;justify-content:center;line-height:1;transition:filter .15s}
@@ -478,8 +481,19 @@ let _n=1; const uid=()=>'i'+ _n++;
 const A={screen:'login',token:null,user:null,company:null,
   page:'dashboard',quotes:[],activeQuote:null,view:'internal',cur:'AED',rate:1,
   activeOpt:0,saveStatus:'',searchQ:'',filterStatus:'all',sbOpen:false,
+  sbCollapsed:localStorage.getItem('sq_sidebar_collapsed')==='1',
   portfolio:null,ppFilters:{},ppDetail:null,ppDetailId:null,ppDetailTab:'overview'};
 function toggleSidebar(){A.sbOpen=!A.sbOpen;draw();}
+// Single hamburger button handles both layouts: on narrow screens it slides
+// the off-canvas drawer (sbOpen, unchanged); on desktop it fully hides the
+// 240px sidebar instead (sbCollapsed) so the main content can use that
+// space -- persisted so the choice survives a page reload.
+function toggleSidebarBtn(){
+  if(window.innerWidth<=900){toggleSidebar();return;}
+  A.sbCollapsed=!A.sbCollapsed;
+  localStorage.setItem('sq_sidebar_collapsed',A.sbCollapsed?'1':'0');
+  draw();
+}
 function parseJwt(t){try{return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));}catch(e){return {};}}
 function hasFeature(f){return !!(A.token&&(parseJwt(A.token).features||{})[f]);}
 function hasPageAccess(pageKey){if(A.user?.role==='admin')return true;if(!A.token)return true;const rp=parseJwt(A.token).role_permissions;if(rp===null||rp===undefined)return true;return !!rp[pageKey];}
@@ -897,6 +911,29 @@ function ppCostControlTab(d){
   </tr>`).join('');
   const variance=(p.original_estimated_cost||0)-(p.estimate_at_completion||0);
 
+  // PO vs Quoted Cost — each synced PO line next to the quoted (baseline)
+  // line item it was text-matched to (see _match_baseline_line in
+  // api/projects.py), so a distributor discount negotiated at PO time
+  // shows up as a per-line saving instead of only moving the aggregate
+  // Committed Cost figure above. Unmatched lines still show (best-effort
+  // text match, not a guaranteed join) with '—' in place of the quoted columns.
+  const poComp=d.po_line_comparison||[];
+  const poCompRows=poComp.map(c=>{
+    const savingsColor=(c.savings_amount||0)>0?'var(--green)':((c.savings_amount||0)<0?'var(--red)':'var(--gray-500)');
+    const quotedAs=[c.quoted_brand,c.quoted_model].filter(Boolean).join(' ');
+    return `<tr style="border-bottom:1px solid var(--gray-100)">
+      <td style="padding:8px">${esc(c.po_number||'')}</td>
+      <td style="padding:8px">${esc(c.vendor_name||'')}</td>
+      <td style="padding:8px">${esc(c.item_name||'')}${quotedAs?`<div style="color:var(--gray-500);font-size:11.5px">Quoted as: ${esc(quotedAs)}</div>`:''}</td>
+      <td style="padding:8px;text-align:right">${fmt(c.quantity||0)}</td>
+      <td style="padding:8px;text-align:right">${c.matched?'AED '+fmt(c.quoted_unit_cost||0):'<span style="color:var(--gray-400)">—</span>'}</td>
+      <td style="padding:8px;text-align:right">AED ${fmt(c.rate||0)}</td>
+      <td style="padding:8px;text-align:right">AED ${fmt(c.total||0)}</td>
+      <td style="padding:8px;text-align:right;font-weight:600;color:${savingsColor}">${c.matched?(c.savings_amount>=0?'+':'')+'AED '+fmt(c.savings_amount||0)+' ('+(c.savings_pct>=0?'+':'')+(c.savings_pct||0).toFixed(1)+'%)':'<span style="color:var(--gray-400);font-weight:400">Not matched to a quote line</span>'}</td>
+    </tr>`;
+  }).join('');
+  const totalPoSavings=poComp.reduce((s,c)=>s+(c.matched?(c.savings_amount||0):0),0);
+
   return `<div class="card">
     <div class="card-title">Cost Control — by Category</div>
     <table style="width:100%;border-collapse:collapse;font-size:14px">
@@ -910,6 +947,15 @@ function ppCostControlTab(d){
       <span>EAC: <b>AED ${fmt(p.estimate_at_completion||0)}</b></span>
       <span>Forecast Variance: <b style="${variance<0?'color:var(--red)':'color:var(--green)'}">AED ${fmt(variance)}</b></span>
     </div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <div class="card-title">PO vs Quoted Cost</div>
+    <div style="color:var(--gray-500);font-size:13px;margin-bottom:10px">Every synced PO line next to what that item was originally quoted to cost. A positive Savings figure means the PO landed below the quote — e.g. an extra discount negotiated with the distributor at PO time.</div>
+    <table style="width:100%;border-collapse:collapse;font-size:13.5px">
+      <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200)"><th style="padding:8px">PO #</th><th style="padding:8px">Vendor</th><th style="padding:8px">Item</th><th style="padding:8px;text-align:right">Qty</th><th style="padding:8px;text-align:right">Quoted Unit Cost</th><th style="padding:8px;text-align:right">PO Rate</th><th style="padding:8px;text-align:right">PO Total</th><th style="padding:8px;text-align:right">Savings</th></tr></thead>
+      <tbody>${poCompRows||'<tr><td colspan="8" style="padding:12px;color:var(--gray-500)">No PO line items synced yet.</td></tr>'}</tbody>
+    </table>
+    ${poComp.length?`<div style="margin-top:12px;padding-top:12px;border-top:1.5px solid var(--gray-200)">Total captured savings (matched lines): <b style="color:${totalPoSavings>=0?'var(--green)':'var(--red)'}">AED ${fmt(totalPoSavings)}</b></div>`:''}
   </div>
   <div class="card" style="margin-top:16px">
     <div class="card-title">Forecast Remaining Cost</div>
@@ -2592,7 +2638,7 @@ function appHTML(){
   const inEditor=['editor','terms','summary','vendor','print','log'].includes(A.page);
 
   const nav=(page,cb)=>`A.page='${page}';${cb||''}closeSidebar();draw()`;
-  const sidebar=`<div class="sidebar${A.sbOpen?' open':''}">
+  const sidebar=`<div class="sidebar${A.sbOpen?' open':''}${A.sbCollapsed?' collapsed':''}">
     <div class="sb-brand">
       <img src="${LOGO_SRC}" class="sb-logo" alt="Sysconic">
       <div><div class="sb-co">${esc(A.company?.name||'')}</div></div>
@@ -2659,7 +2705,7 @@ function appHTML(){
   }
 
   return`<div class="shell">${sidebar}${sbOverlay}${helpFabHTML()}${helpDrawerHTML()}<div class="main">
-    <div class="topbar"><div style="display:flex;align-items:center;gap:6px;min-width:0"><button class="sb-toggle" onclick="toggleSidebar()" aria-label="Menu">☰</button><div class="topbar-title">${PAGE_TITLES[A.page]||''}</div></div><div class="topbar-right">${topbarRight}</div></div>
+    <div class="topbar"><div style="display:flex;align-items:center;gap:6px;min-width:0"><button class="sb-toggle" onclick="toggleSidebarBtn()" aria-label="${A.sbCollapsed?'Show sidebar':'Hide sidebar'}" title="${A.sbCollapsed?'Show sidebar':'Hide sidebar'}">☰</button><div class="topbar-title">${PAGE_TITLES[A.page]||''}</div></div><div class="topbar-right">${topbarRight}</div></div>
     ${cstrip}
     <div class="content">${pageContent}</div>
   </div></div>`;
@@ -4187,11 +4233,62 @@ function saveDiagramToQuote(){
 // ── Proposal generator ───────────────────────────────────────────────────────────
 // Two-step flow: draft the AI content first (no PDF yet) so it can be reviewed
 // and edited, then generate Technical / Commercial / Combined independently.
-let PROP={busy:false,file:null,step:'input',content:null,brief:'',which:'all',model:'gemini-3.5-flash'};
+let PROP={busy:false,file:null,step:'input',content:null,brief:'',which:'all',model:'gemini-3.5-flash',briefAuto:true};
+
+// Drafts a plain-language project-scope sentence straight from the quote's own
+// BOM (sections/brands/models/qty) so the "Describe the project" box in the
+// proposal modal isn't a blank field the user has to fill in by hand every
+// time -- it's pre-populated from real quote data, and they can still edit or
+// add context (use case, floors, timeline) on top of it before drafting.
+function propAutoBriefFromBOM(which){
+  const allOpts=opts();
+  if(!allOpts.length)return '';
+  let selected;
+  if(which==='all'){ selected=allOpts; }
+  else { const idx=parseInt(which,10); selected=allOpts[idx]?[allOpts[idx]]:allOpts.slice(0,1); }
+  const sectionNames=[]; const brandCounts={}; let totalQty=0; const itemLines=[];
+  selected.forEach(o=>{
+    (o.sections||[]).forEach(s=>{
+      if(s.name)sectionNames.push(s.name);
+      (s.items||[]).forEach(it=>{
+        const qty=Number(it.qty)||0; totalQty+=qty;
+        const b=(it.brand||'').trim(); if(b)brandCounts[b]=(brandCounts[b]||0)+1;
+        const label=[it.brand,it.model].filter(Boolean).join(' ').trim();
+        if(label)itemLines.push(`${qty>0?qty+'x ':''}${label}`.trim());
+      });
+    });
+  });
+  if(!itemLines.length && !sectionNames.length) return '';
+  const uniqSections=[...new Set(sectionNames)];
+  const brands=Object.keys(brandCounts).sort((a,b)=>brandCounts[b]-brandCounts[a]);
+  const parts=['Supply, installation, and commissioning of an AV/IT solution'];
+  if(uniqSections.length){
+    parts.push(`covering ${uniqSections.length} area${uniqSections.length>1?'s':''} (${uniqSections.slice(0,6).join(', ')}${uniqSections.length>6?', and more':''})`);
+  }
+  if(brands.length){
+    parts.push(`primarily using ${brands.slice(0,4).join(', ')}${brands.length>4?' and other':''} equipment`);
+  }
+  if(totalQty>0){
+    parts.push(`totaling ${totalQty} unit${totalQty===1?'':'s'} across the bill of materials`);
+  }
+  let brief=parts.join(', ')+'.';
+  if(itemLines.length){
+    const top=itemLines.slice(0,6);
+    brief+=` Key equipment includes: ${top.join(', ')}${itemLines.length>6?', and additional supporting items':''}.`;
+  }
+  return brief;
+}
+function propRegenBriefFromBOM(){
+  PROP.brief=propAutoBriefFromBOM(PROP.which);
+  PROP.briefAuto=true;
+  renderProposalModal();
+}
 
 function openProposalModal(){
   if(!A.activeQuote)return;
-  PROP={busy:false,file:null,step:'input',content:null,brief:'',which:String(A.activeOpt)};
+  const which=String(A.activeOpt);
+  PROP={busy:false,file:null,step:'input',content:null,brief:'',which,model:'gemini-3.5-flash',briefAuto:true};
+  PROP.brief=propAutoBriefFromBOM(which);
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="propOverlay" onclick="if(event.target===this)closeProposalModal()">
     <div class="modal" style="max-width:700px;max-height:88vh;overflow-y:auto" id="propModalBox"></div></div>`);
   renderProposalModal();
@@ -4212,6 +4309,83 @@ function propCoverFileChosen(e){
 }
 function propRemoveCoverImage(){PROP.content.cover_image=null;renderProposalModal();}
 function propSetTemplateStyle(style){PROP.content.template_style=style;renderProposalModal();}
+
+// Mirrors api/proposal.py's THEMES + COVER_LAYOUT_FOR_STYLE so the picker shows
+// a live, roughly-to-scale preview of each style's actual cover-page layout and
+// colors before the user spends AI credits generating the real PDF.
+const PROP_THEMES={
+  modern:    {navy:'#16294f',gold:'#f4b400',layout:'modern',    label:'Modern'},
+  vibrant:   {navy:'#5b21b6',gold:'#f97316',layout:'modern',    label:'Vibrant'},
+  corporate: {navy:'#16294f',gold:'#f4b400',layout:'corporate', label:'Corporate'},
+  minimal:   {navy:'#111827',gold:'#0d9488',layout:'corporate', label:'Minimal'},
+  executive: {navy:'#16294f',gold:'#f4b400',layout:'executive', label:'Executive'},
+  classic:   {navy:'#7a1f2b',gold:'#c9a227',layout:'executive', label:'Classic'},
+  technical: {navy:'#16294f',gold:'#f4b400',layout:'technical', label:'Technical'},
+  midnight:  {navy:'#0b1220',gold:'#38bdf8',layout:'technical', label:'Midnight'},
+};
+function propTemplateSwatch(key){
+  const t=PROP_THEMES[key];
+  const W=76,H=100;
+  let inner='';
+  if(t.layout==='modern'){
+    inner=`<div style="position:absolute;inset:0;background:${t.navy};overflow:hidden">
+      <div style="position:absolute;width:70px;height:70px;border-radius:50%;background:rgba(255,255,255,.12);top:-30px;right:-20px"></div>
+      <div style="position:absolute;width:50px;height:50px;border-radius:50%;background:rgba(255,255,255,.10);bottom:-20px;left:-18px"></div>
+      <div style="position:absolute;left:8px;top:14px;width:26px;height:9px;border-radius:2px;background:#fff"></div>
+      <div style="position:absolute;left:8px;bottom:30px;right:8px;height:5px;border-radius:1px;background:${t.gold}"></div>
+      <div style="position:absolute;left:8px;bottom:12px;width:20px;height:14px;border-radius:2px;background:rgba(255,255,255,.9)"></div>
+      <div style="position:absolute;left:34px;bottom:12px;width:20px;height:14px;border-radius:2px;background:rgba(255,255,255,.9)"></div>
+    </div>`;
+  } else if(t.layout==='corporate'){
+    inner=`<div style="position:absolute;inset:0;background:#fff;overflow:hidden">
+      <div style="position:absolute;left:8px;right:8px;top:10px;height:2px;background:${t.gold}"></div>
+      <div style="position:absolute;left:8px;top:16px;width:22px;height:8px;border-radius:2px;background:${t.navy};opacity:.15"></div>
+      <div style="position:absolute;left:8px;top:44px;width:30px;height:6px;border:1px solid ${t.navy};border-radius:6px"></div>
+      <div style="position:absolute;left:8px;top:56px;right:10px;height:6px;border-radius:1px;background:${t.navy}"></div>
+      <div style="position:absolute;left:8px;top:66px;right:16px;height:6px;border-radius:1px;background:${t.navy}"></div>
+      <div style="position:absolute;left:8px;bottom:10px;right:8px;height:1px;background:#e2e6ec"></div>
+    </div>`;
+  } else if(t.layout==='executive'){
+    inner=`<div style="position:absolute;inset:0;background:#fff;overflow:hidden;text-align:center">
+      <div style="position:absolute;left:18px;right:18px;top:14px;height:6px;border-radius:6px;border:1px solid ${t.navy};opacity:.5"></div>
+      <div style="position:absolute;left:10px;right:10px;top:30px;height:6px;border-radius:1px;background:${t.navy}"></div>
+      <div style="position:absolute;left:16px;right:16px;top:40px;height:6px;border-radius:1px;background:${t.navy}"></div>
+      <div style="position:absolute;left:30px;right:30px;top:54px;height:2px;background:${t.gold}"></div>
+      <div style="position:absolute;left:10px;top:64px;width:22px;height:16px;border-radius:2px;background:${t.navy};opacity:.12"></div>
+      <div style="position:absolute;right:10px;top:64px;width:22px;height:16px;border-radius:2px;background:${t.navy};opacity:.12"></div>
+    </div>`;
+  } else { // technical
+    inner=`<div style="position:absolute;inset:0;background:#fff;overflow:hidden">
+      <div style="position:absolute;left:0;top:0;bottom:0;width:22px;background:${t.navy}"></div>
+      <div style="position:absolute;left:28px;top:20px;right:10px;height:7px;border-radius:1px;background:${t.navy}"></div>
+      <div style="position:absolute;left:28px;top:32px;right:16px;height:7px;border-radius:1px;background:${t.navy}"></div>
+      <div style="position:absolute;left:28px;top:46px;right:10px;height:1px;background:#e2e6ec"></div>
+      <div style="position:absolute;left:28px;top:52px;width:14px;height:14px;border-radius:2px;background:${t.gold};opacity:.85"></div>
+      <div style="position:absolute;left:46px;top:52px;width:14px;height:14px;border-radius:2px;background:${t.navy};opacity:.15"></div>
+    </div>`;
+  }
+  return `<div style="position:relative;width:${W}px;height:${H}px;border-radius:6px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.15)">${inner}</div>`;
+}
+
+// Generic add/remove for the repeatable content lists (feature_cards, scope_cards,
+// control_testing, architecture_items, mobilization_phases, exclusions) in the
+// proposal review modal — lets the user add more or delete AI-drafted items
+// instead of being stuck with a fixed count.
+function propAddListItem(key, tmpl){
+  (PROP.content[key]=PROP.content[key]||[]).push(Object.assign({}, tmpl));
+  renderProposalModal();
+}
+function propRemoveListItem(key, i){
+  if(!PROP.content[key])return;
+  PROP.content[key].splice(i,1);
+  renderProposalModal();
+}
+function propAddBtn(label, onclick){
+  return `<button type="button" onclick="${onclick}" style="margin:4px 0 2px;padding:5px 10px;border-radius:7px;border:1.5px dashed var(--gray-300);background:transparent;color:var(--navy);font-size:12px;font-weight:600;cursor:pointer">+ ${esc(label)}</button>`;
+}
+function propRemoveBtn(key, i){
+  return `<button type="button" title="Remove" onclick="propRemoveListItem('${key}',${i})" style="flex:0 0 auto;width:26px;height:26px;border:none;border-radius:6px;background:var(--gray-100);color:var(--gray-500);font-size:12px;cursor:pointer">✕</button>`;
+}
 function propBulletsToText(arr){return (arr||[]).join('\n');}
 function propTextToBullets(str){return (str||'').split('\n').map(s=>s.trim()).filter(Boolean);}
 
@@ -4235,15 +4409,19 @@ function renderProposalModal(){
   const opts_=opts();
   box.innerHTML=`
     <div class="modal-title">📑 Generate Technical & Commercial Proposal</div>
-    <div class="modal-sub">Describe the project (or attach a brief/spec document) — AI drafts the content first so you can review and edit it before anything is generated.</div>
-    <textarea id="propBrief" rows="4" style="width:100%;padding:10px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit;resize:vertical;margin-bottom:12px" placeholder="e.g. Signage and interactive flat panel rollout across 3 floors, includes control system and 1-year warranty" oninput="PROP.brief=this.value">${esc(PROP.brief||'')}</textarea>
+    <div class="modal-sub">Scope is auto-drafted from this quote's bill of materials below — edit it, add context (use case, floors, timeline), or attach a brief/spec document. AI drafts the content first so you can review and edit it before anything is generated.</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+      <label style="font-size:13px;font-weight:600;color:var(--gray-500)">Project scope</label>
+      <button type="button" onclick="propRegenBriefFromBOM()" title="Redraft this from the BOM, discarding your edits" style="padding:3px 9px;border-radius:6px;border:1px solid var(--gray-200);background:transparent;color:var(--navy);font-size:11.5px;font-weight:600;cursor:pointer">🪄 Redraft from BOM</button>
+    </div>
+    <textarea id="propBrief" rows="4" style="width:100%;padding:10px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit;resize:vertical;margin-bottom:12px" placeholder="e.g. Signage and interactive flat panel rollout across 3 floors, includes control system and 1-year warranty" oninput="PROP.brief=this.value;PROP.briefAuto=false;">${esc(PROP.brief||'')}</textarea>
     <div style="margin-bottom:12px">
       <label style="font-size:13px;font-weight:600;color:var(--gray-500);display:block;margin-bottom:6px">Attachment (optional — PDF, Word, or text)</label>
       <input type="file" id="propFile" accept=".pdf,.docx,.txt" onchange="propFileChosen(event)">
       ${PROP.file?`<div style="font-size:12px;color:var(--gray-500);margin-top:4px">Attached: ${esc(PROP.file.filename)}</div>`:''}
     </div>
     <div class="fld2" style="margin-bottom:6px"><label>Option to price</label>
-      <select id="propWhich" onchange="PROP.which=this.value">
+      <select id="propWhich" onchange="PROP.which=this.value;if(PROP.briefAuto){PROP.brief=propAutoBriefFromBOM(PROP.which);}renderProposalModal();">
         ${opts_.map((op,i)=>`<option value="${i}" ${String(i)===PROP.which?'selected':''}>${esc(op.label)}</option>`).join('')}
         <option value="all" ${PROP.which==='all'?'selected':''}>All options</option>
       </select>
@@ -4266,14 +4444,16 @@ function renderProposalModal(){
 function proposalReviewHTML(){
   const c=PROP.content;
   while((c.stats||(c.stats=[])).length<4)c.stats.push({label:'',value:''});
-  while((c.feature_cards||(c.feature_cards=[])).length<4)c.feature_cards.push({title:'',description:''});
-  while((c.scope_cards||(c.scope_cards=[])).length<4)c.scope_cards.push({title:'',description:''});
-  while((c.control_testing||(c.control_testing=[])).length<2)c.control_testing.push({title:'',bullets:[]});
-  while((c.architecture_items||(c.architecture_items=[])).length<6)c.architecture_items.push({label:'',value:''});
-  while((c.mobilization_phases||(c.mobilization_phases=[])).length<4)c.mobilization_phases.push({title:'',bullets:[]});
-  while((c.exclusions||(c.exclusions=[])).length<3)c.exclusions.push({title:'',text:''});
+  if(!(c.feature_cards||(c.feature_cards=[])).length)c.feature_cards.push({title:'',description:''});
+  if(!(c.scope_cards||(c.scope_cards=[])).length)c.scope_cards.push({title:'',description:''});
+  if(!(c.control_testing||(c.control_testing=[])).length)c.control_testing.push({title:'',bullets:[]});
+  if(!(c.architecture_items||(c.architecture_items=[])).length)c.architecture_items.push({label:'',value:''});
+  if(!(c.mobilization_phases||(c.mobilization_phases=[])).length)c.mobilization_phases.push({title:'',bullets:[]});
+  if(!(c.exclusions||(c.exclusions=[])).length)c.exclusions.push({title:'',text:''});
 
+  const tierLabels={small:'Small scope',medium:'Medium scope',large:'Large scope',enterprise:'Enterprise scope'};
   return `<div style="max-height:52vh;overflow-y:auto;padding-right:8px;margin-top:8px">
+    ${c.scope_tier?`<div style="display:inline-block;font-size:11px;font-weight:700;color:var(--navy);background:var(--navy-light);padding:3px 9px;border-radius:20px;margin-bottom:10px">${tierLabels[c.scope_tier]||c.scope_tier} detected — content depth matched to it</div>`:''}
     <div class="fld2" style="margin-bottom:10px"><label>Title</label><input value="${esc(c.title||'')}" oninput="PROP.content.title=this.value"></div>
     <div class="fld2" style="margin-bottom:10px"><label>Subtitle</label><input value="${esc(c.subtitle||'')}" oninput="PROP.content.subtitle=this.value"></div>
 
@@ -4283,9 +4463,12 @@ function proposalReviewHTML(){
       ${c.cover_image?`<div style="position:relative;width:64px;height:56px;border-radius:6px;overflow:hidden;border:1.5px solid var(--gray-200)"><img src="${c.cover_image}" style="width:100%;height:100%;object-fit:cover"><button onclick="propRemoveCoverImage()" title="Remove image" style="position:absolute;top:2px;right:2px;width:16px;height:16px;border:none;border-radius:50%;background:#fff;color:#333;font-size:10px;line-height:16px;cursor:pointer;padding:0">✕</button></div>`:`<span style="font-size:12px;color:var(--gray-500)">Room photo, rendering, or client logo shown on the cover page</span>`}
     </div>
 
-    <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Template style</label>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
-      ${[['modern','Modern'],['corporate','Corporate'],['technical','Technical'],['executive','Executive']].map(([key,lbl])=>{const sel=(c.template_style||'modern')===key;return `<div onclick="propSetTemplateStyle('${key}')" style="cursor:pointer;padding:7px 4px;border-radius:8px;border:2px solid ${sel?'var(--navy)':'var(--gray-200)'};text-align:center;font-size:12px;font-weight:${sel?'700':'500'};color:${sel?'var(--navy)':'var(--gray-500)'}">${lbl}</div>`;}).join('')}
+    <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Template style — applies to the whole document</label>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px">
+      ${Object.keys(PROP_THEMES).map(key=>{const t=PROP_THEMES[key];const sel=(c.template_style||'modern')===key;return `<div onclick="propSetTemplateStyle('${key}')" style="cursor:pointer;padding:6px;border-radius:10px;border:2px solid ${sel?'var(--navy)':'var(--gray-200)'};text-align:center;background:${sel?'var(--navy-light)':'transparent'}">
+        <div style="display:flex;justify-content:center;margin-bottom:5px">${propTemplateSwatch(key)}</div>
+        <div style="font-size:11.5px;font-weight:${sel?'700':'500'};color:${sel?'var(--navy)':'var(--gray-500)'}">${t.label}</div>
+      </div>`;}).join('')}
     </div>
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Sections to include</label>
@@ -4302,29 +4485,33 @@ function proposalReviewHTML(){
     <textarea rows="3" style="width:100%;margin:6px 0 12px;padding:8px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" oninput="PROP.content.executive_summary=this.value">${esc(c.executive_summary||'')}</textarea>
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500)">Feature cards</label>
-    ${c.feature_cards.map((f,i)=>`<div style="display:flex;gap:8px;margin:6px 0"><input style="flex:1" placeholder="Title" value="${esc(f.title)}" oninput="PROP.content.feature_cards[${i}].title=this.value"><input style="flex:2" placeholder="Description" value="${esc(f.description)}" oninput="PROP.content.feature_cards[${i}].description=this.value"></div>`).join('')}
+    ${c.feature_cards.map((f,i)=>`<div style="display:flex;gap:8px;margin:6px 0;align-items:center"><input style="flex:1" placeholder="Title" value="${esc(f.title)}" oninput="PROP.content.feature_cards[${i}].title=this.value"><input style="flex:2" placeholder="Description" value="${esc(f.description)}" oninput="PROP.content.feature_cards[${i}].description=this.value">${propRemoveBtn('feature_cards',i)}</div>`).join('')}
+    ${propAddBtn('Add feature card', `propAddListItem('feature_cards',{title:'',description:''})`)}
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Scope of work cards</label>
-    ${c.scope_cards.map((f,i)=>`<div style="display:flex;gap:8px;margin:6px 0"><input style="flex:1" placeholder="Title" value="${esc(f.title)}" oninput="PROP.content.scope_cards[${i}].title=this.value"><input style="flex:2" placeholder="Description" value="${esc(f.description)}" oninput="PROP.content.scope_cards[${i}].description=this.value"></div>`).join('')}
+    ${c.scope_cards.map((f,i)=>`<div style="display:flex;gap:8px;margin:6px 0;align-items:center"><input style="flex:1" placeholder="Title" value="${esc(f.title)}" oninput="PROP.content.scope_cards[${i}].title=this.value"><input style="flex:2" placeholder="Description" value="${esc(f.description)}" oninput="PROP.content.scope_cards[${i}].description=this.value">${propRemoveBtn('scope_cards',i)}</div>`).join('')}
+    ${propAddBtn('Add scope card', `propAddListItem('scope_cards',{title:'',description:''})`)}
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Control & testing</label>
-    ${c.control_testing.map((t,i)=>`<div style="margin:6px 0"><input style="width:100%;margin-bottom:4px" placeholder="Section title" value="${esc(t.title)}" oninput="PROP.content.control_testing[${i}].title=this.value"><textarea rows="2" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" placeholder="One bullet per line" oninput="PROP.content.control_testing[${i}].bullets=propTextToBullets(this.value)">${esc(propBulletsToText(t.bullets))}</textarea></div>`).join('')}
+    ${c.control_testing.map((t,i)=>`<div style="display:flex;gap:8px;margin:6px 0;align-items:flex-start"><div style="flex:1"><input style="width:100%;margin-bottom:4px" placeholder="Section title" value="${esc(t.title)}" oninput="PROP.content.control_testing[${i}].title=this.value"><textarea rows="2" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" placeholder="One bullet per line" oninput="PROP.content.control_testing[${i}].bullets=propTextToBullets(this.value)">${esc(propBulletsToText(t.bullets))}</textarea></div>${propRemoveBtn('control_testing',i)}</div>`).join('')}
+    ${propAddBtn('Add control/testing topic', `propAddListItem('control_testing',{title:'',bullets:[]})`)}
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Solution architecture</label>
-    <div class="field-grid g2">
-    ${c.architecture_items.map((a,i)=>`<div style="display:flex;gap:6px;margin:4px 0"><input style="flex:1" placeholder="Label" value="${esc(a.label)}" oninput="PROP.content.architecture_items[${i}].label=this.value"><input style="flex:1" placeholder="Value" value="${esc(a.value)}" oninput="PROP.content.architecture_items[${i}].value=this.value"></div>`).join('')}
-    </div>
+    ${c.architecture_items.map((a,i)=>`<div style="display:flex;gap:6px;margin:4px 0;align-items:center"><input style="flex:1" placeholder="Label" value="${esc(a.label)}" oninput="PROP.content.architecture_items[${i}].label=this.value"><input style="flex:1" placeholder="Value" value="${esc(a.value)}" oninput="PROP.content.architecture_items[${i}].value=this.value">${propRemoveBtn('architecture_items',i)}</div>`).join('')}
+    ${propAddBtn('Add architecture item', `propAddListItem('architecture_items',{label:'',value:''})`)}
     <textarea rows="2" style="width:100%;margin:6px 0;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" placeholder="Architecture note" oninput="PROP.content.architecture_note=this.value">${esc(c.architecture_note||'')}</textarea>
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Mobilization phases</label>
-    ${c.mobilization_phases.map((p,i)=>`<div style="margin:6px 0"><input style="width:100%;margin-bottom:4px" placeholder="Phase title" value="${esc(p.title)}" oninput="PROP.content.mobilization_phases[${i}].title=this.value"><textarea rows="2" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" placeholder="One bullet per line" oninput="PROP.content.mobilization_phases[${i}].bullets=propTextToBullets(this.value)">${esc(propBulletsToText(p.bullets))}</textarea></div>`).join('')}
+    ${c.mobilization_phases.map((p,i)=>`<div style="display:flex;gap:8px;margin:6px 0;align-items:flex-start"><div style="flex:1"><input style="width:100%;margin-bottom:4px" placeholder="Phase title" value="${esc(p.title)}" oninput="PROP.content.mobilization_phases[${i}].title=this.value"><textarea rows="2" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" placeholder="One bullet per line" oninput="PROP.content.mobilization_phases[${i}].bullets=propTextToBullets(this.value)">${esc(propBulletsToText(p.bullets))}</textarea></div>${propRemoveBtn('mobilization_phases',i)}</div>`).join('')}
+    ${propAddBtn('Add phase', `propAddListItem('mobilization_phases',{title:'',bullets:[]})`)}
 
     <div class="fld2" style="margin-top:10px"><label>Warranty period</label><input value="${esc(c.warranty_years||'')}" oninput="PROP.content.warranty_years=this.value"></div>
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Support coverage (one per line)</label>
     <textarea rows="3" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" oninput="PROP.content.support_bullets=propTextToBullets(this.value)">${esc(propBulletsToText(c.support_bullets))}</textarea>
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Exclusions</label>
-    ${c.exclusions.map((e,i)=>`<div style="display:flex;gap:8px;margin:6px 0"><input style="flex:1" placeholder="Title" value="${esc(e.title)}" oninput="PROP.content.exclusions[${i}].title=this.value"><input style="flex:2" placeholder="Text" value="${esc(e.text)}" oninput="PROP.content.exclusions[${i}].text=this.value"></div>`).join('')}
+    ${c.exclusions.map((e,i)=>`<div style="display:flex;gap:8px;margin:6px 0;align-items:center"><input style="flex:1" placeholder="Title" value="${esc(e.title)}" oninput="PROP.content.exclusions[${i}].title=this.value"><input style="flex:2" placeholder="Text" value="${esc(e.text)}" oninput="PROP.content.exclusions[${i}].text=this.value">${propRemoveBtn('exclusions',i)}</div>`).join('')}
+    ${propAddBtn('Add exclusion', `propAddListItem('exclusions',{title:'',text:''})`)}
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">General notes (one per line)</label>
     <textarea rows="3" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" oninput="PROP.content.general_notes=propTextToBullets(this.value)">${esc(propBulletsToText(c.general_notes))}</textarea>

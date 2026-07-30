@@ -85,6 +85,49 @@ TXT     = HexColor('#1c1f26')
 GRAY    = HexColor('#7c8798')
 LIGHTBLU= HexColor('#c7d3ea')
 
+# ── Template styles: whole-document theming ─────────────────────────────────────
+# Each style pairs a cover-page LAYOUT (the physical arrangement of logo/title/
+# stats — see COVER_LAYOUTS below) with a color THEME. The original 4 styles
+# (modern/corporate/technical/executive) keep their original navy/gold palette
+# exactly, so existing proposals look identical. The 4 new styles reuse those
+# same 4 layout shapes but with a genuinely different palette each, so picking
+# one changes the color scheme of the ENTIRE document (cover, section badges,
+# cards, tables, footer) rather than just the cover page as before.
+def _hexset(navy, navy2, gold, tint, cardbg, zebra, grayb, txt, gray, lightblu):
+    return {'navy': HexColor(navy), 'navy2': HexColor(navy2), 'gold': HexColor(gold),
+            'tint': HexColor(tint), 'cardbg': HexColor(cardbg), 'zebra': HexColor(zebra),
+            'grayb': HexColor(grayb), 'txt': HexColor(txt), 'gray': HexColor(gray),
+            'lightblu': HexColor(lightblu)}
+
+THEMES = {
+    # Original 4 -- unchanged navy/gold palette.
+    'modern':     _hexset('#16294f','#1a3c6e','#f4b400','#f2f6fc','#f5f7fb','#f8fafc','#e2e6ec','#1c1f26','#7c8798','#c7d3ea'),
+    'corporate':  _hexset('#16294f','#1a3c6e','#f4b400','#f2f6fc','#f5f7fb','#f8fafc','#e2e6ec','#1c1f26','#7c8798','#c7d3ea'),
+    'technical':  _hexset('#16294f','#1a3c6e','#f4b400','#f2f6fc','#f5f7fb','#f8fafc','#e2e6ec','#1c1f26','#7c8798','#c7d3ea'),
+    'executive':  _hexset('#16294f','#1a3c6e','#f4b400','#f2f6fc','#f5f7fb','#f8fafc','#e2e6ec','#1c1f26','#7c8798','#c7d3ea'),
+    # New -- distinct, more colorful palettes, each on one of the layouts above.
+    'vibrant':    _hexset('#5b21b6','#7c3aed','#f97316','#f5f3ff','#faf5ff','#f5f3ff','#e9d5ff','#1e1b2e','#8b7aa8','#ddd6fe'),  # purple + orange, on the Modern full-bleed layout
+    'minimal':    _hexset('#111827','#374151','#0d9488','#f3f4f6','#f9fafb','#f3f4f6','#e5e7eb','#111827','#6b7280','#a7f3d0'),  # slate + teal, on the Corporate layout
+    'classic':    _hexset('#7a1f2b','#9a2b3a','#c9a227','#faf6ee','#fdfaf3','#faf6ee','#e8dfc8','#2b2018','#8a7a63','#f0d9a8'),  # burgundy + antique gold, on the Executive layout
+    'midnight':   _hexset('#0b1220','#111827','#38bdf8','#f8fafc','#eff6ff','#f1f5f9','#dbeafe','#0f172a','#64748b','#bae6fd'),  # near-black navy + bright cyan, on the Technical layout
+}
+COVER_LAYOUT_FOR_STYLE = {
+    'modern': 'modern', 'vibrant': 'modern',
+    'corporate': 'corporate', 'minimal': 'corporate',
+    'executive': 'executive', 'classic': 'executive',
+    'technical': 'technical', 'midnight': 'technical',
+}
+
+def _theme_for(style):
+    return THEMES.get(style) or THEMES['modern']
+
+def _hex(color):
+    """Return a 6-digit hex string (no '#') for a reportlab Color, for use inside <font color=...> markup."""
+    try:
+        return color.hexval()[2:]
+    except Exception:
+        return '16294f'
+
 # ── Per-company branding (same shape as api/pdf.py — duplicated since Vercel
 # doesn't bundle sibling modules; see that file for the fuller explanation) ────
 def build_company_dict(co, fallback_name):
@@ -169,27 +212,68 @@ def extract_attachment_text(filename, data):
         return ''
 
 # ── Gemini: draft the technical narrative content ───────────────────────────────
-SYSTEM_PROMPT = """You are a senior AV/IT solutions consultant drafting the TEXT CONTENT for a professional technical proposal document (not the pricing — that's handled separately). Given a project brief, optional reference material, and a summary of the actual equipment being proposed (brands/models/categories from a real bill of materials), draft compelling, specific, professional proposal content.
-
-Return ONLY valid JSON matching exactly this shape (no markdown fences, no commentary):
-{
-  "title": "Short punchy solution title, e.g. 'Signage & Interactive Flat Panel (IFP) Solution'",
-  "subtitle": "One descriptive line about what the system does and where",
-  "stats": [{"label":"SHORT LABEL","value":"short value e.g. 3 or 20+"} ...exactly 4 items, derived from the real equipment summary provided...],
-  "executive_summary": "2-4 sentence professional paragraph summarizing the solution",
-  "feature_cards": [{"title":"...", "description":"1-2 sentences"} ...exactly 4 items describing the key components/subsystems...],
-  "scope_cards": [{"title":"...", "description":"1-2 sentences"} ...exactly 4 items describing scope of work streams (supply, installation, integration, testing etc.)...],
-  "control_testing": [{"title":"Control & Automation","bullets":["...","..."]}, {"title":"Testing & Commissioning","bullets":["...","..."]}],
-  "architecture_items": [{"label":"Category e.g. Display","value":"brands/models e.g. Samsung QM43C"} ...exactly 6 items...],
-  "architecture_note": "1-2 sentence paragraph about how the layers fit together",
-  "mobilization_phases": [{"title":"Project Initiation","bullets":["...","...","..."]} ...exactly 4 phases, standard AV project rollout phases...],
-  "warranty_years": "e.g. 1 Year or 3 Years, infer from context or default to 1 Year",
-  "support_bullets": ["...", "...", "... 4-6 short bullet points of what's covered during warranty"],
-  "exclusions": [{"title":"Mishandling / misuse","text":"..."}, {"title":"Environmental","text":"..."}, {"title":"Third-party scope","text":"..."}],
-  "general_notes": ["...", "... 4-6 short standard proposal disclaimer bullet points"]
+# Content depth scales with the real scope of the quote instead of asking for
+# the same fixed counts (4 feature cards, 6 architecture items, etc.) no
+# matter how small or large the job is -- see _scope_tier()/SCOPE_TARGETS
+# below. total_line_items already comes from get_equipment_summary(), which
+# reads the quote's real bill of materials, so this can't be gamed by a
+# verbose brief on a tiny job or vice versa.
+SCOPE_TIERS = [  # (min_line_items, tier) — checked in order, first match wins
+    (60, 'enterprise'),
+    (25, 'large'),
+    (10, 'medium'),
+    (0,  'small'),
+]
+SCOPE_TARGETS = {
+    'small':      {'feature_cards': 3, 'scope_cards': 3, 'control_testing': 2, 'architecture_items': 4,  'mobilization_phases': 3, 'exclusions': 3},
+    'medium':     {'feature_cards': 4, 'scope_cards': 4, 'control_testing': 2, 'architecture_items': 6,  'mobilization_phases': 4, 'exclusions': 3},
+    'large':      {'feature_cards': 6, 'scope_cards': 6, 'control_testing': 3, 'architecture_items': 9,  'mobilization_phases': 5, 'exclusions': 4},
+    'enterprise': {'feature_cards': 8, 'scope_cards': 8, 'control_testing': 4, 'architecture_items': 12, 'mobilization_phases': 6, 'exclusions': 5},
 }
 
-Ground every claim in the real equipment summary provided — never invent brands/models that aren't in it. Keep tone professional and concise, matching enterprise AV/IT proposal writing."""
+def _scope_tier(equipment_summary):
+    n = (equipment_summary or {}).get('total_line_items') or 0
+    for min_items, tier in SCOPE_TIERS:
+        if n >= min_items:
+            return tier
+    return 'small'
+
+_TIER_GUIDANCE = {
+    'small': "This is a SMALL, focused scope. Keep content tight and specific — don't pad it out with generic filler to look bigger than it is.",
+    'medium': "This is a MODERATE scope covering several subsystems. Give each section clear, specific detail grounded in the real equipment.",
+    'large': "This is a LARGE, multi-subsystem scope. Write a genuinely comprehensive proposal: break the architecture and scope out into more granular, specific items rather than broad generalizations.",
+    'enterprise': "This is an ENTERPRISE-scale, multi-system deployment. Write an in-depth, comprehensive proposal that covers every major subsystem/category distinctly — favor specificity and granularity throughout rather than brevity.",
+}
+
+def _build_system_prompt(tier, targets):
+    summary_len = '2-4 sentences' if tier in ('small', 'medium') else '4-6 sentences, genuinely comprehensive'
+    note_len = '1-2 sentences' if tier in ('small', 'medium') else '2-4 sentences, covering how the subsystems integrate with each other'
+    closing = ('Favor conciseness — this is a smaller job and padding it out with generic language will look inflated.'
+               if tier == 'small' else
+               'Favor genuine depth and specificity throughout — this is a substantial scope and the proposal should read as comprehensive, not a shortened summary.')
+    return f"""You are a senior AV/IT solutions consultant drafting the TEXT CONTENT for a professional technical proposal document (not the pricing — that's handled separately). Given a project brief, optional reference material, and a summary of the actual equipment being proposed (brands/models/categories from a real bill of materials), draft compelling, specific, professional proposal content.
+
+This project's scope has been assessed as {tier.upper()} based on its real bill of materials (line item count, section count, and brand diversity). {_TIER_GUIDANCE[tier]}
+
+Return ONLY valid JSON matching exactly this shape (no markdown fences, no commentary):
+{{
+  "title": "Short punchy solution title, e.g. 'Signage & Interactive Flat Panel (IFP) Solution'",
+  "subtitle": "One descriptive line about what the system does and where",
+  "stats": [{{"label":"SHORT LABEL","value":"short value e.g. 3 or 20+"}} ...exactly 4 items, derived from the real equipment summary provided...],
+  "executive_summary": "{summary_len} professional paragraph summarizing the solution",
+  "feature_cards": [{{"title":"...", "description":"1-2 sentences"}} ...exactly {targets['feature_cards']} items, each describing a distinct key component/subsystem actually present in the equipment summary...],
+  "scope_cards": [{{"title":"...", "description":"1-2 sentences"}} ...exactly {targets['scope_cards']} items describing distinct scope of work streams (supply, installation, integration, testing, training, etc.)...],
+  "control_testing": [{{"title":"...","bullets":["...","..."]}} ...exactly {targets['control_testing']} items — distinct control/testing/assurance topics (e.g. Control & Automation, Testing & Commissioning, and for larger scopes also Redundancy & Failover, Cybersecurity & Network Hardening, Documentation & As-Builts)...],
+  "architecture_items": [{{"label":"Category e.g. Display","value":"brands/models e.g. Samsung QM43C"}} ...exactly {targets['architecture_items']} items, one per distinct subsystem/category actually present in the equipment summary — for larger scopes, break categories out more granularly (e.g. separate Displays / Video Processing / Audio DSP / Amplification / Control / Network / Cabling Infrastructure / Power & Racks) rather than lumping them together...],
+  "architecture_note": "{note_len}",
+  "mobilization_phases": [{{"title":"Project Initiation","bullets":["...","...","..."]}} ...exactly {targets['mobilization_phases']} phases, standard AV project rollout phases scaled to project complexity...],
+  "warranty_years": "e.g. 1 Year or 3 Years, infer from context or default to 1 Year",
+  "support_bullets": ["...", "...", "... 4-6 short bullet points of what's covered during warranty (more for larger scopes)"],
+  "exclusions": [{{"title":"Mishandling / misuse","text":"..."}} ...exactly {targets['exclusions']} items...],
+  "general_notes": ["...", "... 4-6 short standard proposal disclaimer bullet points"]
+}}
+
+Ground every claim in the real equipment summary provided — never invent brands/models that aren't in it. Keep tone professional, matching enterprise AV/IT proposal writing. {closing}"""
 
 def _gemini_request_with_retry(req):
     # Gemini occasionally returns 503 (overloaded) or 429 (rate-limited) even
@@ -220,19 +304,29 @@ def draft_proposal_content(brief, attachment_text, equipment_summary, currency, 
     if not GEMINI_API_KEY:
         raise RuntimeError('Proposal generation is not configured yet (GEMINI_API_KEY is missing)')
 
+    tier = _scope_tier(equipment_summary)
+    targets = SCOPE_TARGETS[tier]
+    system_prompt = _build_system_prompt(tier, targets)
+
     user_msg = json.dumps({
         'project_brief': brief[:4000],
         'reference_material': (attachment_text or '')[:6000],
         'equipment_summary': equipment_summary,
+        'scope_tier': tier,
         'currency': currency,
     }, ensure_ascii=False)
 
+    # Larger tiers are asked for meaningfully more content (more cards, more
+    # architecture items, longer summaries) -- give them headroom so Gemini
+    # doesn't truncate mid-JSON and produce an unparseable response.
+    max_tokens = {'small': 8000, 'medium': 8000, 'large': 11000, 'enterprise': 14000}[tier]
+
     body = json.dumps({
-        'systemInstruction': {'parts': [{'text': SYSTEM_PROMPT}]},
+        'systemInstruction': {'parts': [{'text': system_prompt}]},
         'contents': [{'role': 'user', 'parts': [{'text': user_msg}]}],
         'generationConfig': {
             'temperature': 0.4,
-            'maxOutputTokens': 8000,
+            'maxOutputTokens': max_tokens,
             'responseMimeType': 'application/json',
             'thinkingConfig': {'thinkingLevel': 'minimal'},
         },
@@ -256,9 +350,11 @@ def draft_proposal_content(brief, attachment_text, equipment_summary, currency, 
         if text.lower().startswith('json'): text = text[4:].strip()
 
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
     except Exception:
         raise RuntimeError('Could not parse the AI response. Please try again.')
+    parsed['scope_tier'] = tier  # surfaced to the frontend so the review modal can show what depth was targeted
+    return parsed
 
 # ── Pull the linked quote's real data (never AI-invented) ───────────────────────
 def get_equipment_summary(quote, which):
@@ -287,19 +383,21 @@ def get_equipment_summary(quote, which):
     }, opts
 
 # ── Small flowable builders (Etihad-Rail-reference-style visual language) ──────
-def section_badge(text):
-    p = Paragraph(f'<font color="#16294f" size="7.5"><b>{text.upper()}</b></font>',
+def section_badge(text, TH=None):
+    TH = TH or _theme_for('modern')
+    p = Paragraph(f'<font color="#{_hex(TH["navy"])}" size="7.5"><b>{text.upper()}</b></font>',
                   ParagraphStyle('badge', fontName='Helvetica-Bold', fontSize=7.5))
     t = Table([[p]], colWidths=[None])
-    t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),GOLD),('TOPPADDING',(0,0),(-1,-1),4),
+    t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),TH['gold']),('TOPPADDING',(0,0),(-1,-1),4),
                            ('BOTTOMPADDING',(0,0),(-1,-1),4),('LEFTPADDING',(0,0),(-1,-1),8),
                            ('RIGHTPADDING',(0,0),(-1,-1),8)]))
     return t
 
-def heading(text, S):
+def heading(text, S, TH=None):
+    TH = TH or _theme_for('modern')
     return [Spacer(1, 2*mm), Paragraph(text, S['h1']),
             Table([['']], colWidths=[22*mm], rowHeights=[1.4],
-                  style=TableStyle([('BACKGROUND',(0,0),(-1,-1),GOLD)])),
+                  style=TableStyle([('BACKGROUND',(0,0),(-1,-1),TH['gold'])])),
             Spacer(1, 3*mm)]
 
 def _stat_val_size(v):
@@ -312,72 +410,107 @@ def _stat_val_size(v):
     if L <= 14: return 11
     return 9
 
-def stat_row(stats, CW):
+def stat_row(stats, CW, TH=None):
+    TH = TH or _theme_for('modern')
+    gold_hex = _hex(TH['gold']); light_hex = _hex(TH['lightblu'])
     n = max(1, len(stats))
     gap = 3*mm
     cw = (CW - gap*(n-1)) / n
     cells = []
     for s in stats:
-        cells.append([Paragraph(f"<font color='#f4b400' size='16'><b>{esc_p(s.get('value',''))}</b></font>", ParagraphStyle('sv', alignment=TA_CENTER, leading=19)),
-                      Paragraph(f"<font color='#c7d3ea' size='6.5'><b>{esc_p(str(s.get('label','')).upper())}</b></font>", ParagraphStyle('sl', alignment=TA_CENTER, leading=8))])
+        cells.append([Paragraph(f"<font color='#{gold_hex}' size='16'><b>{esc_p(s.get('value',''))}</b></font>", ParagraphStyle('sv', alignment=TA_CENTER, leading=19)),
+                      Paragraph(f"<font color='#{light_hex}' size='6.5'><b>{esc_p(str(s.get('label','')).upper())}</b></font>", ParagraphStyle('sl', alignment=TA_CENTER, leading=8))])
     row = [Table([c], colWidths=[cw]) for c in [ [x] for x in cells ]]
     # Build as a single table with n columns, each cell a mini stacked Table
     inner_cells = []
     for s in stats:
         vsize = _stat_val_size(str(s.get('value','')))
-        cell_tbl = Table([[Paragraph(f"<font color='#f4b400' size='{vsize}'><b>{esc_p(str(s.get('value','')))}</b></font>", ParagraphStyle('sv2', alignment=TA_CENTER, leading=vsize+3))],
-                           [Paragraph(f"<font color='#c7d3ea' size='6.5'><b>{esc_p(str(s.get('label','')).upper())}</b></font>", ParagraphStyle('sl2', alignment=TA_CENTER, leading=8))]],
+        cell_tbl = Table([[Paragraph(f"<font color='#{gold_hex}' size='{vsize}'><b>{esc_p(str(s.get('value','')))}</b></font>", ParagraphStyle('sv2', alignment=TA_CENTER, leading=vsize+3))],
+                           [Paragraph(f"<font color='#{light_hex}' size='6.5'><b>{esc_p(str(s.get('label','')).upper())}</b></font>", ParagraphStyle('sl2', alignment=TA_CENTER, leading=8))]],
                           colWidths=[cw])
         cell_tbl.setStyle(TableStyle([('ALIGN',(0,0),(-1,-1),'CENTER'),('TOPPADDING',(0,0),(-1,-1),2),('BOTTOMPADDING',(0,0),(-1,-1),2)]))
         inner_cells.append(cell_tbl)
     outer = Table([inner_cells], colWidths=[cw]*n, spaceAfter=0)
-    outer.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),NAVY),('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+    outer.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),TH['navy']),('VALIGN',(0,0),(-1,-1),'MIDDLE'),
                                ('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8),
-                               ('LINEAFTER',(0,0),(-2,0),0.5,HexColor('#2c4270'))]))
+                               ('LINEAFTER',(0,0),(-2,0),0.5,TH['navy2'])]))
     return outer
 
 def esc_p(s):
     return str(s).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
 
-def card_grid(cards, CW, accent=GOLD):
-    """2-column grid of feature/scope cards, each with a small accent block + title + description."""
-    S_title = ParagraphStyle('ct', fontName='Helvetica-Bold', fontSize=9.5, textColor=NAVY, leading=12)
-    S_desc  = ParagraphStyle('cd', fontName='Helvetica', fontSize=8, textColor=TXT, leading=11)
-    cells, row = [], []
-    gap = 4*mm
-    cw = (CW - gap) / 2
-    for i, c in enumerate(cards):
-        inner = Table([
-            [Table([['']], colWidths=[6*mm], rowHeights=[6*mm], style=TableStyle([('BACKGROUND',(0,0),(-1,-1),accent)]))],
-            [Paragraph(esc_p(c.get('title','')), S_title)],
-            [Paragraph(esc_p(c.get('description','')), S_desc)],
-        ], colWidths=[cw-16])
-        inner.setStyle(TableStyle([('TOPPADDING',(0,0),(-1,-1),2),('BOTTOMPADDING',(0,0),(0,0),4),
-                                   ('BOTTOMPADDING',(1,0),(-1,-1),3),('LEFTPADDING',(0,0),(-1,-1),0)]))
-        card = Table([[inner]], colWidths=[cw])
-        card.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),CARDBG),('BOX',(0,0),(-1,-1),0.6,GRAYB),
-                                  ('TOPPADDING',(0,0),(-1,-1),10),('BOTTOMPADDING',(0,0),(-1,-1),10),
-                                  ('LEFTPADDING',(0,0),(-1,-1),10),('RIGHTPADDING',(0,0),(-1,-1),10)]))
-        row.append(card)
-        if len(row) == 2:
-            cells.append(row); row = []
-    if row:
-        row.append(Spacer(1,1))
-        cells.append(row)
-    t = Table(cells, colWidths=[cw, gap, cw][:2] if False else [cw, cw], spaceBefore=0)
-    style = [('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
-             ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),4*mm),('VALIGN',(0,0),(-1,-1),'TOP')]
-    t.setStyle(TableStyle(style))
+def _fixed_col_grid(items, CW, ncols, cell_builder, TH=None, colgap=4*mm, rowgap=3*mm, pad=10, box_w=0.6):
+    """Lays `items` out into a grid of ncols columns, one flowable-list per card built
+    by cell_builder(item). BACKGROUND/BOX are applied per-cell directly on THIS single
+    outer table (via exact-cell TableStyle coordinates), not on a nested per-card Table --
+    that's what makes every card in a row stretch its background/border to match the
+    tallest card in that row when descriptions wrap to different line counts, instead of
+    each card's box only covering its own (shorter) content height.
+    Real gutters between cards are separate spacer columns/rows (not padding), so cards
+    stay visually distinct with the page background showing through between them.
+    """
+    TH = TH or _theme_for('modern')
+    n = len(items)
+    cw = (CW - colgap*(ncols-1)) / ncols
+    colWidths = []
+    for i in range(ncols):
+        colWidths.append(cw)
+        if i < ncols-1: colWidths.append(colgap)
+    total_cols = len(colWidths)
+    nrows = (n + ncols - 1) // ncols
+    data = []
+    style_cmds = [('VALIGN',(0,0),(-1,-1),'TOP'),
+                  ('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),
+                  ('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0)]
+    for r in range(nrows):
+        if r > 0:
+            data.append([Spacer(1, rowgap)] * total_cols)
+        row_idx = len(data)
+        row_cells = [''] * total_cols
+        for c in range(ncols):
+            idx = r*ncols + c
+            if idx >= n: continue
+            col = c * 2
+            row_cells[col] = cell_builder(items[idx])
+            style_cmds += [
+                ('BACKGROUND',(col,row_idx),(col,row_idx),TH['cardbg']),
+                ('BOX',(col,row_idx),(col,row_idx),box_w,TH['grayb']),
+                ('TOPPADDING',(col,row_idx),(col,row_idx),pad),
+                ('BOTTOMPADDING',(col,row_idx),(col,row_idx),pad),
+                ('LEFTPADDING',(col,row_idx),(col,row_idx),pad),
+                ('RIGHTPADDING',(col,row_idx),(col,row_idx),pad),
+            ]
+        data.append(row_cells)
+    data.append([Spacer(1, rowgap)] * total_cols)  # trailing margin before whatever follows
+    t = Table(data, colWidths=colWidths)
+    t.setStyle(TableStyle(style_cmds))
     return t
 
-def numbered_phases(phases, CW):
-    S_title = ParagraphStyle('pt', fontName='Helvetica-Bold', fontSize=9.5, textColor=NAVY, leading=12)
-    S_bul   = ParagraphStyle('pb', fontName='Helvetica', fontSize=8, textColor=TXT, leading=11)
+def card_grid(cards, CW, accent=None, TH=None):
+    """2-column grid of feature/scope cards, each with a small accent block + title + description."""
+    TH = TH or _theme_for('modern')
+    accent = accent or TH['gold']
+    S_title = ParagraphStyle('ct', fontName='Helvetica-Bold', fontSize=9.5, textColor=TH['navy'], leading=12)
+    S_desc  = ParagraphStyle('cd', fontName='Helvetica', fontSize=8, textColor=TH['txt'], leading=11)
+    def _build(c):
+        return [
+            Table([['']], colWidths=[6*mm], rowHeights=[6*mm], style=TableStyle([('BACKGROUND',(0,0),(-1,-1),accent)])),
+            Spacer(1, 3*mm),
+            Paragraph(esc_p(c.get('title','')), S_title),
+            Spacer(1, 2*mm),
+            Paragraph(esc_p(c.get('description','')), S_desc),
+        ]
+    return _fixed_col_grid(cards, CW, 2, _build, TH=TH, colgap=4*mm, pad=10)
+
+def numbered_phases(phases, CW, TH=None):
+    TH = TH or _theme_for('modern')
+    S_title = ParagraphStyle('pt', fontName='Helvetica-Bold', fontSize=9.5, textColor=TH['navy'], leading=12)
+    S_bul   = ParagraphStyle('pb', fontName='Helvetica', fontSize=8, textColor=TH['txt'], leading=11)
     rows = []
     for i, ph in enumerate(phases):
         num = Table([[Paragraph(f"<font color='white' size='11'><b>{i+1}</b></font>", ParagraphStyle('num', alignment=TA_CENTER))]],
                     colWidths=[9*mm], rowHeights=[9*mm])
-        num.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),NAVY),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(0,0),(-1,-1),'CENTER')]))
+        num.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),TH['navy']),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(0,0),(-1,-1),'CENTER')]))
         bullets = '<br/>'.join(f"•  {esc_p(b)}" for b in (ph.get('bullets') or []))
         body = [Paragraph(esc_p(ph.get('title','')), S_title), Paragraph(bullets, S_bul)]
         rows.append([num, body])
@@ -386,43 +519,80 @@ def numbered_phases(phases, CW):
                           ('BOTTOMPADDING',(0,0),(-1,-1),8),('LEFTPADDING',(0,0),(-1,-1),0)]))
     return t
 
-def bom_table(sections, CW, cur, with_price, pricing_type='markup'):
+BOM_IMG_COL_MM = 15  # width of the BOM table's "Img" column
+BOM_IMG_BOX_MM = 12  # square box the thumbnail itself is fit inside
+
+def _bom_item_image(url, cache):
+    """Fetches a product photo (the same signed product-images URL saved on the
+    quote line as it.img) for one BOM row and returns a small fixed-size
+    ReportLab Image flowable, or '' if there's no image or the fetch/decode
+    fails -- a missing/broken product photo must never break BOM generation.
+    `cache` is a dict shared across every bom_table() call within one PDF
+    render so the same product repeated across sections/options is only
+    downloaded once."""
+    if not url:
+        return ''
+    if url in cache:
+        return cache[url]
+    flow = ''
+    try:
+        img_bytes = _fetch_bytes(url, timeout=8)
+        if img_bytes:
+            reader = ImageReader(io.BytesIO(img_bytes))
+            iw, ih = reader.getSize()
+            if iw and ih:
+                box = BOM_IMG_BOX_MM * mm
+                dw, dh = _img_contain_rect(iw, ih, box, box)
+                flow = Image(io.BytesIO(img_bytes), width=dw, height=dh)
+    except Exception:
+        flow = ''
+    cache[url] = flow
+    return flow
+
+def bom_table(sections, CW, cur, with_price, pricing_type='markup', TH=None, img_cache=None):
+    TH = TH or _theme_for('modern')
+    if img_cache is None: img_cache = {}
     S_th = ParagraphStyle('th', fontName='Helvetica-Bold', fontSize=7.8, textColor=white)
-    S_b  = ParagraphStyle('b', fontName='Helvetica', fontSize=8, textColor=TXT, leading=10)
-    S_bc = ParagraphStyle('bc', fontName='Helvetica', fontSize=8, textColor=TXT, alignment=TA_CENTER)
-    S_br = ParagraphStyle('br', fontName='Helvetica', fontSize=8, textColor=TXT, alignment=TA_RIGHT)
+    S_b  = ParagraphStyle('b', fontName='Helvetica', fontSize=8, textColor=TH['txt'], leading=10)
+    S_bc = ParagraphStyle('bc', fontName='Helvetica', fontSize=8, textColor=TH['txt'], alignment=TA_CENTER)
+    S_br = ParagraphStyle('br', fontName='Helvetica', fontSize=8, textColor=TH['txt'], alignment=TA_RIGHT)
     flow = []
+    img_w = BOM_IMG_COL_MM * mm
+    rem = CW - img_w
     for s in sections:
         if s.get('name'):
-            flow.append(Paragraph(f"<b>{esc_p(s['name'])}</b>", ParagraphStyle('sn', fontName='Helvetica-Bold', fontSize=10, textColor=NAVY)))
+            flow.append(Paragraph(f"<b>{esc_p(s['name'])}</b>", ParagraphStyle('sn', fontName='Helvetica-Bold', fontSize=10, textColor=TH['navy'])))
             flow.append(Spacer(1, 1.5*mm))
         if with_price:
-            hdr = ['#','Brand','Model','Description', f'Unit Price ({cur})', 'Qty', 'UOM', f'Total ({cur})']
-            widths = [CW*0.04, CW*0.10, CW*0.13, CW*0.32, CW*0.13, CW*0.06, CW*0.06, CW*0.16]
+            hdr = ['#','Img','Brand','Model','Description', f'Unit Price ({cur})', 'Qty', 'UOM', f'Total ({cur})']
+            pct = [0.04, 0.10, 0.13, 0.32, 0.13, 0.06, 0.06, 0.16]
         else:
-            hdr = ['#','Brand','Model','Description','Qty','UOM']
-            widths = [CW*0.05, CW*0.15, CW*0.19, CW*0.44, CW*0.08, CW*0.09]
+            hdr = ['#','Img','Brand','Model','Description','Qty','UOM']
+            pct = [0.05, 0.15, 0.19, 0.44, 0.08, 0.09]
+        widths = [rem*pct[0], img_w] + [rem*p for p in pct[1:]]
         rows = [[Paragraph(h, S_th) for h in hdr]]
         rn = 1
         for it in (s.get('items') or []):
             up, tp = calc_item(it, pricing_type)
+            img_flow = _bom_item_image(it.get('img'), img_cache)
             if with_price:
-                rows.append([Paragraph(str(rn), S_bc), Paragraph(esc_p(it.get('brand') or ''), S_b),
+                rows.append([Paragraph(str(rn), S_bc), img_flow, Paragraph(esc_p(it.get('brand') or ''), S_b),
                              Paragraph(esc_p(it.get('model') or ''), S_b), Paragraph(esc_p(it.get('desc') or ''), S_b),
                              Paragraph(fmt(up), S_br), Paragraph(fmt(_num(it.get('qty'))), S_bc),
                              Paragraph(esc_p(it.get('uom') or 'Pcs'), S_bc), Paragraph(fmt(tp), S_br)])
             else:
-                rows.append([Paragraph(str(rn), S_bc), Paragraph(esc_p(it.get('brand') or ''), S_b),
+                rows.append([Paragraph(str(rn), S_bc), img_flow, Paragraph(esc_p(it.get('brand') or ''), S_b),
                              Paragraph(esc_p(it.get('model') or ''), S_b), Paragraph(esc_p(it.get('desc') or ''), S_b),
                              Paragraph(fmt(_num(it.get('qty'))), S_bc), Paragraph(esc_p(it.get('uom') or 'Pcs'), S_bc)])
             rn += 1
         tbl = Table(rows, colWidths=widths, repeatRows=1)
-        style = [('BACKGROUND',(0,0),(-1,0),NAVY),('VALIGN',(0,0),(-1,-1),'TOP'),
-                 ('LINEBELOW',(0,1),(-1,-1),0.4,GRAYB),('TOPPADDING',(0,0),(-1,-1),4.5),
+        style = [('BACKGROUND',(0,0),(-1,0),TH['navy']),('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+                 ('ALIGN',(1,0),(1,-1),'CENTER'),
+                 ('LINEBELOW',(0,1),(-1,-1),0.4,TH['grayb']),('TOPPADDING',(0,0),(-1,-1),4.5),
                  ('BOTTOMPADDING',(0,0),(-1,-1),4.5),('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5)]
         for ri in range(1, len(rows)):
             if (ri-1) % 2 == 1:
-                style.append(('BACKGROUND',(0,ri),(-1,ri),ZEBRA))
+                style.append(('BACKGROUND',(0,ri),(-1,ri),TH['zebra']))
         tbl.setStyle(TableStyle(style))
         flow.append(tbl); flow.append(Spacer(1, 5*mm))
     return flow
@@ -469,23 +639,27 @@ def _img_contain_rect(iw, ih, box_w, box_h):
         draw_h = box_h; draw_w = draw_h * img_ratio
     return draw_w, draw_h
 
-COVER_STYLES = ('modern', 'corporate', 'technical', 'executive')
+COVER_STYLES = tuple(THEMES.keys())
 
 def _draw_cover(canvas, doc):
-    """Dispatches to the selected template style. 'modern' (default) matches
-    the original design exactly when no cover image is attached."""
+    """Dispatches to the selected template style's cover LAYOUT (see
+    COVER_LAYOUT_FOR_STYLE), drawn with that style's THEME colors. 'modern'
+    (default) matches the original design exactly when no cover image is
+    attached."""
     data = doc.proposal_data
     style = data.get('template_style') or 'modern'
     if style not in COVER_STYLES: style = 'modern'
+    TH = _theme_for(style)
     cover_img = _cover_image_reader(data.get('cover_image'))
     {
         'modern': _draw_cover_modern,
         'corporate': _draw_cover_corporate,
         'technical': _draw_cover_technical,
         'executive': _draw_cover_executive,
-    }[style](canvas, doc, cover_img)
+    }[COVER_LAYOUT_FOR_STYLE.get(style, 'modern')](canvas, doc, cover_img, TH)
 
-def _draw_cover_modern(canvas, doc, cover_img):
+def _draw_cover_modern(canvas, doc, cover_img, TH=None):
+    TH = TH or _theme_for('modern')
     data = doc.proposal_data; company = doc.proposal_company; logo_bytes = doc.proposal_logo
     w, h = A4
     canvas.saveState()
@@ -496,10 +670,10 @@ def _draw_cover_modern(canvas, doc, cover_img):
             canvas.drawImage(cover_img, (w-dw)/2, (h-dh)/2, dw, dh, mask='auto')
         except Exception:
             cover_img = None
-        canvas.setFillColor(NAVY); canvas.setFillAlpha(0.60 if cover_img else 1.0)
+        canvas.setFillColor(TH['navy']); canvas.setFillAlpha(0.60 if cover_img else 1.0)
         canvas.rect(0, 0, w, h, fill=1, stroke=0)
     else:
-        canvas.setFillColor(NAVY); canvas.rect(0, 0, w, h, fill=1, stroke=0)
+        canvas.setFillColor(TH['navy']); canvas.rect(0, 0, w, h, fill=1, stroke=0)
     canvas.restoreState()
     if not cover_img:
         canvas.saveState()
@@ -526,15 +700,15 @@ def _draw_cover_modern(canvas, doc, cover_img):
     canvas.setFont('Helvetica-Bold', 9)
     bw = canvas.stringWidth(badge, 'Helvetica-Bold', 9) + 16
     by = h - 96*mm
-    canvas.setFillColor(GOLD); canvas.roundRect(15*mm, by, bw, 8*mm, 4*mm, fill=1, stroke=0)
-    canvas.setFillColor(NAVY); canvas.drawString(15*mm+8, by+2.6*mm, badge)
+    canvas.setFillColor(TH['gold']); canvas.roundRect(15*mm, by, bw, 8*mm, 4*mm, fill=1, stroke=0)
+    canvas.setFillColor(TH['navy']); canvas.drawString(15*mm+8, by+2.6*mm, badge)
 
     canvas.setFillColor(white); canvas.setFont('Helvetica-Bold', 25)
     ty = h - 118*mm
     for ln in textwrap.wrap(data.get('title') or 'Technical Proposal', width=26)[:3]:
         canvas.drawString(15*mm, ty, ln); ty -= 10.5*mm
 
-    canvas.setFont('Helvetica', 10.5); canvas.setFillColor(LIGHTBLU)
+    canvas.setFont('Helvetica', 10.5); canvas.setFillColor(TH['lightblu'])
     for ln in textwrap.wrap(data.get('subtitle') or '', width=78)[:2]:
         ty -= 6*mm
         canvas.drawString(15*mm, ty, ln)
@@ -552,30 +726,31 @@ def _draw_cover_modern(canvas, doc, cover_img):
         canvas.restoreState()
         cx = 15*mm
         for s in stats:
-            canvas.setFillColor(GOLD); canvas.setFont('Helvetica-Bold', 16)
+            canvas.setFillColor(TH['gold']); canvas.setFont('Helvetica-Bold', 16)
             canvas.drawCentredString(cx+cw/2, cy+14*mm, str(s.get('value',''))[:8])
-            canvas.setFillColor(LIGHTBLU); canvas.setFont('Helvetica-Bold', 6.3)
+            canvas.setFillColor(TH['lightblu']); canvas.setFont('Helvetica-Bold', 6.3)
             canvas.drawCentredString(cx+cw/2, cy+6.5*mm, str(s.get('label',''))[:22].upper())
             cx += cw + gap
 
-    canvas.setStrokeColor(HexColor('#3a5080')); canvas.setLineWidth(0.6)
+    canvas.setStrokeColor(TH['navy2']); canvas.setLineWidth(0.6)
     canvas.line(15*mm, 30*mm, w-15*mm, 30*mm)
-    canvas.setFont('Helvetica', 8); canvas.setFillColor(LIGHTBLU)
+    canvas.setFont('Helvetica', 8); canvas.setFillColor(TH['lightblu'])
     canvas.drawString(15*mm, 24*mm, 'Prepared for')
     canvas.setFont('Helvetica-Bold', 10.5); canvas.setFillColor(white)
     canvas.drawString(15*mm, 18.5*mm, (data.get('customer_name') or '')[:60])
-    canvas.setFont('Helvetica', 8); canvas.setFillColor(LIGHTBLU)
+    canvas.setFont('Helvetica', 8); canvas.setFillColor(TH['lightblu'])
     canvas.drawRightString(w-15*mm, 24*mm, f"Date: {data.get('date') or ''}")
     canvas.setFont('Helvetica-Bold', 9); canvas.setFillColor(white)
     canvas.drawRightString(w-15*mm, 18.5*mm, f"Prepared by: {(data.get('prepared_by') or company.get('name') or '')[:50]}")
 
-def _draw_cover_corporate(canvas, doc, cover_img):
+def _draw_cover_corporate(canvas, doc, cover_img, TH=None):
+    TH = TH or _theme_for('corporate')
     data = doc.proposal_data; company = doc.proposal_company; logo_bytes = doc.proposal_logo
     w, h = A4
     canvas.saveState()
     canvas.setFillColor(white); canvas.rect(0, 0, w, h, fill=1, stroke=0)
     canvas.restoreState()
-    canvas.setStrokeColor(GOLD); canvas.setLineWidth(2.2)
+    canvas.setStrokeColor(TH['gold']); canvas.setLineWidth(2.2)
     canvas.line(15*mm, h-20*mm, w-15*mm, h-20*mm)
 
     if logo_bytes:
@@ -592,16 +767,16 @@ def _draw_cover_corporate(canvas, doc, cover_img):
     canvas.setFont('Helvetica-Bold', 8.5)
     bw = canvas.stringWidth(badge, 'Helvetica-Bold', 8.5) + 16
     by = h - 96*mm
-    canvas.setStrokeColor(NAVY); canvas.setLineWidth(0.9)
+    canvas.setStrokeColor(TH['navy']); canvas.setLineWidth(0.9)
     canvas.roundRect(15*mm, by, bw, 7*mm, 3.5*mm, fill=0, stroke=1)
-    canvas.setFillColor(NAVY); canvas.drawString(15*mm+8, by+2.3*mm, badge)
+    canvas.setFillColor(TH['navy']); canvas.drawString(15*mm+8, by+2.3*mm, badge)
 
-    canvas.setFillColor(NAVY); canvas.setFont('Helvetica-Bold', 23)
+    canvas.setFillColor(TH['navy']); canvas.setFont('Helvetica-Bold', 23)
     ty = h - 118*mm
     for ln in textwrap.wrap(data.get('title') or 'Technical Proposal', width=28)[:3]:
         canvas.drawString(15*mm, ty, ln); ty -= 9.5*mm
 
-    canvas.setFont('Helvetica', 10); canvas.setFillColor(GRAY)
+    canvas.setFont('Helvetica', 10); canvas.setFillColor(TH['gray'])
     for ln in textwrap.wrap(data.get('subtitle') or '', width=82)[:2]:
         ty -= 6*mm
         canvas.drawString(15*mm, ty, ln)
@@ -612,7 +787,7 @@ def _draw_cover_corporate(canvas, doc, cover_img):
             box_w, box_h = w - 30*mm, 46*mm
             box_y = 82*mm
             dw, dh = _img_contain_rect(iw, ih, box_w - 4*mm, box_h - 4*mm)
-            canvas.setStrokeColor(GRAYB); canvas.setLineWidth(0.8)
+            canvas.setStrokeColor(TH['grayb']); canvas.setLineWidth(0.8)
             canvas.rect(15*mm, box_y, box_w, box_h, fill=0, stroke=1)
             canvas.drawImage(cover_img, 15*mm+(box_w-dw)/2, box_y+(box_h-dh)/2, dw, dh, mask='auto')
         except Exception:
@@ -624,39 +799,40 @@ def _draw_cover_corporate(canvas, doc, cover_img):
         cw = (w - 30*mm - gap*(n-1)) / n
         cx = 15*mm; cy = 52*mm
         for s in stats:
-            canvas.setFillColor(TINT)
+            canvas.setFillColor(TH['tint'])
             canvas.roundRect(cx, cy, cw, 24*mm, 2*mm, fill=1, stroke=0)
-            canvas.setFillColor(NAVY); canvas.setFont('Helvetica-Bold', 15)
+            canvas.setFillColor(TH['navy']); canvas.setFont('Helvetica-Bold', 15)
             canvas.drawCentredString(cx+cw/2, cy+14*mm, str(s.get('value',''))[:8])
-            canvas.setFillColor(GRAY); canvas.setFont('Helvetica-Bold', 6.2)
+            canvas.setFillColor(TH['gray']); canvas.setFont('Helvetica-Bold', 6.2)
             canvas.drawCentredString(cx+cw/2, cy+6.5*mm, str(s.get('label',''))[:22].upper())
             cx += cw + gap
 
-    canvas.setStrokeColor(GRAYB); canvas.setLineWidth(0.6)
+    canvas.setStrokeColor(TH['grayb']); canvas.setLineWidth(0.6)
     canvas.line(15*mm, 30*mm, w-15*mm, 30*mm)
-    canvas.setFont('Helvetica', 8); canvas.setFillColor(GRAY)
+    canvas.setFont('Helvetica', 8); canvas.setFillColor(TH['gray'])
     canvas.drawString(15*mm, 24*mm, 'Prepared for')
-    canvas.setFont('Helvetica-Bold', 10.5); canvas.setFillColor(NAVY)
+    canvas.setFont('Helvetica-Bold', 10.5); canvas.setFillColor(TH['navy'])
     canvas.drawString(15*mm, 18.5*mm, (data.get('customer_name') or '')[:60])
-    canvas.setFont('Helvetica', 8); canvas.setFillColor(GRAY)
+    canvas.setFont('Helvetica', 8); canvas.setFillColor(TH['gray'])
     canvas.drawRightString(w-15*mm, 24*mm, f"Date: {data.get('date') or ''}")
-    canvas.setFont('Helvetica-Bold', 9); canvas.setFillColor(NAVY)
+    canvas.setFont('Helvetica-Bold', 9); canvas.setFillColor(TH['navy'])
     canvas.drawRightString(w-15*mm, 18.5*mm, f"Prepared by: {(data.get('prepared_by') or company.get('name') or '')[:50]}")
 
-def _draw_cover_technical(canvas, doc, cover_img):
+def _draw_cover_technical(canvas, doc, cover_img, TH=None):
+    TH = TH or _theme_for('technical')
     data = doc.proposal_data; company = doc.proposal_company; logo_bytes = doc.proposal_logo
     w, h = A4
     SB = 34*mm
     canvas.saveState()
     canvas.setFillColor(white); canvas.rect(0, 0, w, h, fill=1, stroke=0)
-    canvas.setFillColor(NAVY); canvas.rect(0, 0, SB, h, fill=1, stroke=0)
+    canvas.setFillColor(TH['navy']); canvas.rect(0, 0, SB, h, fill=1, stroke=0)
     canvas.restoreState()
 
     badge = (data.get('doc_label') or 'TECHNICAL PROPOSAL').upper()
     canvas.saveState()
     canvas.translate(SB/2 + 3, h/2)
     canvas.rotate(90)
-    canvas.setFillColor(GOLD); canvas.setFont('Helvetica-Bold', 10)
+    canvas.setFillColor(TH['gold']); canvas.setFont('Helvetica-Bold', 10)
     canvas.drawCentredString(0, 0, badge)
     canvas.restoreState()
 
@@ -673,18 +849,18 @@ def _draw_cover_technical(canvas, doc, cover_img):
     MX = SB + 15*mm
     CWd = w - MX - 15*mm
 
-    canvas.setFillColor(NAVY); canvas.setFont('Helvetica-Bold', 20)
+    canvas.setFillColor(TH['navy']); canvas.setFont('Helvetica-Bold', 20)
     ty = h - 40*mm
     for ln in textwrap.wrap(data.get('title') or 'Technical Proposal', width=32)[:3]:
         canvas.drawString(MX, ty, ln); ty -= 8.5*mm
 
-    canvas.setFont('Helvetica', 9.5); canvas.setFillColor(GRAY)
+    canvas.setFont('Helvetica', 9.5); canvas.setFillColor(TH['gray'])
     for ln in textwrap.wrap(data.get('subtitle') or '', width=88)[:2]:
         ty -= 5.5*mm
         canvas.drawString(MX, ty, ln)
 
     ty -= 6*mm
-    canvas.setStrokeColor(GRAYB); canvas.setLineWidth(0.6)
+    canvas.setStrokeColor(TH['grayb']); canvas.setLineWidth(0.6)
     canvas.line(MX, ty, w-15*mm, ty)
 
     if cover_img:
@@ -698,7 +874,7 @@ def _draw_cover_technical(canvas, doc, cover_img):
             canvas.clipPath(p, stroke=0, fill=0)
             canvas.drawImage(cover_img, MX+(box_w-dw)/2, box_y+(box_h-dh)/2, dw, dh, mask='auto')
             canvas.restoreState()
-            canvas.setStrokeColor(GRAYB); canvas.setLineWidth(0.6)
+            canvas.setStrokeColor(TH['grayb']); canvas.setLineWidth(0.6)
             canvas.rect(MX, box_y, box_w, box_h, fill=0, stroke=1)
         except Exception:
             pass
@@ -709,18 +885,19 @@ def _draw_cover_technical(canvas, doc, cover_img):
         cw = (CWd - gap*(n-1)) / n
         cx = MX; cy = 30*mm
         for s in stats:
-            canvas.setFillColor(CARDBG); canvas.rect(cx, cy, cw, 20*mm, fill=1, stroke=0)
-            canvas.setFillColor(NAVY); canvas.setFont('Helvetica-Bold', 13)
+            canvas.setFillColor(TH['cardbg']); canvas.rect(cx, cy, cw, 20*mm, fill=1, stroke=0)
+            canvas.setFillColor(TH['navy']); canvas.setFont('Helvetica-Bold', 13)
             canvas.drawCentredString(cx+cw/2, cy+12*mm, str(s.get('value',''))[:8])
-            canvas.setFillColor(GRAY); canvas.setFont('Helvetica-Bold', 5.8)
+            canvas.setFillColor(TH['gray']); canvas.setFont('Helvetica-Bold', 5.8)
             canvas.drawCentredString(cx+cw/2, cy+5.5*mm, str(s.get('label',''))[:22].upper())
             cx += cw + gap
 
-    canvas.setFont('Helvetica', 7.5); canvas.setFillColor(GRAY)
+    canvas.setFont('Helvetica', 7.5); canvas.setFillColor(TH['gray'])
     canvas.drawString(MX, 14*mm, f"Prepared for {(data.get('customer_name') or '')[:50]}")
     canvas.drawRightString(w-15*mm, 14*mm, f"Date: {data.get('date') or ''}")
 
-def _draw_cover_executive(canvas, doc, cover_img):
+def _draw_cover_executive(canvas, doc, cover_img, TH=None):
+    TH = TH or _theme_for('executive')
     data = doc.proposal_data; company = doc.proposal_company; logo_bytes = doc.proposal_logo
     w, h = A4
     canvas.saveState()
@@ -738,20 +915,20 @@ def _draw_cover_executive(canvas, doc, cover_img):
             pass
 
     badge = (data.get('doc_label') or 'TECHNICAL PROPOSAL').upper()
-    canvas.setFont('Helvetica-Bold', 8); canvas.setFillColor(GRAY)
+    canvas.setFont('Helvetica-Bold', 8); canvas.setFillColor(TH['gray'])
     canvas.drawCentredString(w/2, h-62*mm, badge)
 
-    canvas.setFillColor(NAVY); canvas.setFont('Helvetica-Bold', 26)
+    canvas.setFillColor(TH['navy']); canvas.setFont('Helvetica-Bold', 26)
     ty = h - 90*mm
     for ln in textwrap.wrap(data.get('title') or 'Technical Proposal', width=24)[:3]:
         canvas.drawCentredString(w/2, ty, ln); ty -= 11*mm
 
-    canvas.setFont('Helvetica', 10.5); canvas.setFillColor(GRAY)
+    canvas.setFont('Helvetica', 10.5); canvas.setFillColor(TH['gray'])
     for ln in textwrap.wrap(data.get('subtitle') or '', width=70)[:2]:
         ty -= 6.5*mm
         canvas.drawCentredString(w/2, ty, ln)
 
-    canvas.setStrokeColor(GOLD); canvas.setLineWidth(1.4)
+    canvas.setStrokeColor(TH['gold']); canvas.setLineWidth(1.4)
     canvas.line(w/2-14*mm, ty-8*mm, w/2+14*mm, ty-8*mm)
 
     stats = (data.get('stats') or [])[:2]
@@ -760,9 +937,9 @@ def _draw_cover_executive(canvas, doc, cover_img):
         total_w = cw*n + gap*(n-1)
         cx = (w-total_w)/2; cy = ty - 34*mm
         for s in stats:
-            canvas.setFillColor(NAVY); canvas.setFont('Helvetica-Bold', 17)
+            canvas.setFillColor(TH['navy']); canvas.setFont('Helvetica-Bold', 17)
             canvas.drawCentredString(cx+cw/2, cy+7*mm, str(s.get('value',''))[:8])
-            canvas.setFillColor(GRAY); canvas.setFont('Helvetica-Bold', 6.5)
+            canvas.setFillColor(TH['gray']); canvas.setFont('Helvetica-Bold', 6.5)
             canvas.drawCentredString(cx+cw/2, cy, str(s.get('label',''))[:22].upper())
             cx += cw + gap
 
@@ -776,24 +953,26 @@ def _draw_cover_executive(canvas, doc, cover_img):
         except Exception:
             pass
 
-    canvas.setStrokeColor(GRAYB); canvas.setLineWidth(0.6)
+    canvas.setStrokeColor(TH['grayb']); canvas.setLineWidth(0.6)
     canvas.line(15*mm, 16*mm, w-15*mm, 16*mm)
-    canvas.setFont('Helvetica', 8); canvas.setFillColor(GRAY)
+    canvas.setFont('Helvetica', 8); canvas.setFillColor(TH['gray'])
     canvas.drawCentredString(w/2, 11*mm, f"Prepared for {(data.get('customer_name') or '')[:40]}  ·  {data.get('date') or ''}")
 
 def _content_footer(canvas, doc):
     company = doc.proposal_company
+    style = doc.proposal_data.get('template_style') or 'modern'
+    TH = _theme_for(style)
     w, h = A4
     canvas.saveState()
-    canvas.setStrokeColor(GOLD); canvas.setLineWidth(1.1)
+    canvas.setStrokeColor(TH['gold']); canvas.setLineWidth(1.1)
     canvas.line(15*mm, 14*mm, w-15*mm, 14*mm)
-    canvas.setFont('Helvetica', 6.8); canvas.setFillColor(GRAY)
+    canvas.setFont('Helvetica', 6.8); canvas.setFillColor(TH['gray'])
     label = doc.proposal_data.get('doc_label') or 'TECHNICAL PROPOSAL'
     canvas.drawString(15*mm, 10*mm, f"{label} · {company.get('name','')}"[:110])
-    canvas.setFont('Helvetica', 6.8); canvas.setFillColor(GRAY)
+    canvas.setFont('Helvetica', 6.8); canvas.setFillColor(TH['gray'])
     canvas.drawCentredString(w/2, 6*mm, f"Page {doc.page}")
     if company.get('web'):
-        canvas.setFont('Helvetica-Bold', 6.8); canvas.setFillColor(NAVY2)
+        canvas.setFont('Helvetica-Bold', 6.8); canvas.setFillColor(TH['navy2'])
         canvas.drawRightString(w-15*mm, 10*mm, company['web'])
     canvas.restoreState()
 
@@ -831,6 +1010,7 @@ def _schematic_image(data_url, CW):
 def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc_label):
     """kind: 'technical' | 'commercial' | 'combined'"""
     pt = (quote or {}).get('pricing_type') or 'markup'
+    TH = _theme_for(content.get('template_style') or 'modern')
     buf = io.BytesIO()
     doc = BaseDocTemplate(buf, pagesize=A4, leftMargin=15*mm, rightMargin=15*mm,
                           topMargin=14*mm, bottomMargin=18*mm, title=content.get('title', 'Proposal'))
@@ -846,10 +1026,11 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
     ])
 
     CW = doc.width
+    bom_img_cache = {}  # shared across every bom_table() call below so a product repeated across sections/options is only fetched once
     S = {
-        'h1': ParagraphStyle('h1', fontName='Helvetica-Bold', fontSize=18, textColor=NAVY, leading=22, spaceBefore=2, spaceAfter=2),
-        'body': ParagraphStyle('body', fontName='Helvetica', fontSize=9, textColor=TXT, leading=13),
-        'small': ParagraphStyle('small', fontName='Helvetica', fontSize=8, textColor=GRAY, leading=11),
+        'h1': ParagraphStyle('h1', fontName='Helvetica-Bold', fontSize=18, textColor=TH['navy'], leading=22, spaceBefore=2, spaceAfter=2),
+        'body': ParagraphStyle('body', fontName='Helvetica', fontSize=9, textColor=TH['txt'], leading=13),
+        'small': ParagraphStyle('small', fontName='Helvetica', fontSize=8, textColor=TH['gray'], leading=11),
     }
     # Right-aligned variant of 'body', used for the Subtotal/VAT amount column in
     # the totals box so those figures line up with the right-aligned Total (AED)
@@ -860,7 +1041,7 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
 
     if kind in ('technical', 'combined'):
         _ov_start = len(E)
-        E += [section_badge('OVERVIEW')] + heading('Executive Summary', S)
+        E += [section_badge('OVERVIEW', TH)] + heading('Executive Summary', S, TH)
         E.append(Paragraph(content.get('executive_summary') or '', S['body']))
         cred_bits = []
         if company.get('founded_year'): cred_bits.append(f"Founded {company['founded_year']}")
@@ -868,53 +1049,53 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
         if company.get('notable_clients'): cred_bits.append(f"Trusted by {company['notable_clients']}")
         if cred_bits:
             E.append(Spacer(1, 2*mm))
-            E.append(Paragraph(' &nbsp;|&nbsp; '.join(esc_p(b) for b in cred_bits), ParagraphStyle('cred', fontName='Helvetica-Oblique', fontSize=8, textColor=GRAY)))
+            E.append(Paragraph(' &nbsp;|&nbsp; '.join(esc_p(b) for b in cred_bits), ParagraphStyle('cred', fontName='Helvetica-Oblique', fontSize=8, textColor=TH['gray'])))
         E.append(Spacer(1, 4*mm))
         stats2 = content.get('stats') or []
         if stats2:
-            E.append(stat_row(stats2, CW)); E.append(Spacer(1, 5*mm))
+            E.append(stat_row(stats2, CW, TH)); E.append(Spacer(1, 5*mm))
         if content.get('feature_cards'):
-            E.append(card_grid(content['feature_cards'], CW))
+            E.append(card_grid(content['feature_cards'], CW, TH=TH))
 
         E.append(PageBreak())
         if not _section_on(content, 'overview'): del E[_ov_start:]
         _sc_start = len(E)
-        E += [section_badge('DELIVERY')] + heading('Scope of Work', S)
+        E += [section_badge('DELIVERY', TH)] + heading('Scope of Work', S, TH)
         if content.get('scope_cards'):
-            E.append(card_grid(content['scope_cards'], CW))
+            E.append(card_grid(content['scope_cards'], CW, TH=TH))
         if not _section_on(content, 'scope'): del E[_sc_start:]
         if _section_on(content, 'quality') and content.get('control_testing'):
-            E += [section_badge('QUALITY')] + heading('Control, Testing & Documentation', S)
-            cells = []
-            for ct in content['control_testing'][:2]:
+            E += [section_badge('QUALITY', TH)] + heading('Control, Testing & Documentation', S, TH)
+            # Wraps 2-per-row instead of a fixed single row of exactly 2 --
+            # larger-scope proposals ask the AI for 3-4 distinct control/
+            # testing topics (see SCOPE_TARGETS), which a hardcoded 2-column
+            # single row would have silently dropped past the 2nd item.
+            ct_rows, ct_row = [], []
+            for ct in content['control_testing']:
                 bullets = '<br/>'.join(f"•  {esc_p(b)}" for b in (ct.get('bullets') or []))
-                cells.append(Paragraph(f"<b>{esc_p(ct.get('title',''))}</b><br/>{bullets}", S['body']))
-            while len(cells) < 2: cells.append(Paragraph('', S['body']))
-            t = Table([cells], colWidths=[CW/2, CW/2])
-            t.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('RIGHTPADDING',(0,0),(0,0),8)]))
+                ct_row.append(Paragraph(f"<b>{esc_p(ct.get('title',''))}</b><br/>{bullets}", S['body']))
+                if len(ct_row) == 2: ct_rows.append(ct_row); ct_row = []
+            if ct_row:
+                ct_row.append(Paragraph('', S['body']))
+                ct_rows.append(ct_row)
+            t = Table(ct_rows, colWidths=[CW/2, CW/2])
+            t.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('RIGHTPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
             E.append(t)
 
         if _section_on(content, 'system_design') and content.get('architecture_items'):
             E.append(PageBreak())
-            E += [section_badge('SYSTEM DESIGN')] + heading('Solution Architecture', S)
-            items = content['architecture_items'][:6]
-            rows, row = [], []
-            for it in items:
-                cell = Table([[Paragraph(f"<b>{esc_p(it.get('label',''))}</b>", ParagraphStyle('al', fontName='Helvetica-Bold', fontSize=8.5, textColor=NAVY))],
-                              [Paragraph(esc_p(it.get('value','')), ParagraphStyle('av', fontName='Helvetica', fontSize=8, textColor=TXT, leading=10))]],
-                             colWidths=[(CW-6*mm)/3])
-                cell.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),CARDBG),('BOX',(0,0),(-1,-1),0.5,GRAYB),
-                                          ('TOPPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8),
-                                          ('LEFTPADDING',(0,0),(-1,-1),8),('RIGHTPADDING',(0,0),(-1,-1),8)]))
-                row.append(cell)
-                if len(row) == 3: rows.append(row); row = []
-            if row:
-                while len(row) < 3: row.append(Spacer(1,1))
-                rows.append(row)
-            grid = Table(rows, colWidths=[(CW-6*mm)/3]*3, spaceBefore=2)
-            grid.setStyle(TableStyle([('LEFTPADDING',(0,0),(-1,-1),0),('TOPPADDING',(0,0),(-1,-1),0),
-                                      ('BOTTOMPADDING',(0,0),(-1,-1),3*mm),('VALIGN',(0,0),(-1,-1),'TOP')]))
-            E.append(grid)
+            E += [section_badge('SYSTEM DESIGN', TH)] + heading('Solution Architecture', S, TH)
+            # No cap here (previously hardcoded to [:6]) -- the grid below
+            # already wraps to as many rows of 3 as needed, so a larger-scope
+            # proposal's extra architecture_items (see SCOPE_TARGETS) render
+            # in full instead of being silently cut off past the 6th.
+            items = content['architecture_items']
+            S_al = ParagraphStyle('al', fontName='Helvetica-Bold', fontSize=8.5, textColor=TH['navy'])
+            S_av = ParagraphStyle('av', fontName='Helvetica', fontSize=8, textColor=TH['txt'], leading=10)
+            def _arch_cell(it):
+                return [Paragraph(f"<b>{esc_p(it.get('label',''))}</b>", S_al), Spacer(1, 1.5*mm),
+                        Paragraph(esc_p(it.get('value','')), S_av)]
+            E.append(_fixed_col_grid(items, CW, 3, _arch_cell, TH=TH, colgap=3*mm, pad=8, box_w=0.5))
             if content.get('architecture_note'):
                 E.append(Spacer(1, 2*mm)); E.append(Paragraph(content['architecture_note'], S['body']))
 
@@ -925,19 +1106,19 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
             img_flow = _schematic_image(content['schematic_png'], CW)
             if img_flow:
                 E.append(PageBreak())
-                E += [section_badge('SYSTEM DESIGN')] + heading('System Schematic', S)
+                E += [section_badge('SYSTEM DESIGN', TH)] + heading('System Schematic', S, TH)
                 E.append(Paragraph('Signal flow of the proposed system. Solid lines carry AV signal, heavy lines carry audio/video over the network, dotted lines are control.', S['small']))
                 E.append(Spacer(1, 3*mm))
                 E.append(img_flow)
 
         E.append(PageBreak())
-        E += [section_badge('BILL OF MATERIALS')] + heading('Bill of Materials', S)
+        E += [section_badge('BILL OF MATERIALS', TH)] + heading('Bill of Materials', S, TH)
         for o in opts:
             secs = o.get('sections') or []
             if len(opts) > 1 and o.get('label'):
-                E.append(Paragraph(f"<b>{esc_p(o['label'])}</b>", ParagraphStyle('optl', fontName='Helvetica-Bold', fontSize=11, textColor=NAVY)))
+                E.append(Paragraph(f"<b>{esc_p(o['label'])}</b>", ParagraphStyle('optl', fontName='Helvetica-Bold', fontSize=11, textColor=TH['navy'])))
                 E.append(Spacer(1, 2*mm))
-            E += bom_table(secs, CW, cur, with_price=(kind == 'combined'), pricing_type=pt)
+            E += bom_table(secs, CW, cur, with_price=(kind == 'combined'), pricing_type=pt, TH=TH, img_cache=bom_img_cache)
 
         if kind == 'combined':
             for o in opts:
@@ -948,30 +1129,33 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
                          [Paragraph('<b>Grand Total</b>', ParagraphStyle('gt', parent=S['body'], textColor=white, fontSize=10.5)),
                           Paragraph(f"<b>{cur} {fmt(grand)}</b>", ParagraphStyle('gt2', parent=S['body_r'], textColor=white, fontSize=10.5))]]
                 tot = Table(trows, colWidths=[CW*0.72, CW*0.28])
-                tot.setStyle(TableStyle([('BOX',(0,0),(-1,1),0.6,GRAYB),('LINEBELOW',(0,0),(-1,1),0.4,GRAYB),
-                                         ('BACKGROUND',(0,2),(-1,2),NAVY),('TOPPADDING',(0,0),(-1,-1),6),
+                tot.setStyle(TableStyle([('BOX',(0,0),(-1,1),0.6,TH['grayb']),('LINEBELOW',(0,0),(-1,1),0.4,TH['grayb']),
+                                         ('BACKGROUND',(0,2),(-1,2),TH['navy']),('TOPPADDING',(0,0),(-1,-1),6),
                                          ('BOTTOMPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(0,0),(-1,-1),10)]))
                 E.append(KeepTogether(tot)); E.append(Spacer(1, 5*mm))
 
         if _section_on(content, 'rollout') and content.get('mobilization_phases'):
             E.append(PageBreak())
-            E += [section_badge('ROLLOUT PLAN')] + heading('Mobilization Plan', S)
-            E.append(numbered_phases(content['mobilization_phases'], CW))
+            E += [section_badge('ROLLOUT PLAN', TH)] + heading('Mobilization Plan', S, TH)
+            E.append(numbered_phases(content['mobilization_phases'], CW, TH))
 
         E.append(PageBreak())
         _wr_start = len(E)
-        E += [section_badge('ASSURANCE')] + heading('Warranty, Support & General Notes', S)
+        E += [section_badge('ASSURANCE', TH)] + heading('Warranty, Support & General Notes', S, TH)
         left_bits = [Paragraph(f"<b>Warranty Coverage — {esc_p(content.get('warranty_years') or '1 Year')}</b>", ParagraphStyle('wc', fontName='Helvetica-Bold', fontSize=9.5, textColor=white))]
         left_bits.append(Spacer(1, 2*mm))
-        for b in (content.get('support_bullets') or [])[:8]:
+        for b in (content.get('support_bullets') or [])[:12]:
             left_bits.append(Paragraph(f"•  {esc_p(b)}", ParagraphStyle('wb', fontName='Helvetica', fontSize=8, textColor=white, leading=11)))
         left = Table([[left_bits]], colWidths=[CW*0.48])
-        left.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),NAVY),('TOPPADDING',(0,0),(-1,-1),10),
+        left.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),TH['navy']),('TOPPADDING',(0,0),(-1,-1),10),
                                   ('BOTTOMPADDING',(0,0),(-1,-1),10),('LEFTPADDING',(0,0),(-1,-1),10),('RIGHTPADDING',(0,0),(-1,-1),10)]))
         right_rows = []
         colors_ex = [HexColor('#fdf3d8'), HexColor('#fdeceb'), HexColor('#e9eefb')]
-        for i, ex in enumerate((content.get('exclusions') or [])[:3]):
-            box = Table([[Paragraph(f"<b>{esc_p(ex.get('title',''))}</b><br/>{esc_p(ex.get('text',''))}", ParagraphStyle('exb', fontName='Helvetica', fontSize=8, textColor=TXT, leading=11))]], colWidths=[CW*0.48])
+        # No hardcoded cap here (previously [:3]) -- the boxes just stack
+        # vertically in this single-column table, so a larger-scope
+        # proposal's extra exclusions (see SCOPE_TARGETS) render in full.
+        for i, ex in enumerate(content.get('exclusions') or []):
+            box = Table([[Paragraph(f"<b>{esc_p(ex.get('title',''))}</b><br/>{esc_p(ex.get('text',''))}", ParagraphStyle('exb', fontName='Helvetica', fontSize=8, textColor=TH['txt'], leading=11))]], colWidths=[CW*0.48])
             box.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),colors_ex[i % 3]),('TOPPADDING',(0,0),(-1,-1),7),
                                      ('BOTTOMPADDING',(0,0),(-1,-1),7),('LEFTPADDING',(0,0),(-1,-1),9),('RIGHTPADDING',(0,0),(-1,-1),9)]))
             right_rows.append([box])
@@ -980,7 +1164,7 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
         E.append(two_col); E.append(Spacer(1, 5*mm))
 
         if content.get('general_notes'):
-            E += [section_badge('FINE PRINT')] + heading('General Notes', S)
+            E += [section_badge('FINE PRINT', TH)] + heading('General Notes', S, TH)
             for n in content['general_notes']:
                 E.append(Paragraph(f"•  {esc_p(n)}", S['body']))
             E.append(Spacer(1, 4*mm))
@@ -996,13 +1180,13 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
         # standalone commercial-only document: pricing table + totals (BOM already
         # rendered above when kind=='combined', so this branch only fires for
         # kind=='commercial')
-        E += [section_badge('COMMERCIAL')] + heading('Commercial Proposal', S)
+        E += [section_badge('COMMERCIAL', TH)] + heading('Commercial Proposal', S, TH)
         for o in opts:
             secs = o.get('sections') or []
             if len(opts) > 1 and o.get('label'):
-                E.append(Paragraph(f"<b>{esc_p(o['label'])}</b>", ParagraphStyle('optl2', fontName='Helvetica-Bold', fontSize=11, textColor=NAVY)))
+                E.append(Paragraph(f"<b>{esc_p(o['label'])}</b>", ParagraphStyle('optl2', fontName='Helvetica-Bold', fontSize=11, textColor=TH['navy'])))
                 E.append(Spacer(1, 2*mm))
-            E += bom_table(secs, CW, cur, with_price=True, pricing_type=pt)
+            E += bom_table(secs, CW, cur, with_price=True, pricing_type=pt, TH=TH, img_cache=bom_img_cache)
             ts, vat_on, rate, vat, grand = calc_opt(o, pt)
             trows = [[Paragraph('Subtotal', S['body']), Paragraph(f"{cur} {fmt(ts)}", S['body_r'])],
                      [Paragraph(f"VAT {rate:g}%" if vat_on else "VAT", S['body']),
@@ -1010,8 +1194,8 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
                      [Paragraph('<b>Grand Total</b>', ParagraphStyle('gt3', parent=S['body'], textColor=white, fontSize=10.5)),
                       Paragraph(f"<b>{cur} {fmt(grand)}</b>", ParagraphStyle('gt4', parent=S['body_r'], textColor=white, fontSize=10.5))]]
             tot = Table(trows, colWidths=[CW*0.72, CW*0.28])
-            tot.setStyle(TableStyle([('BOX',(0,0),(-1,1),0.6,GRAYB),('LINEBELOW',(0,0),(-1,1),0.4,GRAYB),
-                                     ('BACKGROUND',(0,2),(-1,2),NAVY),('TOPPADDING',(0,0),(-1,-1),6),
+            tot.setStyle(TableStyle([('BOX',(0,0),(-1,1),0.6,TH['grayb']),('LINEBELOW',(0,0),(-1,1),0.4,TH['grayb']),
+                                     ('BACKGROUND',(0,2),(-1,2),TH['navy']),('TOPPADDING',(0,0),(-1,-1),6),
                                      ('BOTTOMPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(0,0),(-1,-1),10)]))
             E.append(KeepTogether(tot)); E.append(Spacer(1, 6*mm))
         E.append(Paragraph('Pricing valid for 30 days from the date of this proposal, subject to the Terms & Conditions of the associated quotation.', S['small']))

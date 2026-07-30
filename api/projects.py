@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
-import os, jwt, traceback, json, time, secrets
+import os, jwt, traceback, json, time, secrets, re
 import urllib.request, urllib.error, urllib.parse
 from datetime import datetime, timezone, timedelta
 from supabase import create_client
@@ -179,6 +179,67 @@ def _num(v, d=0.0):
     except (TypeError, ValueError):
         return d
 
+# ── PO/Bill line -> quoted (baseline) line matching ─────────────────────────
+# QTcal's own quote line items (frozen into project_baseline_lines at award
+# time) and Zoho's Item master are two separate systems with no shared ID --
+# there's no FK to join a Zoho PO/Bill line back to "the item we quoted" by
+# key, only free text (Zoho's item_name/description vs our brand/model/
+# description). This is a best-effort text match, not an exact join: it lets
+# the Cost Control view show, per PO line, what we originally quoted that
+# item to cost vs what we actually paid the distributor -- e.g. catching an
+# extra discount negotiated at PO time. Wrong is worse than blank, so this
+# only returns a match above a reasonable confidence bar; otherwise the PO
+# line still syncs and still counts toward Actual/Committed cost as before,
+# it just won't show a quoted-cost comparison.
+_WORD_RE = re.compile(r'[a-z0-9]+')
+
+def _norm_tokens(s):
+    return set(_WORD_RE.findall((s or '').lower()))
+
+def _match_baseline_line(item_name, baseline_lines):
+    """baseline_lines: [{'id','brand','model','description'}, ...] for one
+    project's frozen baseline. Brand+model both appearing as substrings in
+    the Zoho item name is treated as a confident match (AV/systems-
+    integrator item names are usually "<Brand> <Model> <description>", e.g.
+    "Sony VPL-FHZ75 Laser Projector"); otherwise falls back to word-overlap
+    against the line's description (+ brand/model as extra tokens), scored
+    as a fraction of the baseline line's own distinguishing words. Returns
+    None (no match) below a 0.5 overlap score."""
+    name = (item_name or '').lower().strip()
+    if not name or not baseline_lines:
+        return None
+    name_tokens = _norm_tokens(name)
+    best_id, best_score = None, 0.0
+    for bl in baseline_lines:
+        brand = (bl.get('brand') or '').lower().strip()
+        model = (bl.get('model') or '').lower().strip()
+        if brand and model and brand in name and model in name:
+            score = 2.0  # brand+model both present -- outranks any token-overlap score (max 1.0)
+        else:
+            desc_tokens = _norm_tokens(bl.get('description') or '') | _norm_tokens(brand) | _norm_tokens(model)
+            score = (len(name_tokens & desc_tokens) / len(desc_tokens)) if desc_tokens else 0.0
+        if score > best_score:
+            best_score, best_id = score, bl.get('id')
+    return best_id if best_score >= 0.5 else None
+
+def _project_baseline_lines(project_id):
+    """This project's frozen baseline lines (brand/model/description/costs),
+    used both to populate quotation_line_id during sync and to build the
+    PO-vs-quoted comparison in pp_project_detail(). Uses the latest baseline
+    if more than one exists (shouldn't normally happen -- a baseline is
+    frozen once at award time)."""
+    baseline_row = sb.table('project_commercial_baselines').select('id').eq('project_id', project_id)\
+        .order('created_at', desc=True).limit(1).execute()
+    if not baseline_row.data:
+        return []
+    baseline_id = baseline_row.data[0]['id']
+    sections = sb.table('project_baseline_sections').select('id').eq('baseline_id', baseline_id).execute().data or []
+    section_ids = [s['id'] for s in sections]
+    if not section_ids:
+        return []
+    return sb.table('project_baseline_lines').select('id,brand,model,description,quantity,estimated_unit_cost,estimated_total_cost')\
+        .in_('section_id', section_ids).execute().data or []
+
 def _require_pp(claims):
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
     if not has_feature(claims, 'project_performance'): return jsonify({'error': 'Feature not enabled'}), 403
@@ -256,9 +317,26 @@ def recalculate_project(company_id, project_id):
         + sum(_num(e.get('amount')) for e in expenses)
     actual_cost = po_based_cost + non_po_based_cost
 
-    pos = sb.table('zoho_purchase_orders').select('total,billed_total,status').eq('project_id', project_id).execute().data or []
-    committed_cost = sum(max(0.0, _num(po.get('total')) - _num(po.get('billed_total'))) for po in pos
-                          if (po.get('status') or '').lower() not in ('cancelled', 'void', 'deleted'))
+    pos = sb.table('zoho_purchase_orders').select('zoho_purchase_order_id,total,billed_total,status').eq('project_id', project_id).execute().data or []
+    # Committed Cost should only be the *unbilled* remainder of a PO -- but
+    # a PO's own billed_total (Zoho's total_invoiced_amount/billed_amount,
+    # captured in fetch_purchase_orders) doesn't reliably update when a Bill
+    # is entered without formally "converting" that PO in Zoho's own UI.
+    # When that happens, the same real purchase gets counted twice: once in
+    # full here as still-Committed, and again in Actual Cost above via
+    # po_based_cost (which reads the Bill's own zoho_purchase_order_id link
+    # directly). Cross-referencing that same link here and taking whichever
+    # billed figure is higher closes that gap without depending on Zoho's
+    # field being populated correctly.
+    billed_by_po = {}
+    for b in bills:
+        po_zid = b.get('zoho_purchase_order_id')
+        if po_zid:
+            billed_by_po[po_zid] = billed_by_po.get(po_zid, 0.0) + _num(b.get('total'))
+    committed_cost = sum(
+        max(0.0, _num(po.get('total')) - max(_num(po.get('billed_total')), billed_by_po.get(po.get('zoho_purchase_order_id'), 0.0)))
+        for po in pos if (po.get('status') or '').lower() not in ('cancelled', 'void', 'deleted')
+    )
 
     forecasts = sb.table('project_forecasts').select('amount').eq('project_id', project_id).eq('status', 'active').execute().data or []
     forecast_remaining = sum(_num(f.get('amount')) for f in forecasts)
@@ -499,11 +577,48 @@ def pp_project_detail(pid):
             b = breakdown.setdefault(key, {'cost_category_id': f.get('cost_category_id'), 'name': cat_name.get(f.get('cost_category_id'), 'Uncategorized'), 'actual': 0.0, 'committed': 0.0, 'forecast_remaining': 0.0})
             b['forecast_remaining'] += _num(f.get('amount'))
 
+    # PO vs Quoted Cost — every synced PO line next to the quoted (baseline)
+    # line it was matched to at sync time (see _match_baseline_line /
+    # _sync_project_actuals), so a PO that came in cheaper than what was
+    # quoted (e.g. an extra distributor discount negotiated at PO stage)
+    # shows up as a per-line saving instead of only moving the aggregate
+    # Committed Cost number. Unmatched lines still show (rate/total only) --
+    # matching is best-effort text matching, not a guaranteed join.
+    po_line_rows = sb.table('zoho_purchase_order_lines').select('*').in_('purchase_order_id', [po['id'] for po in pos]).execute().data if pos else []
+    matched_ids = list({li['quotation_line_id'] for li in po_line_rows if li.get('quotation_line_id')})
+    baseline_lookup = {}
+    if matched_ids:
+        blines = sb.table('project_baseline_lines').select('id,brand,model,description,estimated_unit_cost,estimated_total_cost')\
+            .in_('id', matched_ids).execute().data or []
+        baseline_lookup = {b['id']: b for b in blines}
+    po_by_id = {po['id']: po for po in pos}
+    po_line_comparison = []
+    for li in po_line_rows:
+        po = po_by_id.get(li.get('purchase_order_id'), {})
+        bl = baseline_lookup.get(li.get('quotation_line_id'))
+        qty = _num(li.get('quantity'), 1) or 1
+        rate = _num(li.get('rate'))
+        quoted_unit_cost = _num(bl.get('estimated_unit_cost')) if bl else None
+        # Savings are computed on the quantity actually bought via this PO
+        # (not the originally quoted quantity), so a partial PO still shows
+        # an accurate dirham figure rather than one scaled to the full BOQ line.
+        savings_amount = ((quoted_unit_cost - rate) * qty) if quoted_unit_cost is not None else None
+        savings_pct = ((quoted_unit_cost - rate) / quoted_unit_cost * 100.0) if quoted_unit_cost else None
+        po_line_comparison.append({
+            'po_number': po.get('po_number'), 'vendor_name': po.get('vendor_name'), 'po_date': po.get('po_date'),
+            'item_name': li.get('item_name'), 'quantity': qty, 'rate': rate, 'total': _num(li.get('total')),
+            'quoted_brand': bl.get('brand') if bl else None, 'quoted_model': bl.get('model') if bl else None,
+            'quoted_description': bl.get('description') if bl else None,
+            'quoted_unit_cost': quoted_unit_cost, 'quoted_total_cost': _num(bl.get('estimated_total_cost')) if bl else None,
+            'savings_amount': savings_amount, 'savings_pct': savings_pct, 'matched': bl is not None,
+        })
+
     return jsonify({
         'project': project,
         'baseline': baseline,
         'baseline_sections': baseline_sections,
         'purchase_orders': pos,
+        'po_line_comparison': po_line_comparison,
         'bills': bills,
         'expenses': expenses,
         'invoices': invoices,
@@ -917,6 +1032,14 @@ class _ZohoSync:
                 # billing -- for hourly/daily/task billing types it's a
                 # per-hour/day rate, not a project value, so don't use it there.
                 'total_project_cost': (r.get('rate') if r.get('billing_type') == 'fixed_cost_for_project' else None),
+                # Cost Budget -- Zoho's own budget_type='total_project_cost'
+                # money-based budgeting field (cost_budget_amount), confirmed
+                # against Zoho's API reference for the *create* request body
+                # in create_project() above; not yet confirmed this exact key
+                # is what a GET /projects response echoes back, so treat a
+                # None here as "check the field name" if Zoho's UI clearly
+                # shows a Cost Budget but this keeps coming back empty.
+                'cost_budget': _num(r.get('cost_budget_amount')) or None,
             })
         return out
 
@@ -935,6 +1058,7 @@ class _ZohoSync:
             'customer_name': (r.get('customer_name') or '')[:500],
             'status': r.get('status'),
             'total_project_cost': (r.get('rate') if r.get('billing_type') == 'fixed_cost_for_project' else None),
+            'cost_budget': _num(r.get('cost_budget_amount')) or None,
         }
 
 ZOHO = _ZohoSync()
@@ -956,6 +1080,9 @@ def _sync_project_actuals(company_id, project):
 
     project_id = project['id']
     results = []
+    # Fetched once per sync and reused for both PO and Bill lines below --
+    # the baseline is immutable after award, so this never changes mid-sync.
+    baseline_lines = _project_baseline_lines(project_id)
 
     def _log(resource, status, count, err=None):
         sb.table('pp_sync_logs').insert({
@@ -982,6 +1109,7 @@ def _sync_project_actuals(company_id, project):
                         'zoho_purchase_order_line_id': li.get('zoho_purchase_order_line_id'),
                         'zoho_item_id': li.get('zoho_item_id'), 'item_name': li.get('item_name'),
                         'quantity': li.get('quantity'), 'rate': li.get('rate'), 'total': li.get('total'),
+                        'quotation_line_id': _match_baseline_line(li.get('item_name'), baseline_lines),
                         'raw': li.get('raw'),
                     })
                 if line_rows:
@@ -1007,7 +1135,9 @@ def _sync_project_actuals(company_id, project):
                         'company_id': company_id, 'bill_id': bill_uuid,
                         'zoho_bill_line_id': li.get('zoho_bill_line_id'), 'zoho_item_id': li.get('zoho_item_id'),
                         'item_name': li.get('item_name'), 'quantity': li.get('quantity'),
-                        'rate': li.get('rate'), 'total': li.get('total'), 'raw': li.get('raw'),
+                        'rate': li.get('rate'), 'total': li.get('total'),
+                        'quotation_line_id': _match_baseline_line(li.get('item_name'), baseline_lines),
+                        'raw': li.get('raw'),
                     })
                 if line_rows:
                     sb.table('zoho_bill_lines').delete().in_('bill_id', list(id_by_zoho.values())).execute()
@@ -1089,6 +1219,31 @@ def _quote_baseline_for_zoho(company_id, zoho_project_id, zoho_project_no=None):
     except Exception:
         return None
 
+def _zoho_budget_baseline(zp):
+    """Fallback 'baseline' for a Zoho-imported project with no linked QTcal
+    quote (_quote_baseline_for_zoho came back empty) -- built from Zoho's
+    own project-level Revenue Budget (Total Project Cost / `rate`) and Cost
+    Budget (`cost_budget_amount`) fields instead, the same two numbers
+    Zoho's own Edit Project screen shows. Lets Original GP% show a real
+    figure for these projects instead of a permanent '--'. Deliberately
+    weaker than a quote-frozen baseline (it moves if someone edits the
+    budget fields in Zoho -- see _zoho_project_patch, which keeps it live
+    on every sync rather than freezing it), so _quote_baseline_for_zoho
+    always wins when a real quote is linked. Returns None unless both
+    figures are present and positive -- a revenue-only project falls
+    through to the older revenue-only patch below instead of showing a
+    misleading 100% GP."""
+    revenue = _num(zp.get('total_project_cost'))
+    cost = _num(zp.get('cost_budget'))
+    if revenue <= 0 or cost <= 0:
+        return None
+    gp = revenue - cost
+    return {
+        'revenue_forecast': revenue, 'original_selling_price': revenue,
+        'original_estimated_cost': cost, 'original_gp': gp,
+        'original_gp_pct': gp / revenue * 100.0,
+    }
+
 def _upsert_zoho_project(company_id, zp):
     """Create the local `projects` row for a Zoho project not seen before.
     Shared by the full portfolio import and the targeted Sync Selected
@@ -1108,13 +1263,19 @@ def _upsert_zoho_project(company_id, zp):
         # commercial baseline so Original GP% / Erosion mean something.
         insert.update(baseline)
     else:
-        cost = _num(zp.get('total_project_cost'))
-        if cost:
-            # No quote baseline exists for an imported project, so Zoho's own
-            # Total Project Cost is the best available stand-in for Value --
-            # revenue_forecast is what the Portfolio/detail Value figures read.
-            insert['revenue_forecast'] = cost
-            insert['original_selling_price'] = cost
+        # No linked quote -- fall back to Zoho's own Revenue Budget/Cost
+        # Budget fields (see _zoho_budget_baseline) so Original GP% still
+        # shows something instead of a permanent '--'.
+        budget_baseline = _zoho_budget_baseline(zp)
+        if budget_baseline:
+            insert.update(budget_baseline)
+        else:
+            cost = _num(zp.get('total_project_cost'))
+            if cost:
+                # No Cost Budget either -- Zoho's Total Project Cost is at
+                # least a stand-in for Value, just with no GP% possible.
+                insert['revenue_forecast'] = cost
+                insert['original_selling_price'] = cost
     sb.table('projects').insert(insert).execute()
 
 def _zoho_project_patch(company_id, row, zp):
@@ -1134,13 +1295,26 @@ def _zoho_project_patch(company_id, row, zp):
     # real baseline frozen from an awarded quote (original_estimated_cost>0).
     if row.get('source') == 'zoho_import' and not _num(row.get('original_estimated_cost')):
         baseline = _quote_baseline_for_zoho(company_id, zp['zoho_project_id'], zp.get('zoho_project_no'))
+        if not baseline:
+            # No linked quote -- fall back to Zoho's own Revenue Budget/Cost
+            # Budget fields so Original GP% shows a real figure instead of
+            # staying '--' forever for every Zoho-imported project.
+            baseline = _zoho_budget_baseline(zp)
         if baseline:
-            patch.update(baseline)
-        elif not _num(row.get('revenue_forecast')):
-            # No linked quote either -- fall back to Zoho's Total Project
-            # Cost as the Value stand-in, as before.
+            for k, v in baseline.items():
+                if row.get(k) != v:
+                    patch[k] = v
+        else:
+            # Neither a linked quote nor a Zoho Cost Budget -- Zoho's Total
+            # Project Cost is at least a stand-in for Value (no GP% possible
+            # without a cost figure to compare it to). Kept live on every
+            # sync (not just backfilled once when empty, as before) --
+            # otherwise an edit to Total Project Cost inside Zoho after the
+            # initial import never reaches QTcal, which is exactly what
+            # Nish hit after correcting a VAT-inclusive figure in Zoho and
+            # re-syncing: the old cached value just sat there unchanged.
             cost = _num(zp.get('total_project_cost'))
-            if cost:
+            if cost and cost != _num(row.get('revenue_forecast')):
                 patch['revenue_forecast'] = cost
                 patch['original_selling_price'] = cost
     return patch
@@ -1306,6 +1480,30 @@ def pp_run_sync():
         project = proj.data[0]
         allowed = can_manage(claims) or claims['user_id'] in (project.get('project_manager_id'), project.get('salesperson_id'))
         if not allowed: return jsonify({'error': 'Forbidden'}), 403
+        # Refresh this project's own Zoho header fields (name, customer,
+        # Project No, and -- for baseline-less imported projects -- Total
+        # Project Cost/Value) before syncing actuals below. Previously this
+        # per-project "Sync Now" button only ever synced POs/Bills/Expenses/
+        # Invoices/Payments; it never re-fetched the Zoho Project record
+        # itself, so an edit made directly in Zoho (e.g. correcting Total
+        # Project Cost) never showed up here no matter how many times this
+        # button was clicked -- only a full portfolio import or the
+        # admin-only "Sync Selected" flow ever called fetch_project/
+        # _zoho_project_patch. Best-effort: a failure here never blocks the
+        # actuals sync that follows.
+        if project.get('zoho_project_id'):
+            creds = _get_zoho_creds(company_id)
+            if creds and ZOHO.is_configured(creds):
+                try:
+                    zp = ZOHO.fetch_project(creds, project['zoho_project_id'])
+                    if zp:
+                        patch = _zoho_project_patch(company_id, project, zp)
+                        if patch:
+                            sb.table('projects').update(patch).eq('id', pid).eq('company_id', company_id).execute()
+                            _mirror_zoho_no_to_quote(company_id, project, patch)
+                            project.update(patch)
+                except Exception:
+                    traceback.print_exc()
         projects = [project]
     elif zoho_ids_filter:
         # Targeted test sync -- only the named Zoho Project IDs, so testing
