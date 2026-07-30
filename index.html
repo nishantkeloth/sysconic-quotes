@@ -4840,8 +4840,34 @@ async function saveDealModal(dealId){
   }else{
     const r=await api('POST','/api/deals',body);
     if(r.error){alert(r.error);return;}
+    // Best-effort, non-blocking: replicate this deal's customer into the
+    // Customer Master (and from there, into Zoho Books if connected) the
+    // moment the deal is created — never lets a Zoho hiccup stop the deal
+    // itself from being created.
+    if(body.customer_name && body.customer_name.trim()){
+      try{ await syncDealCustomerToZoho(body.customer_name.trim(), r.deal.id); }catch(e){}
+    }
   }
   closeDealModal();loadDealsPage();
+}
+
+// Finds or creates a Customer Master row matching this deal's typed customer
+// name, pushes it to Zoho Books (POST /api/integrations/zoho/push-customer —
+// a no-op if Zoho isn't connected for this company), then links the deal to
+// that customer record. Every step is best-effort: this must never block or
+// break deal creation, which has already succeeded by the time this runs.
+async function syncDealCustomerToZoho(name, dealId){
+  const found=await api('GET','/api/customers?limit=5&search='+encodeURIComponent(name));
+  let customer=(found.customers||[]).find(c=>(c.name||'').trim().toLowerCase()===name.toLowerCase());
+  if(!customer){
+    const created=await api('POST','/api/customers',{name});
+    if(created.error||!created.customer)return;
+    customer=created.customer;
+  }
+  if(!customer.external_contact_id){
+    await api('POST','/api/integrations/zoho/push-customer',{customer_id:customer.id});
+  }
+  await api('PUT','/api/deals/'+dealId,{customer_id:customer.id});
 }
 
 async function addDealNote(dealId){
