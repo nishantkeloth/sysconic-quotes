@@ -1027,7 +1027,7 @@ function mkItem(brand='',model='',desc='',qty=1,cost=0,disc=0,margin=0.2,discAdd
 function mkOption(label='Option 1'){
   return{id:uid(),label,customer:'',ref:'QT-2026-001',
     date:new Date().toISOString().slice(0,10),
-    by:'Rajesh TV',title:'General Manager',
+    by:(A.user?.name||''),title:'Sales Team',
     vatEnabled:true,vatRate:5,
     sections:[{id:uid(),name:'New Section',items:[mkItem()]}]
   };
@@ -2887,6 +2887,16 @@ function editorHTML(){
   const isInt=A.view==='internal';
   const IMG=imgOn();
 
+  // "Prepared by" always reflects whoever is currently logged in (not hand-typed,
+  // so it can't drift or be misattributed); "Title / Role" defaults to a generic
+  // "Sales Team" label for every user unless a quote already has something custom set.
+  let _prepDirty=false;
+  opts().forEach(op=>{
+    if(A.user?.name && op.by!==A.user.name){op.by=A.user.name;_prepDirty=true;}
+    if(!op.title||op.title==='General Manager'){op.title='Sales Team';_prepDirty=true;}
+  });
+  if(_prepDirty)schedSave();
+
   let html=`<div class="opt-pills">`;
   opts().forEach((op,i)=>html+=`<button class="opt-pill ${i===A.activeOpt?'active':''}" onclick="A.activeOpt=${i};draw()">${esc(op.label)}</button>`);
   html+=`<button class="opt-pill-add" onclick="addOpt()">+ Add option</button></div>`;
@@ -2901,8 +2911,8 @@ function editorHTML(){
     </div>
     <div class="field-grid g4">
       <div class="fld2"><label>Date</label><input type="date" value="${o.date||''}" oninput="opts()[A.activeOpt].date=this.value;schedSave()"></div>
-      <div class="fld2"><label>Prepared by</label><input value="${esc(o.by||'')}" oninput="opts()[A.activeOpt].by=this.value;schedSave()"></div>
-      <div class="fld2"><label>Title / Role</label><input value="${esc(o.title||'')}" oninput="opts()[A.activeOpt].title=this.value;schedSave()"></div>
+      <div class="fld2"><label>Prepared by</label><input value="${esc(o.by||'')}" readonly title="Automatically set to your account name"></div>
+      <div class="fld2"><label>Title / Role</label><input value="${esc(o.title||'Sales Team')}" oninput="opts()[A.activeOpt].title=this.value;schedSave()"></div>
       <div class="fld2">${zohoNo(q)?`<label>Zoho Project No</label><input value="${esc(zohoNo(q))}" readonly title="Linked Zoho Books project">`:''}</div>
     </div>
   </div>`;
