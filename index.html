@@ -1071,6 +1071,11 @@ function updateRowCalc(si,ii,activeEl){
   const setText=(id,val)=>{const el=document.getElementById(id);if(el)el.textContent=val;};
   setVal(`cost-${si}-${ii}`,it.cost);
   setVal(`unitprice-${si}-${ii}`,c.up);
+  // Keeps the Markup%/Margin% box in sync whenever Unit Price is hand-edited
+  // to hit a rounded/adjusted figure — liveCalc() already back-calculates
+  // it.margin correctly, this just makes the visible field reflect it
+  // immediately instead of only catching up on the next full redraw.
+  setVal(`margin-${si}-${ii}`,((it.margin||0)*100).toFixed(2));
   const o=opt();
   setText(`vat-${si}-${ii}`,o&&o.vatEnabled?fmtC(c.tp*(o.vatRate||5)/100):'—');
   setText(`total-${si}-${ii}`,fmtC(c.tp));
@@ -1093,17 +1098,6 @@ function calcOpt(opt){
   const vr=(opt.vatEnabled?(opt.vatRate||5):0)/100;
   const vat=ts*vr;
   return{ts,tc,tg,vat,vatRate:opt.vatRate||5,vatEnabled:!!opt.vatEnabled,grand:ts+vat,margin:ts>0?tg/ts:0};
-}
-
-// ── Unit price back-calculation ───────────────────────────────────────────────
-function onUnitPriceChange(si,ii,newUp){
-  const item=opt().sections[si].items[ii];
-  const cad=item.cost*(1-(item.disc||0)/100);
-  if(newUp>0&&cad>=0){
-    const nm=cad>0?Math.max(0,Math.min(0.99,1-(cad/newUp))):0;
-    item.margin=parseFloat(nm.toFixed(4));
-  }
-  schedSave();draw();
 }
 
 // ── API ──────────────────────────────────────────────────────────────────────
@@ -2981,7 +2975,7 @@ function editorHTML(){
           <input class="iinput" type="number" id="cost-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="cost" value="${it.cost}" oninput="liveCalc(this)" onblur="syncProductCost(${si},${ii})" placeholder="0">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="disc" value="${it.disc||0}" oninput="liveCalc(this)" placeholder="0">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="discadd" value="${it.discAdd||0}" oninput="liveCalc(this)" title="Additional discount, applied on top of Disc%" placeholder="0">
-          <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="margin" value="${((it.margin||0.2)*100).toFixed(2)}" step="0.01" oninput="liveCalc(this)" placeholder="20.00">
+          <input class="iinput" type="number" id="margin-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="margin" value="${((it.margin||0.2)*100).toFixed(2)}" step="0.01" oninput="liveCalc(this)" placeholder="20.00">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="qty" value="${it.qty||1}" oninput="liveCalc(this)" placeholder="1">
           <input class="iinput" type="text" oninput="sec(${si}).items[${ii}].uom=this.value;schedSave()" placeholder="Pcs" value="${esc(it.uom||'Pcs')}">
           <input class="iinput editable-calc" type="number" id="unitprice-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="unitprice" value="${c.up}" oninput="liveCalc(this)" title="Edit to auto-adjust markup" placeholder="0">
