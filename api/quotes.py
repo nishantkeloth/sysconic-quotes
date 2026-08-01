@@ -465,12 +465,6 @@ def update_quote(qid):
     if old_status != 'draft' and not is_transitioning and touches_content:
         return jsonify({'error': f'This quote is locked because its status is "{STATUS_LABELS_PY.get(old_status, old_status)}". Set the status back to Draft to edit it.'}), 423
 
-    # Once a quote is Awarded, its status becomes a protected checkpoint --
-    # a project may already have been created off it, so only a Company
-    # Admin can move it to a different status from here.
-    if old_status == 'awarded' and is_transitioning and claims['role'] != 'admin':
-        return jsonify({'error': 'This quote is Awarded. Only a Company Admin can change its status from here.'}), 403
-
     row = sb.table('quotes').update(update).eq('id', qid).execute()
     updated_quote = row.data[0]
     # Log status changes specifically (not every autosave — that would flood

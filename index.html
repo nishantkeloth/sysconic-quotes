@@ -2463,7 +2463,7 @@ const HELP_CONTENT={
   editor:{title:'Quote Editor',body:`
     <p>Where a quote actually gets built: customer details, one or more pricing <strong>options</strong>, and the item sections inside each option.</p>
     <h4>Quote details</h4>
-    <p>Title, Customer (type freely or search your Zoho Books customers), Option label, Quote ref, Date. <strong>Prepared by</strong> is automatic — always your own account name, not editable — and <strong>Title/Role</strong> defaults to "Sales Team" for everyone (you can still change it per quote if needed).</p>
+    <p>Title, Customer (type freely or search your Zoho Books customers), Option label, Quote ref, Date. <strong>Prepared by</strong> is set automatically to whoever created the quote and stays that way — not editable, and not affected by who else later opens or edits it — and <strong>Title/Role</strong> defaults to "Sales Team" for everyone (you can still change it per quote if needed).</p>
     <h4>Options</h4>
     <p>The pill tabs above the details card. Use these when you want to offer the customer real alternatives (e.g. "Standard" vs "Premium") priced side by side — see them compared on the <strong>Summary</strong> tab. Most quotes only need one.</p>
     <h4>Sections &amp; items</h4>
@@ -2934,12 +2934,16 @@ function editorHTML(){
   const isInt=A.view==='internal';
   const IMG=imgOn();
 
-  // "Prepared by" always reflects whoever is currently logged in (not hand-typed,
-  // so it can't drift or be misattributed); "Title / Role" defaults to a generic
-  // "Sales Team" label for every user unless a quote already has something custom set.
+  // "Prepared by" is set once, at option creation (see mkOption), to whoever
+  // created it -- it must NOT be re-synced to the current viewer on every
+  // render, or opening someone else's quote (as any admin / anyone with
+  // "view all quotes" can) silently overwrites their name with your own.
+  // Only fill it in here if it's genuinely missing (legacy rows from before
+  // this field existed). "Title / Role" similarly only resets the old
+  // "General Manager" default -- it never overwrites a custom value.
   let _prepDirty=false;
   opts().forEach(op=>{
-    if(A.user?.name && op.by!==A.user.name){op.by=A.user.name;_prepDirty=true;}
+    if(!op.by && A.user?.name){op.by=A.user.name;_prepDirty=true;}
     if(!op.title||op.title==='General Manager'){op.title='Sales Team';_prepDirty=true;}
   });
   if(_prepDirty)schedSave();
@@ -2958,7 +2962,7 @@ function editorHTML(){
     </div>
     <div class="field-grid g4">
       <div class="fld2"><label>Date</label><input type="date" value="${o.date||''}" oninput="opts()[A.activeOpt].date=this.value;schedSave()"></div>
-      <div class="fld2"><label>Prepared by</label><input value="${esc(o.by||'')}" readonly title="Automatically set to your account name"></div>
+      <div class="fld2"><label>Prepared by</label><input value="${esc(o.by||'')}" readonly title="Set once to whoever created this quote — stays fixed regardless of who edits it later"></div>
       <div class="fld2"><label>Title / Role</label><input value="${esc(o.title||'Sales Team')}" oninput="opts()[A.activeOpt].title=this.value;schedSave()"></div>
       <div class="fld2">${zohoNo(q)?`<label>Zoho Project No</label><input value="${esc(zohoNo(q))}" readonly title="Linked Zoho Books project">`:''}</div>
     </div>
