@@ -1325,6 +1325,22 @@ async function ppRetryZohoLink(){
   }
 }
 function schedSave(){if(A.reviewMode)return;if(_st)clearTimeout(_st);_st=setTimeout(saveQuote,3000);}
+// Status changes save immediately (rather than the usual 3s debounce) so a
+// rejection -- e.g. a non-admin trying to move an Awarded quote to another
+// status -- can be caught and reverted right away instead of silently
+// failing 3 seconds later with the dropdown left showing the wrong value.
+async function changeQuoteStatus(newStatus){
+  if(!A.activeQuote||A.activeQuote.status===newStatus)return;
+  const old=A.activeQuote.status;
+  A.activeQuote.status=newStatus;
+  draw();
+  const ok=await saveQuote();
+  if(!ok){
+    A.activeQuote.status=old;
+    alert(A._lastSaveError||'Could not change status.');
+    draw();
+  }
+}
 // A quote is only editable while its status is Draft — once it's Sent (or
 // manually marked Awarded/Lost), content is locked until someone flips the
 // status back to Draft. Backend enforces this too; these just drive the UI.
@@ -2818,7 +2834,7 @@ function buildCstrip(){
     <input type="number" ${locked?'disabled title="Locked — unlock the quote to change"':''} value="${A.rate}" step="0.01" onchange="A.rate=+this.value;schedSave()">
     ${A.activeQuote?`<span style="color:var(--gray-300)">|</span>
     <span class="cstrip-label">Status</span>
-    <select onchange="A.activeQuote.status=this.value;schedSave()">
+    <select onchange="changeQuoteStatus(this.value)">
       ${['draft','sent','awarded','lost'].map(s=>`<option value="${s}" ${A.activeQuote.status===s?'selected':''}>${STATUS_LABELS[s]}</option>`).join('')}
     </select>
     ${hasFeature('project_performance')&&A.activeQuote.status==='awarded'?ppCreateProjectBtnHTML():''}
