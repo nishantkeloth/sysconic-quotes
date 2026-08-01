@@ -1071,6 +1071,11 @@ function updateRowCalc(si,ii,activeEl){
   const setText=(id,val)=>{const el=document.getElementById(id);if(el)el.textContent=val;};
   setVal(`cost-${si}-${ii}`,it.cost);
   setVal(`unitprice-${si}-${ii}`,c.up);
+  // Keeps the Markup%/Margin% box in sync whenever Unit Price is hand-edited
+  // to hit a rounded/adjusted figure — liveCalc() already back-calculates
+  // it.margin correctly, this just makes the visible field reflect it
+  // immediately instead of only catching up on the next full redraw.
+  setVal(`margin-${si}-${ii}`,((it.margin||0)*100).toFixed(2));
   const o=opt();
   setText(`vat-${si}-${ii}`,o&&o.vatEnabled?fmtC(c.tp*(o.vatRate||5)/100):'—');
   setText(`total-${si}-${ii}`,fmtC(c.tp));
@@ -1093,17 +1098,6 @@ function calcOpt(opt){
   const vr=(opt.vatEnabled?(opt.vatRate||5):0)/100;
   const vat=ts*vr;
   return{ts,tc,tg,vat,vatRate:opt.vatRate||5,vatEnabled:!!opt.vatEnabled,grand:ts+vat,margin:ts>0?tg/ts:0};
-}
-
-// ── Unit price back-calculation ───────────────────────────────────────────────
-function onUnitPriceChange(si,ii,newUp){
-  const item=opt().sections[si].items[ii];
-  const cad=item.cost*(1-(item.disc||0)/100);
-  if(newUp>0&&cad>=0){
-    const nm=cad>0?Math.max(0,Math.min(0.99,1-(cad/newUp))):0;
-    item.margin=parseFloat(nm.toFixed(4));
-  }
-  schedSave();draw();
 }
 
 // ── API ──────────────────────────────────────────────────────────────────────
@@ -1331,6 +1325,22 @@ async function ppRetryZohoLink(){
   }
 }
 function schedSave(){if(A.reviewMode)return;if(_st)clearTimeout(_st);_st=setTimeout(saveQuote,3000);}
+// Status changes save immediately (rather than the usual 3s debounce) so a
+// rejection -- e.g. a non-admin trying to move an Awarded quote to another
+// status -- can be caught and reverted right away instead of silently
+// failing 3 seconds later with the dropdown left showing the wrong value.
+async function changeQuoteStatus(newStatus){
+  if(!A.activeQuote||A.activeQuote.status===newStatus)return;
+  const old=A.activeQuote.status;
+  A.activeQuote.status=newStatus;
+  draw();
+  const ok=await saveQuote();
+  if(!ok){
+    A.activeQuote.status=old;
+    alert(A._lastSaveError||'Could not change status.');
+    draw();
+  }
+}
 // A quote is only editable while its status is Draft — once it's Sent (or
 // manually marked Awarded/Lost), content is locked until someone flips the
 // status back to Draft. Backend enforces this too; these just drive the UI.
@@ -2453,7 +2463,7 @@ const HELP_CONTENT={
   editor:{title:'Quote Editor',body:`
     <p>Where a quote actually gets built: customer details, one or more pricing <strong>options</strong>, and the item sections inside each option.</p>
     <h4>Quote details</h4>
-    <p>Title, Customer (type freely or search your Zoho Books customers), Option label, Quote ref, Date. <strong>Prepared by</strong> is automatic — always your own account name, not editable — and <strong>Title/Role</strong> defaults to "Sales Team" for everyone (you can still change it per quote if needed).</p>
+    <p>Title, Customer (type freely or search your Zoho Books customers), Option label, Quote ref, Date. <strong>Prepared by</strong> is set automatically to whoever created the quote and stays that way — not editable, and not affected by who else later opens or edits it — and <strong>Title/Role</strong> defaults to "Sales Team" for everyone (you can still change it per quote if needed).</p>
     <h4>Options</h4>
     <p>The pill tabs above the details card. Use these when you want to offer the customer real alternatives (e.g. "Standard" vs "Premium") priced side by side — see them compared on the <strong>Summary</strong> tab. Most quotes only need one.</p>
     <h4>Sections &amp; items</h4>
@@ -2824,7 +2834,7 @@ function buildCstrip(){
     <input type="number" ${locked?'disabled title="Locked — unlock the quote to change"':''} value="${A.rate}" step="0.01" onchange="A.rate=+this.value;schedSave()">
     ${A.activeQuote?`<span style="color:var(--gray-300)">|</span>
     <span class="cstrip-label">Status</span>
-    <select onchange="A.activeQuote.status=this.value;schedSave()">
+    <select onchange="changeQuoteStatus(this.value)">
       ${['draft','sent','awarded','lost'].map(s=>`<option value="${s}" ${A.activeQuote.status===s?'selected':''}>${STATUS_LABELS[s]}</option>`).join('')}
     </select>
     ${hasFeature('project_performance')&&A.activeQuote.status==='awarded'?ppCreateProjectBtnHTML():''}
@@ -2924,12 +2934,16 @@ function editorHTML(){
   const isInt=A.view==='internal';
   const IMG=imgOn();
 
-  // "Prepared by" always reflects whoever is currently logged in (not hand-typed,
-  // so it can't drift or be misattributed); "Title / Role" defaults to a generic
-  // "Sales Team" label for every user unless a quote already has something custom set.
+  // "Prepared by" is set once, at option creation (see mkOption), to whoever
+  // created it -- it must NOT be re-synced to the current viewer on every
+  // render, or opening someone else's quote (as any admin / anyone with
+  // "view all quotes" can) silently overwrites their name with your own.
+  // Only fill it in here if it's genuinely missing (legacy rows from before
+  // this field existed). "Title / Role" similarly only resets the old
+  // "General Manager" default -- it never overwrites a custom value.
   let _prepDirty=false;
   opts().forEach(op=>{
-    if(A.user?.name && op.by!==A.user.name){op.by=A.user.name;_prepDirty=true;}
+    if(!op.by && A.user?.name){op.by=A.user.name;_prepDirty=true;}
     if(!op.title||op.title==='General Manager'){op.title='Sales Team';_prepDirty=true;}
   });
   if(_prepDirty)schedSave();
@@ -2948,7 +2962,7 @@ function editorHTML(){
     </div>
     <div class="field-grid g4">
       <div class="fld2"><label>Date</label><input type="date" value="${o.date||''}" oninput="opts()[A.activeOpt].date=this.value;schedSave()"></div>
-      <div class="fld2"><label>Prepared by</label><input value="${esc(o.by||'')}" readonly title="Automatically set to your account name"></div>
+      <div class="fld2"><label>Prepared by</label><input value="${esc(o.by||'')}" readonly title="Set once to whoever created this quote — stays fixed regardless of who edits it later"></div>
       <div class="fld2"><label>Title / Role</label><input value="${esc(o.title||'Sales Team')}" oninput="opts()[A.activeOpt].title=this.value;schedSave()"></div>
       <div class="fld2">${zohoNo(q)?`<label>Zoho Project No</label><input value="${esc(zohoNo(q))}" readonly title="Linked Zoho Books project">`:''}</div>
     </div>
@@ -2981,7 +2995,7 @@ function editorHTML(){
           <input class="iinput" type="number" id="cost-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="cost" value="${it.cost}" oninput="liveCalc(this)" onblur="syncProductCost(${si},${ii})" placeholder="0">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="disc" value="${it.disc||0}" oninput="liveCalc(this)" placeholder="0">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="discadd" value="${it.discAdd||0}" oninput="liveCalc(this)" title="Additional discount, applied on top of Disc%" placeholder="0">
-          <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="margin" value="${((it.margin||0.2)*100).toFixed(2)}" step="0.01" oninput="liveCalc(this)" placeholder="20.00">
+          <input class="iinput" type="number" id="margin-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="margin" value="${((it.margin||0.2)*100).toFixed(2)}" step="0.01" oninput="liveCalc(this)" placeholder="20.00">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="qty" value="${it.qty||1}" oninput="liveCalc(this)" placeholder="1">
           <input class="iinput" type="text" oninput="sec(${si}).items[${ii}].uom=this.value;schedSave()" placeholder="Pcs" value="${esc(it.uom||'Pcs')}">
           <input class="iinput editable-calc" type="number" id="unitprice-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="unitprice" value="${c.up}" oninput="liveCalc(this)" title="Edit to auto-adjust markup" placeholder="0">
