@@ -13,6 +13,8 @@
     { "src": "api/platform.py", "use": "@vercel/python" },
     { "src": "api/proposal.py", "use": "@vercel/python", "config": { "maxDuration": 60 } },
     { "src": "api/projects.py", "use": "@vercel/python" },
+{ "src": "api/fsm_assets.py", "use": "@vercel/python" },
+{ "src": "api/fsm_tickets.py", "use": "@vercel/python" },
     { "src": "api/pdf-render.js", "use": "@vercel/node", "config": { "maxLambdaSize": "250mb", "maxDuration": 30, "memory": 3009 } },
         { "src": "index.html",    "use": "@vercel/static" }
   ],
@@ -47,7 +49,11 @@
     { "src": "/api/project-performance",      "dest": "api/projects.py" },
     { "src": "/api/pp-sync/(.*)", "dest": "api/projects.py" },
     { "src": "/api/pp-sync",      "dest": "api/projects.py" },
-    { "src": "/(.*)",            "dest": "index.html" }
+{ "src": "/api/fsm_assets/(.*)", "dest": "api/fsm_assets.py" },
+{ "src": "/api/fsm_assets",      "dest": "api/fsm_assets.py" },
+{ "src": "/api/fsm_tickets/(.*)", "dest": "api/fsm_tickets.py" },
+{ "src": "/api/fsm_tickets",      "dest": "api/fsm_tickets.py" },
+{ "src": "/(.*)",            "dest": "index.html" }
   ],
   "crons": [
     { "path": "/api/integrations/run-auto-sync", "schedule": "0 3 * * *" },
