@@ -5464,14 +5464,15 @@ async function loadTeam(){
   const customRoles=rolesRes.roles||[];
   const members=r.members||[], pending=r.pending||[];
   const isAdmin=A.user?.role==='admin';
-  let html=members.map(m=>`<div class="team-member">
+  let html=members.map(m=>`<div class="team-member" style="${m.is_locked?'opacity:.6':''}">
     <div class="team-avatar">${(m.name||m.email)[0].toUpperCase()}</div>
-    <div style="flex:1;min-width:150px;overflow:hidden"><div style="font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(m.name||'—')}">${esc(m.name||'—')}</div><div style="font-size:13px;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(m.email)}">${esc(m.email)}</div></div>
+    <div style="flex:1;min-width:150px;overflow:hidden"><div style="font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(m.name||'—')}">${esc(m.name||'—')}${m.is_locked?' <span class="role-badge" style="background:var(--red-light,#fee2e2);color:var(--red,#dc2626)" title="Locked — cannot sign in">🔒 Locked</span>':''}</div><div style="font-size:13px;color:var(--gray-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(m.email)}">${esc(m.email)}</div></div>
     <div class="tm-slot tm-slot-sm">${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;white-space:nowrap" title="Eligible to be picked as a quote reviewer"><input type="checkbox" ${m.can_review?'checked':''} onchange="toggleCanReview('${m.id}',this.checked)">Reviewer</label>`:(m.can_review?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600)">Reviewer</span>`:'')}</div>
     <div class="tm-slot tm-slot-md">${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;white-space:nowrap" title="Sees every quote in the company on the dashboard, not just their own"><input type="checkbox" ${m.can_view_all_quotes?'checked':''} onchange="toggleCanViewAllQuotes('${m.id}',this.checked)">View all quotes</label>`:(m.can_view_all_quotes?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600)">Views all quotes</span>`:'')}</div>
     <div class="tm-slot tm-slot-role">${isAdmin?roleSelectHTML(m.role,`changeMemberRole('${m.id}',this.value,'${esc(m.email).replace(/'/g,"&#39;")}')`):`<span class="role-badge role-${m.role}">${m.role}</span>`}</div>
     <div class="tm-slot tm-slot-lg">${isAdmin?customRoleSelectHTML(m.role_id,customRoles,`assignCustomRole('${m.id}',this.value)`):''}</div>
     <div class="tm-slot tm-slot-lg">${isAdmin?`<button class="btn btn-sm" onclick="adminResetPassword('${m.id}','${esc(m.email).replace(/'/g,"&#39;")}')">Reset password</button>`:''}</div>
+    <div class="tm-slot tm-slot-lg">${isAdmin&&m.id!==A.user?.id?`<button class="btn btn-sm ${m.is_locked?'':'btn-red'}" onclick="toggleUserLock('${m.id}',${!!m.is_locked},'${esc(m.email).replace(/'/g,"&#39;")}')">${m.is_locked?'🔓 Unlock':'🔒 Lock'}</button>`:''}</div>
   </div>`).join('');
   if(pending.length){html+=`<div style="font-size:12px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px">Pending invites</div>`;
     html+=pending.map(p=>`<div class="team-member"><div class="team-avatar" style="background:var(--amber-light);color:var(--amber)">✉</div><div style="flex:1;min-width:150px;overflow:hidden"><div style="font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(p.email)}">${esc(p.email)}</div><div style="font-size:13px;color:var(--gray-500)">Pending</div></div>
@@ -5508,6 +5509,15 @@ async function toggleInviteCanReview(token,checked){
 async function toggleInviteCanViewAllQuotes(token,checked){
   const r=await api('PUT',`/api/auth/invites/${token}/can-view-all-quotes`,{can_view_all_quotes:checked});
   if(r.error){alert('❌ '+r.error);loadTeam();return;}
+}
+async function toggleUserLock(userId,currentlyLocked,email){
+  const msg=currentlyLocked
+    ?`Unlock ${email}'s account? They'll be able to sign in again.`
+    :`Lock ${email}'s account? They'll be signed out immediately and won't be able to sign in until you unlock them.`;
+  if(!confirm(msg))return;
+  const r=await api('PUT',`/api/auth/team/${userId}/lock`,{locked:!currentlyLocked});
+  if(r.error){alert('❌ '+r.error);loadTeam();return;}
+  loadTeam();
 }
 async function adminResetPassword(userId,email){
   if(!confirm(`Send a password reset link to ${email}?`))return;

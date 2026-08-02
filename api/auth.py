@@ -373,6 +373,8 @@ def login():
         co = sb.table('companies').select('*').eq('id', user['company_id']).execute().data[0]
         if co.get('status') == 'suspended':
             return jsonify({'error': "This company's account has been suspended. Contact your administrator."}), 403
+        if user.get('is_locked'):
+            return jsonify({'error': 'Your account has been locked by your company admin. Contact them for access.'}), 403
 
         token = make_token(user['id'], co['id'], user['role'], user.get('is_platform_admin', False), features=co.get('features') or {}, role_permissions=_resolve_role_permissions(sb, user))
         refresh_raw = create_session(sb, user['id'], request)
@@ -427,6 +429,12 @@ def refresh():
         co = sb.table('companies').select('*').eq('id', user['company_id']).execute().data[0]
         if co.get('status') == 'suspended':
             return jsonify({'error': "This company's account has been suspended. Contact your administrator."}), 403
+        if user.get('is_locked'):
+            # Belt-and-suspenders: locking already revokes every session for
+            # this user (see lock_team_member), but revoke this one too in
+            # case it was issued in the gap between then and now.
+            sb.table('sessions').update({'revoked_at': datetime.utcnow().isoformat()}).eq('id', session['id']).execute()
+            return jsonify({'error': 'Your account has been locked by your company admin. Contact them for access.'}), 403
 
         sb.table('sessions').update({'revoked_at': datetime.utcnow().isoformat()}).eq('id', session['id']).execute()
         new_raw = create_session(sb, user['id'], request)
@@ -711,7 +719,7 @@ def team():
         claims = verify_token(request)
         if not claims: return jsonify({'error': 'Unauthorized'}), 401
         if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
-        members = sb.table('users').select('id,name,email,role,role_id,created_at,is_platform_admin,can_review,can_view_all_quotes').eq('company_id', claims['company_id']).execute()
+        members = sb.table('users').select('id,name,email,role,role_id,created_at,is_platform_admin,can_review,can_view_all_quotes,is_locked').eq('company_id', claims['company_id']).execute()
         # Platform-admin accounts are excluded even if their row happens to share
         # this company_id — they're managed at the platform level, not visible
         # to (or manageable by) a regular tenant's company admin.
@@ -801,6 +809,51 @@ def update_team_can_view_all_quotes(user_id):
 
         row = sb.table('users').update({'can_view_all_quotes': can_view_all_quotes}).eq('id', user_id).execute()
         return jsonify({'user': {'id': row.data[0]['id'], 'can_view_all_quotes': row.data[0]['can_view_all_quotes']}})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# ── Lock/unlock a team member's account ─────────────────────────────────────────
+# Company-Admin-only. A locked account can't sign in or refresh its session
+# (see login()/refresh() above) but keeps its user row, role, and quote
+# history intact -- distinct from deleting/removing someone. Locking
+# immediately revokes every active session for that user so it takes effect
+# right away rather than waiting for their token to expire.
+@app.route('/api/auth/team/<user_id>/lock', methods=['PUT'])
+def update_team_lock(user_id):
+    try:
+        sb = get_sb()
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+
+        locked = bool((request.json or {}).get('locked'))
+
+        if user_id == claims['user_id']:
+            return jsonify({'error': "You can't lock your own account."}), 400
+
+        target = sb.table('users').select('id,role,is_platform_admin,is_locked').eq('id', user_id).eq('company_id', claims['company_id']).execute()
+        if not target.data:
+            return jsonify({'error': 'Team member not found'}), 404
+        if target.data[0].get('is_platform_admin'):
+            return jsonify({'error': 'This account is managed at the platform level'}), 403
+
+        if locked and target.data[0]['role'] == 'admin':
+            other_active_admins = sb.table('users').select('id', count='exact')\
+                .eq('company_id', claims['company_id']).eq('role', 'admin').eq('is_platform_admin', False)\
+                .eq('is_locked', False).neq('id', user_id).execute()
+            if (other_active_admins.count or 0) < 1:
+                return jsonify({'error': 'Cannot lock the last active admin. Promote or unlock someone else first.'}), 400
+
+        update = {'is_locked': locked, 'locked_at': datetime.utcnow().isoformat() if locked else None,
+                  'locked_by': claims['user_id'] if locked else None}
+        row = sb.table('users').update(update).eq('id', user_id).execute()
+
+        if locked:
+            sb.table('sessions').update({'revoked_at': datetime.utcnow().isoformat()})\
+                .eq('user_id', user_id).is_('revoked_at', 'null').execute()
+
+        return jsonify({'user': {'id': row.data[0]['id'], 'is_locked': row.data[0]['is_locked']}})
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
