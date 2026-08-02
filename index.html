@@ -287,6 +287,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .tm-slot-md{width:130px}
 .tm-slot-role{width:100px}
 .tm-slot-lg{width:180px}
+.tm-slot-actions{width:210px;display:flex;gap:6px;flex-shrink:0}
 .team-avatar{width:42px;height:42px;border-radius:50%;background:var(--navy-light);color:var(--navy);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;flex-shrink:0}
 
 .prod-thumb{width:36px;height:36px;border-radius:6px;border:1.5px solid var(--gray-200);display:flex;align-items:center;justify-content:center;overflow:hidden;cursor:pointer;background:var(--white);font-size:15px;margin-top:2px}
@@ -5194,7 +5195,7 @@ async function deleteRole(roleId,name){
 }
 
 
-function teamHTML(){return`<div class="card" style="max-width:1050px" id="teamCard"><div class="card-title">Team members</div><div id="teamList"><div style="color:var(--gray-500)">Loading...</div></div></div>`;}
+function teamHTML(){return`<div class="card" style="max-width:1220px;overflow-x:auto" id="teamCard"><div class="card-title">Team members</div><div id="teamList" style="min-width:1150px"><div style="color:var(--gray-500)">Loading...</div></div></div>`;}
 
 function integrationsHTML(){return`<div class="card" style="max-width:700px">
   <div class="card-title">Integrations</div>
@@ -5471,8 +5472,7 @@ async function loadTeam(){
     <div class="tm-slot tm-slot-md">${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;white-space:nowrap" title="Sees every quote in the company on the dashboard, not just their own"><input type="checkbox" ${m.can_view_all_quotes?'checked':''} onchange="toggleCanViewAllQuotes('${m.id}',this.checked)">View all quotes</label>`:(m.can_view_all_quotes?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600)">Views all quotes</span>`:'')}</div>
     <div class="tm-slot tm-slot-role">${isAdmin?roleSelectHTML(m.role,`changeMemberRole('${m.id}',this.value,'${esc(m.email).replace(/'/g,"&#39;")}')`):`<span class="role-badge role-${m.role}">${m.role}</span>`}</div>
     <div class="tm-slot tm-slot-lg">${isAdmin?customRoleSelectHTML(m.role_id,customRoles,`assignCustomRole('${m.id}',this.value)`):''}</div>
-    <div class="tm-slot tm-slot-lg">${isAdmin?`<button class="btn btn-sm" onclick="adminResetPassword('${m.id}','${esc(m.email).replace(/'/g,"&#39;")}')">Reset password</button>`:''}</div>
-    <div class="tm-slot tm-slot-lg">${isAdmin&&m.id!==A.user?.id?`<button class="btn btn-sm ${m.is_locked?'':'btn-red'}" onclick="toggleUserLock('${m.id}',${!!m.is_locked},'${esc(m.email).replace(/'/g,"&#39;")}')">${m.is_locked?'🔓 Unlock':'🔒 Lock'}</button>`:''}</div>
+    <div class="tm-slot-actions">${isAdmin?`<button class="btn btn-sm" onclick="adminResetPassword('${m.id}','${esc(m.email).replace(/'/g,"&#39;")}')">Reset password</button>`:''}${isAdmin&&m.id!==A.user?.id?`<button class="btn btn-sm ${m.is_locked?'':'btn-red'}" onclick="toggleUserLock('${m.id}',${!!m.is_locked},'${esc(m.email).replace(/'/g,"&#39;")}')">${m.is_locked?'🔓 Unlock':'🔒 Lock'}</button>`:''}</div>
   </div>`).join('');
   if(pending.length){html+=`<div style="font-size:12px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 8px">Pending invites</div>`;
     html+=pending.map(p=>`<div class="team-member"><div class="team-avatar" style="background:var(--amber-light);color:var(--amber)">✉</div><div style="flex:1;min-width:150px;overflow:hidden"><div style="font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(p.email)}">${esc(p.email)}</div><div style="font-size:13px;color:var(--gray-500)">Pending</div></div>
@@ -5480,8 +5480,12 @@ async function loadTeam(){
     <div class="tm-slot tm-slot-md">${isAdmin?`<label style="display:flex;align-items:center;gap:5px;font-size:12px;color:var(--gray-500);cursor:pointer;white-space:nowrap" title="Sees every company quote once they join, not just their own"><input type="checkbox" ${p.can_view_all_quotes?'checked':''} onchange="toggleInviteCanViewAllQuotes('${p.token}',this.checked)">View all quotes</label>`:(p.can_view_all_quotes?`<span class="role-badge" style="background:var(--gray-100);color:var(--gray-600)">Views all quotes</span>`:'')}</div>
     <div class="tm-slot tm-slot-role">${isAdmin?roleSelectHTML(p.role,`changeInviteRole('${p.token}',this.value,'${esc(p.email).replace(/'/g,"&#39;")}')`):`<span class="role-badge role-${p.role}">${p.role}</span>`}</div>
     <div class="tm-slot tm-slot-lg"></div>
-    <div class="tm-slot tm-slot-lg"></div>
+    <div class="tm-slot-actions"></div>
     </div>`).join('');}
+  // Note: member rows have one tm-slot-lg for the custom-role select, then a
+  // tm-slot-actions holding both action buttons together (Reset password +
+  // Lock/Unlock) -- matches the two placeholders above so columns stay
+  // aligned between members and pending invites.
   el.innerHTML=html||'<div style="color:var(--gray-500)">No team members yet</div>';
 }
 async function changeMemberRole(userId,newRole,email){
