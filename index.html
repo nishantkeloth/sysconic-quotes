@@ -1149,6 +1149,271 @@ async function api(method,path,body,_retried){
   }
 }
 
+// ── FSM Module 14: Customer Portal (fully separate external-facing surface) ──
+// Its own state object (P, not A) and its own fetch helper (portalApi, not
+// api()) so a portal customer's session can never mix with a staff session
+// in the same browser, and vice versa. Token persists in localStorage
+// (unlike staff auth's httpOnly-cookie model) since the portal deliberately
+// has no refresh/session-rotation infra — see api/fsm_portal.py's header
+// comment for why that's an acceptable tradeoff here.
+const PORTAL_TOKEN_KEY='sq_portal_token';
+let P={token:localStorage.getItem(PORTAL_TOKEN_KEY)||null,user:null,customer:null,companyName:null,view:'tickets',tickets:null,detail:null,sites:null,assets:null,newTicketSelfHelp:null,newTicketSelfHelpShown:false};
+
+async function portalApi(method,path,body){
+  const o={method,headers:{'Content-Type':'application/json'}};
+  if(P.token)o.headers['Authorization']='Bearer '+P.token;
+  if(body)o.body=JSON.stringify(body);
+  let r;
+  try{r=await fetch(API+path,o);}catch(e){return{error:'Network error — could not reach the server. '+(e&&e.message||'')};}
+  let text='';try{text=await r.text();}catch(e){return{error:'Server error (status '+r.status+').'};}
+  if(!text)return{};
+  try{return JSON.parse(text);}catch(e){return{error:'Server error (status '+r.status+'): '+text.slice(0,200)};}
+}
+
+function portalLogout(){
+  P.token=null;P.user=null;P.customer=null;
+  localStorage.removeItem(PORTAL_TOKEN_KEY);
+  A.screen='portalLogin';draw();
+}
+
+function portalHTML(){
+  if(A.screen==='portalLogin')return portalLoginHTML();
+  if(A.screen==='portalAcceptInvite')return portalAcceptInviteHTML();
+  return portalAppHTML();
+}
+
+function portalShellHTML(inner){
+  return `<div style="min-height:100vh;background:var(--gray-50, #f6f7fb)">
+    <div style="background:#16294f;padding:16px 24px;display:flex;justify-content:space-between;align-items:center">
+      <div style="color:#fff;font-weight:800;letter-spacing:.02em">SERVICE PORTAL${P.companyName?` · ${esc(P.companyName)}`:''}</div>
+      ${P.user?`<div style="display:flex;align-items:center;gap:14px">
+        <span style="color:rgba(255,255,255,.75);font-size:13px">${esc(P.customer?.name||'')}${P.user.name?` — ${esc(P.user.name)}`:''}</span>
+        <button class="btn btn-sm" onclick="portalLogout()">Sign Out</button>
+      </div>`:''}
+    </div>
+    <div style="max-width:900px;margin:0 auto;padding:28px 20px">${inner}</div>
+  </div>`;
+}
+
+function portalLoginHTML(){
+  return portalShellHTML(`<div class="card" style="max-width:420px;margin:40px auto">
+    <div class="card-title">Sign In</div>
+    <div id="portalLoginError" class="auth-err" style="display:none"></div>
+    <div class="fld"><label>Email</label><input id="portalEmail" class="iinput" type="email" placeholder="you@company.com"></div>
+    <div class="fld"><label>Password</label><input id="portalPassword" class="iinput" type="password" onkeydown="if(event.key==='Enter')portalLogin()"></div>
+    <button class="btn btn-navy" style="width:100%;margin-top:6px" onclick="portalLogin()">Sign In</button>
+    <p style="font-size:12px;color:var(--gray-500);margin-top:14px;text-align:center">Don't have an account? Ask your service provider to send you a portal invite.</p>
+  </div>`);
+}
+
+async function portalLogin(){
+  const email=(document.getElementById('portalEmail')?.value||'').trim();
+  const password=document.getElementById('portalPassword')?.value||'';
+  const errEl=document.getElementById('portalLoginError');
+  if(!email||!password){if(errEl){errEl.textContent='Email and password are required.';errEl.style.display='block';}return;}
+  const r=await portalApi('POST','/api/fsm_portal',{action:'login',email,password});
+  if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
+  P.token=r.token;P.user=r.user;P.customer=r.customer;P.companyName=r.company_name;
+  localStorage.setItem(PORTAL_TOKEN_KEY,r.token);
+  A.screen='portalApp';P.view='tickets';P.tickets=null;draw();loadPortalTickets();
+}
+
+function portalAcceptInviteHTML(){
+  const inv=P.inviteDetails;
+  if(inv===undefined)return portalShellHTML(`<div style="padding:40px;text-align:center;color:var(--gray-500)">Loading…</div>`);
+  if(!inv)return portalShellHTML(`<div class="card" style="max-width:420px;margin:40px auto"><div class="auth-err" style="display:block">This invite link is invalid or has already been used.</div></div>`);
+  return portalShellHTML(`<div class="card" style="max-width:420px;margin:40px auto">
+    <div class="card-title">Set Up Your Account</div>
+    <p style="font-size:13px;color:var(--gray-500);margin-bottom:16px">${esc(inv.company_name)} has invited <strong>${esc(inv.email)}</strong> to the Service Portal.</p>
+    <div id="portalAcceptError" class="auth-err" style="display:none"></div>
+    <div class="fld"><label>Your Name</label><input id="portalAcceptName" class="iinput" value="${esc(inv.name||'')}"></div>
+    <div class="fld"><label>Choose a Password</label><input id="portalAcceptPassword" class="iinput" type="password" placeholder="At least 8 characters"></div>
+    <button class="btn btn-navy" style="width:100%;margin-top:6px" onclick="portalAcceptInvite()">Set Password &amp; Sign In</button>
+  </div>`);
+}
+
+async function loadPortalInviteDetails(token){
+  P.inviteToken=token;
+  const r=await portalApi('GET','/api/fsm_portal?action=invite_details&token='+encodeURIComponent(token));
+  P.inviteDetails=r.error?null:r;
+  draw();
+}
+
+async function portalAcceptInvite(){
+  const errEl=document.getElementById('portalAcceptError');
+  const name=(document.getElementById('portalAcceptName')?.value||'').trim();
+  const password=document.getElementById('portalAcceptPassword')?.value||'';
+  if(password.length<8){if(errEl){errEl.textContent='Password must be at least 8 characters.';errEl.style.display='block';}return;}
+  const r=await portalApi('POST','/api/fsm_portal',{action:'accept_invite',token:P.inviteToken,name,password});
+  if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
+  P.token=r.token;P.user=r.user;P.customer=r.customer;
+  localStorage.setItem(PORTAL_TOKEN_KEY,r.token);
+  history.replaceState({},'',location.pathname);
+  A.screen='portalApp';P.view='tickets';P.tickets=null;draw();loadPortalTickets();
+}
+
+function portalAppHTML(){
+  const view=P.view||'tickets';
+  return portalShellHTML(`<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+      <div class="card-title" style="margin-bottom:0">My Service Tickets</div>
+      <button class="btn btn-navy" onclick="showPortalNewTicketModal()">+ New Ticket</button>
+    </div>
+    ${view==='tickets'?portalTicketsListHTML():portalTicketDetailHTML()}
+  </div>`);
+}
+
+const FSM_PORTAL_STATUS_CLASS={new:'s-sent',acknowledged:'s-sent',assigned:'s-sent',accepted:'s-sent',travelling:'s-waiting',on_site:'s-waiting',diagnosis:'s-waiting',waiting_customer:'s-waiting',waiting_parts:'s-waiting',waiting_approval:'s-waiting',resolved:'s-resolved',closed:'s-resolved',cancelled:'s-cancelled'};
+
+function portalTicketsListHTML(){
+  const list=P.tickets;
+  if(list==null)return `<div style="padding:22px;color:var(--gray-500)">Loading…</div>`;
+  if(!list.length)return `<div style="padding:28px;text-align:center;color:var(--gray-500)">No tickets yet — use "+ New Ticket" to report an issue.</div>`;
+  const cols='140px 1fr 160px 140px';
+  const rows=list.map(t=>`<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="loadPortalTicketDetail('${t.id}')">
+    <div data-label="Ticket"><strong>${esc(t.ticket_number)}</strong></div>
+    <div data-label="Subject">${esc(t.subject)}</div>
+    <div data-label="Status"><span class="sbadge ${FSM_PORTAL_STATUS_CLASS[t.status]||'s-draft'}">${esc((t.status||'').replace(/_/g,' '))}</span></div>
+    <div data-label="Opened" style="color:var(--gray-500);font-size:13px">${t.created_at?new Date(t.created_at).toLocaleDateString():''}</div>
+  </div>`).join('');
+  return `<div class="prod-hd" style="grid-template-columns:${cols}"><div>Ticket</div><div>Subject</div><div>Status</div><div>Opened</div></div>${rows}`;
+}
+
+async function loadPortalTickets(){
+  const r=await portalApi('GET','/api/fsm_portal?action=list_tickets');
+  if(r.error){P.tickets=[];alert(r.error);draw();return;}
+  P.tickets=r.tickets||[];
+  draw();
+}
+
+async function loadPortalTicketDetail(id){
+  P.view='detail';P.detail=null;draw();
+  const r=await portalApi('GET','/api/fsm_portal?action=get_ticket&id='+id);
+  if(r.error){alert(r.error);P.view='tickets';draw();return;}
+  P.detail=r.ticket;
+  draw();
+}
+
+function portalTicketDetailHTML(){
+  const t=P.detail;
+  if(!t)return `<div style="padding:22px;color:var(--gray-500)">Loading…</div>`;
+  const row=(label,val)=>val?`<div style="padding:6px 0;border-bottom:1px solid var(--gray-100);font-size:13px"><strong>${label}:</strong> ${esc(val)}</div>`:'';
+  return `<button class="btn btn-sm" style="margin-bottom:14px" onclick="P.view='tickets';draw()">← Back to tickets</button>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+      <div>
+        <div style="font-size:12px;color:var(--gray-500)">${esc(t.ticket_number)}</div>
+        <div style="font-size:17px;font-weight:700">${esc(t.subject)}</div>
+      </div>
+      <span class="sbadge ${FSM_PORTAL_STATUS_CLASS[t.status]||'s-draft'}">${esc((t.status||'').replace(/_/g,' '))}</span>
+    </div>
+    ${t.description?`<div style="font-size:13px;color:var(--gray-700);margin-bottom:14px">${esc(t.description)}</div>`:''}
+    <div style="border:1px solid var(--gray-200);border-radius:10px;padding:14px">
+      ${row('Opened',t.created_at?new Date(t.created_at).toLocaleString():'')}
+      ${row('Engineer Assigned',t.engineer_name)}
+      ${row('First Response',t.first_response_at?new Date(t.first_response_at).toLocaleString():'')}
+      ${row('Engineer On Site',t.arrived_at?new Date(t.arrived_at).toLocaleString():'')}
+      ${row('Resolved',t.resolved_at?new Date(t.resolved_at).toLocaleString():'')}
+      ${row('Closed',t.closed_at?new Date(t.closed_at).toLocaleString():'')}
+    </div>`;
+}
+
+async function showPortalNewTicketModal(){
+  if(P.sites==null){
+    const r=await portalApi('GET','/api/fsm_portal?action=list_sites');
+    P.sites=r.sites||[];
+  }
+  P.newTicketSelfHelp=null;P.newTicketSelfHelpShown=false;
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="portalTicketModalOverlay" onclick="if(event.target===this)closePortalTicketModal()">
+    <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
+      <div class="modal-title">Report an Issue</div>
+      <div id="portalTicketError" class="auth-err" style="display:none"></div>
+      <div class="fld"><label>Site <span style="color:var(--gray-500);font-weight:400">(optional)</span></label>
+        <select id="portalNewSite" class="iinput" onchange="portalTicketSiteChanged()">
+          <option value="">— None —</option>
+          ${P.sites.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="fld"><label>Equipment <span style="color:var(--gray-500);font-weight:400">(optional)</span></label>
+        <select id="portalNewAsset" class="iinput"><option value="">— None —</option></select>
+      </div>
+      <div class="fld"><label>Type</label>
+        <select id="portalNewType" class="iinput">
+          <option value="service_request">Service Request</option>
+          <option value="incident">Something's Broken (Incident)</option>
+        </select>
+      </div>
+      <div class="fld"><label>Subject</label><input id="portalNewSubject" class="iinput" placeholder="Short summary"></div>
+      <div class="fld"><label>Description</label><textarea id="portalNewDescription" class="iinput" rows="4" placeholder="What's happening?"></textarea></div>
+      <div id="portalSelfHelpBox"></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closePortalTicketModal()">Cancel</button>
+        <button class="btn btn-navy" id="portalCheckBtn" onclick="portalCheckSelfHelp()">Check for Quick Fixes</button>
+      </div>
+    </div>
+  </div>`);
+}
+function closePortalTicketModal(){const el=document.getElementById('portalTicketModalOverlay');if(el)el.remove();}
+
+async function portalTicketSiteChanged(){
+  const siteId=document.getElementById('portalNewSite')?.value;
+  const assetSel=document.getElementById('portalNewAsset');
+  if(!assetSel)return;
+  if(!siteId){assetSel.innerHTML='<option value="">— None —</option>';return;}
+  assetSel.innerHTML='<option value="">Loading…</option>';
+  const r=await portalApi('GET','/api/fsm_portal?action=list_assets&site_id='+siteId);
+  const assets=r.assets||[];
+  assetSel.innerHTML='<option value="">— None —</option>'+assets.map(a=>`<option value="${a.id}">${esc(a.asset_code)}${a.category?` — ${esc(a.category)}`:''}</option>`).join('');
+}
+
+// First click on "Check for Quick Fixes" runs the AI self-help check and
+// shows tips + the option to submit anyway. The button then flips into the
+// actual submit action so there's still just one click to actually get a
+// ticket in if the tips don't help.
+async function portalCheckSelfHelp(){
+  const subject=(document.getElementById('portalNewSubject')?.value||'').trim();
+  const description=(document.getElementById('portalNewDescription')?.value||'').trim();
+  const errEl=document.getElementById('portalTicketError');
+  if(!subject){if(errEl){errEl.textContent='Please describe the issue in the Subject field.';errEl.style.display='block';}return;}
+
+  if(P.newTicketSelfHelpShown){return createPortalTicket();}
+
+  const asset_id=document.getElementById('portalNewAsset')?.value||null;
+  const box=document.getElementById('portalSelfHelpBox');
+  const btn=document.getElementById('portalCheckBtn');
+  if(btn){btn.disabled=true;btn.textContent='Checking…';}
+  if(box)box.innerHTML='<div style="color:var(--gray-500);font-size:13px;margin-top:10px">Checking for a quick fix…</div>';
+  const r=await portalApi('POST','/api/fsm_portal',{action:'self_help',subject,description,asset_id});
+  P.newTicketSelfHelpShown=true;
+  if(btn){btn.disabled=false;btn.textContent='Submit Ticket';}
+  if(!box)return;
+  if(r.error||!r.tips||!r.tips.length){
+    box.innerHTML=`<div style="font-size:12px;color:var(--gray-500);margin-top:10px">${r.note?esc(r.note):'No quick fixes found — go ahead and submit your ticket.'}</div>`;
+    return;
+  }
+  box.innerHTML=`<div style="border:1px solid var(--gray-200);border-radius:10px;padding:14px;margin-top:10px;background:#fafbff">
+    <div style="font-size:12px;font-weight:700;color:var(--gray-500);margin-bottom:8px">✨ TRY THESE FIRST</div>
+    <ol style="margin:0 0 8px 18px;font-size:13px">${r.tips.map(t=>`<li>${esc(t)}</li>`).join('')}</ol>
+    <div style="font-size:12px;color:var(--gray-500)">${esc(r.note||'')}</div>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button class="btn btn-sm" onclick="closePortalTicketModal()">That fixed it — cancel</button>
+    </div>
+  </div>`;
+}
+
+async function createPortalTicket(){
+  const errEl=document.getElementById('portalTicketError');
+  const site_id=document.getElementById('portalNewSite')?.value||null;
+  const asset_id=document.getElementById('portalNewAsset')?.value||null;
+  const ticket_type=document.getElementById('portalNewType')?.value||'service_request';
+  const subject=(document.getElementById('portalNewSubject')?.value||'').trim();
+  const description=(document.getElementById('portalNewDescription')?.value||'').trim();
+  if(!subject){if(errEl){errEl.textContent='Subject is required.';errEl.style.display='block';}return;}
+  const r=await portalApi('POST','/api/fsm_portal',{action:'create_ticket',site_id,asset_id,ticket_type,subject,description,self_help_shown:P.newTicketSelfHelpShown});
+  if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
+  closePortalTicketModal();
+  P.tickets=null;P.view='tickets';draw();loadPortalTickets();
+}
+
 // ── Auth ─────────────────────────────────────────────────────────────────────
 async function doLogin(e){
   e.preventDefault();
@@ -2257,6 +2522,7 @@ function gridWheelScroll(e,el){
 }
 function draw(){
   document.getElementById('app').innerHTML='';
+  if(A.screen==='portalLogin'||A.screen==='portalAcceptInvite'||A.screen==='portalApp'){document.getElementById('app').innerHTML=portalHTML();return;}
   if(A.screen==='login'||A.screen==='register'){document.getElementById('app').innerHTML=authHTML();return;}
   if(A.screen==='feedbackForm'){document.getElementById('app').innerHTML=feedbackFormHTML();return;}if(A.screen==='acceptInvite'){document.getElementById('app').innerHTML=acceptInviteHTML();return;}
   if(A.screen==='forgotPassword'){document.getElementById('app').innerHTML=forgotPasswordHTML();return;}
@@ -7074,7 +7340,50 @@ function fsmDetailHTML(){
       <div class="card-title">Billing</div>
       ${fsmBillingHTML(t)}
     </div>
+    <div class="card" style="margin-top:20px">
+      <div class="card-title">Customer Portal Access</div>
+      ${fsmPortalAccessHTML(t)}
+    </div>
   </div>`;
+}
+
+// ── Module 14: Customer Portal — staff-side invite management ────────────
+function fsmPortalAccessHTML(t){
+  const p=A.fsmPortalAccess;
+  if(p===undefined){setTimeout(()=>loadFSMPortalAccess(t.customer_id),0);}
+  if(p==null)return `<div style="color:var(--gray-500);font-size:13px">Loading…</div>`;
+  const users=p.users||[],pending=p.pending_invites||[];
+  return `${users.length?users.map(u=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--gray-100);font-size:13px">
+      <div>${esc(u.name||u.email)} <span style="color:var(--gray-500)">${esc(u.email)}</span></div>
+      <span class="sbadge ${u.is_active?'s-resolved':'s-cancelled'}">${u.is_active?'Active':'Deactivated'}</span>
+    </div>`).join(''):''}
+    ${pending.length?pending.map(inv=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--gray-100);font-size:13px">
+      <div>${esc(inv.email)}</div><span class="sbadge s-waiting">Invite Pending</span>
+    </div>`).join(''):''}
+    ${!users.length&&!pending.length?`<div style="color:var(--gray-500);font-size:13px;margin-bottom:10px">This customer doesn't have portal access yet.</div>`:''}
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      <input id="fsmPortalInviteEmail" class="iinput" style="max-width:220px" placeholder="contact@customer.com">
+      <input id="fsmPortalInviteName" class="iinput" style="max-width:160px" placeholder="Contact name (optional)">
+      <button class="btn btn-sm" onclick="sendFSMPortalInvite('${t.customer_id}')">Send Portal Invite</button>
+    </div>
+    <div id="fsmPortalInviteMsg" style="font-size:12px;color:var(--gray-500);margin-top:6px"></div>`;
+}
+
+async function loadFSMPortalAccess(customerId){
+  const r=await api('GET','/api/fsm_portal?action=list_portal_users&customer_id='+customerId);
+  A.fsmPortalAccess=r.error?{users:[],pending_invites:[]}:r;
+  draw();
+}
+
+async function sendFSMPortalInvite(customerId){
+  const email=(document.getElementById('fsmPortalInviteEmail')?.value||'').trim();
+  const name=(document.getElementById('fsmPortalInviteName')?.value||'').trim();
+  const msgEl=document.getElementById('fsmPortalInviteMsg');
+  if(!email){if(msgEl)msgEl.textContent='Enter an email first.';return;}
+  const r=await api('POST','/api/fsm_portal',{action:'invite',customer_id:customerId,email,name});
+  if(r.error){if(msgEl)msgEl.textContent=r.error;return;}
+  if(msgEl)msgEl.textContent=r.message||'Invite sent.';
+  A.fsmPortalAccess=undefined;loadFSMPortalAccess(customerId);
 }
 
 const CM_TICKET_TYPES=new Set(['incident','corrective_maintenance']);
@@ -7302,7 +7611,7 @@ async function loadFSMDetail(id){
     api('GET','/api/fsm_tickets?resource=work_order&action=list&ticket_id='+id)
   ]);
   if(t.error){alert(t.error);A.page='fsm';draw();return;}
-  A.fsmDetail=t;A.fsmActivity=Array.isArray(act)?act:[];A.fsmWorkOrders=Array.isArray(wo)?wo:[];draw();
+  A.fsmDetail=t;A.fsmActivity=Array.isArray(act)?act:[];A.fsmWorkOrders=Array.isArray(wo)?wo:[];A.fsmPortalAccess=undefined;draw();
   if(A.fsmEngineers==null)loadFSMEngineers();
 }
 
@@ -7388,10 +7697,26 @@ async function updateFSMStatus(id){
   const params=new URLSearchParams(window.location.search);
   const inviteToken=params.get('invite');
   const resetToken=params.get('reset');
-  const feedbackToken=params.get('feedback');if(feedbackToken){A.screen='feedbackForm';FB.token=feedbackToken;draw();loadFeedbackDetails();}else if(inviteToken){
+  const portalInviteToken=params.get('portal_invite');
+  const isPortal=params.get('portal')==='1'||location.pathname.replace(/\/$/,'')==='/portal';
+  const feedbackToken=params.get('feedback');
+  if(feedbackToken){A.screen='feedbackForm';FB.token=feedbackToken;draw();loadFeedbackDetails();}
+  else if(portalInviteToken){
+    A.screen='portalAcceptInvite';draw();loadPortalInviteDetails(portalInviteToken);
+  }else if(inviteToken){
     A.screen='acceptInvite';INV.token=inviteToken;draw();loadInviteDetails();
   }else if(resetToken){
     A.screen='resetPassword';RST.token=resetToken;draw();
+  }else if(isPortal||P.token){
+    if(P.token){
+      A.screen='portalApp';P.view='tickets';draw();
+      portalApi('GET','/api/fsm_portal?action=me').then(r=>{
+        if(r.error){portalLogout();return;}
+        P.user=r.user;P.customer=r.customer;P.companyName=r.company_name;draw();loadPortalTickets();
+      });
+    }else{
+      A.screen='portalLogin';draw();
+    }
   }else{
     checkAuth();
   }

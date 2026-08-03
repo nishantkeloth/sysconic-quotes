@@ -23,6 +23,7 @@
 { "src": "api/fsm_reports.py", "use": "@vercel/python" },
 { "src": "api/fsm_kb.py", "use": "@vercel/python" },
 { "src": "api/fsm_ai.py", "use": "@vercel/python" },
+{ "src": "api/fsm_portal.py", "use": "@vercel/python" },
     { "src": "api/pdf-render.js", "use": "@vercel/node", "config": { "maxLambdaSize": "250mb", "maxDuration": 30, "memory": 3009 } },
         { "src": "index.html",    "use": "@vercel/static" }
   ],
@@ -77,6 +78,8 @@
 { "src": "/api/fsm_kb",      "dest": "api/fsm_kb.py" },
 { "src": "/api/fsm_ai/(.*)", "dest": "api/fsm_ai.py" },
 { "src": "/api/fsm_ai",      "dest": "api/fsm_ai.py" },
+{ "src": "/api/fsm_portal/(.*)", "dest": "api/fsm_portal.py" },
+{ "src": "/api/fsm_portal",      "dest": "api/fsm_portal.py" },
 { "src": "/(.*)",            "dest": "index.html" }
   ],
   "crons": [
