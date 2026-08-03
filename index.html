@@ -7312,7 +7312,7 @@ async function showFsmTicketModal(){
         </select>
       </div>
       <div class="fld"><label>Subject</label><input id="fsmNewSubject" class="iinput" placeholder="Short summary"></div>
-      <div class="fld"><label>Description</label><textarea id="fsmNewDescription" class="iinput" rows="4"></textarea></div>
+      <div class="fld"><label>Description</label><textarea id="fsmNewDescription" class="iinput" rows="4"></textarea>${micBtnHTML()}</div>
       <button class="btn btn-sm" onclick="fsmAiTriage()" id="fsmAiTriageBtn">✨ AI Suggest Type &amp; Priority</button>
       <div id="fsmAiTriageResult" style="font-size:12px;color:var(--gray-500);margin-top:6px"></div>
       <div class="modal-actions">
@@ -7322,7 +7322,7 @@ async function showFsmTicketModal(){
     </div>
   </div>`);
 }
-function closeFsmTicketModal(){const el=document.getElementById('fsmModalOverlay');if(el)el.remove();}
+function closeFsmTicketModal(){const el=document.getElementById('fsmModalOverlay');if(el){fsmMicStopAll(el);el.remove();}}
 
 async function fsmAiTriage(){
   const subject=(document.getElementById('fsmNewSubject')?.value||'').trim();
@@ -7814,7 +7814,7 @@ async function showFsmCompleteWorkOrderModal(woId){
             <select class="iinput" style="width:auto;font-size:12px" data-idx="${i}" data-role="chk-status">
               ${Object.entries(FSM_CHECKLIST_STATUS_LABELS).map(([k,l])=>`<option value="${k}" ${k==='completed'?'selected':''}>${l}</option>`).join('')}
             </select>
-            <input class="iinput" style="width:140px;font-size:12px" placeholder="Remarks" data-idx="${i}" data-role="chk-remarks">
+            <input class="iinput" style="width:140px;font-size:12px" placeholder="Remarks" data-idx="${i}" data-role="chk-remarks">${micBtnHTML()}
           </div>`).join('')}
         </div>
       </div>`:''}
@@ -7834,8 +7834,8 @@ async function showFsmCompleteWorkOrderModal(woId){
         </div>
         <div class="fld"><label>Customer Sign-off Name (optional)</label><input id="fsmWoCustSignName" class="iinput" placeholder="Left blank if not yet signed"></div>
       </div>
-      <div class="fld"><label>Key Observations (one per line, optional)</label><textarea id="fsmWoObservations" class="iinput" rows="2" placeholder="e.g. Cable Cubby fuse replaced in L4 Board Room"></textarea></div>
-      <div class="fld"><label>Completion Notes</label><textarea id="fsmWoCompletionNotes" class="iinput" rows="3" placeholder="What was done, findings, follow-up needed…"></textarea></div>
+      <div class="fld"><label>Key Observations (one per line, optional)</label><textarea id="fsmWoObservations" class="iinput" rows="2" placeholder="e.g. Cable Cubby fuse replaced in L4 Board Room"></textarea>${micBtnHTML()}</div>
+      <div class="fld"><label>Completion Notes</label><textarea id="fsmWoCompletionNotes" class="iinput" rows="3" placeholder="What was done, findings, follow-up needed…"></textarea>${micBtnHTML()}</div>
       <div class="modal-actions">
         <button class="btn" onclick="closeFsmCompleteWorkOrderModal()">Cancel</button>
         <button class="btn btn-navy" onclick="completeFsmWorkOrder('${woId}')">Mark Complete</button>
@@ -7844,7 +7844,7 @@ async function showFsmCompleteWorkOrderModal(woId){
   </div>`);
   loadFsmWoAssetStatuses(woId);
 }
-function closeFsmCompleteWorkOrderModal(){const el=document.getElementById('fsmWoCompleteOverlay');if(el)el.remove();A._fsmWoAssets=null;A._fsmWoAssetsWoId=null;}
+function closeFsmCompleteWorkOrderModal(){const el=document.getElementById('fsmWoCompleteOverlay');if(el){fsmMicStopAll(el);el.remove();}A._fsmWoAssets=null;A._fsmWoAssetsWoId=null;}
 
 async function loadFsmWoAssetStatuses(woId){
   const el=document.getElementById('fsmWoAssetStatus');
@@ -7866,7 +7866,7 @@ async function loadFsmWoAssetStatuses(woId){
     <select class="iinput" style="width:auto;font-size:12px" data-idx="${i}" data-role="asset-status">
       ${Object.entries(FSM_ASSET_STATUS_LABELS).map(([k,l])=>`<option value="${k}" ${a.status===k?'selected':''}>${l}</option>`).join('')}
     </select>
-    <input class="iinput" style="width:140px;font-size:12px" placeholder="Remarks" data-idx="${i}" data-role="asset-remarks" value="${esc(a.remarks||'')}">
+    <input class="iinput" style="width:140px;font-size:12px" placeholder="Remarks" data-idx="${i}" data-role="asset-remarks" value="${esc(a.remarks||'')}">${micBtnHTML()}
   </div>`).join('');
 }
 
@@ -7915,6 +7915,116 @@ async function completeFsmWorkOrder(woId){
   closeFsmCompleteWorkOrderModal();
   A._fsmWoAssets=null;
   loadFSMDetail(A.fsmDetailId);
+}
+
+// ── Voice input (dictation) for FSM free-text fields ────────────────────
+// Primary path: Web Speech API — live, instant, free, works in Chrome/Edge
+// (desktop + Android). Fallback path for browsers without it (notably iOS
+// Safari): record audio with MediaRecorder, send it to the new
+// api/fsm_ai.py `transcribe` action, which reuses the same GEMINI_API_KEY
+// already wired up for the other FSM AI features (no new vendor/cost
+// center). Every mic button is placed as the DOM sibling immediately after
+// its target input/textarea, so fsmMicToggle can find the field via
+// `previousElementSibling` without needing a unique id per field — this is
+// what lets the same button work for the dynamically-rendered per-row
+// checklist/asset remarks inputs, which don't have individual ids.
+function micBtnHTML(){
+  return `<button type="button" class="mic-btn" onclick="fsmMicToggle(this)" title="Dictate" style="margin-left:6px;border:1px solid var(--gray-300);background:#fff;border-radius:6px;width:28px;height:26px;cursor:pointer;font-size:13px;vertical-align:middle">🎤</button>`;
+}
+const FSM_SPEECH_REC = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+function fsmMicToggle(btn){
+  const target=btn.previousElementSibling;
+  if(!target)return;
+  if(btn.dataset.recording==='1'){
+    if(btn._recognition)btn._recognition.stop();
+    if(btn._recorder&&btn._recorder.state!=='inactive')btn._recorder.stop();
+    return;
+  }
+  if(FSM_SPEECH_REC){
+    fsmMicStartSpeechRecognition(btn,target);
+  }else{
+    fsmMicStartRecording(btn,target);
+  }
+}
+
+// Stops any mic button still actively recording/listening inside a given
+// container before that container is removed from the DOM. Without this, a
+// modal closed mid-dictation (Cancel, backdrop click, or the modal-reopen
+// guard in showFsmCompleteWorkOrderModal) leaves the SpeechRecognition
+// instance listening and/or the getUserMedia microphone stream open in the
+// background indefinitely, since nothing else holds a reference to stop it
+// once the button itself is detached.
+function fsmMicStopAll(container){
+  if(!container)return;
+  container.querySelectorAll('.mic-btn[data-recording="1"]').forEach(btn=>{
+    if(btn._recognition)btn._recognition.stop();
+    if(btn._recorder&&btn._recorder.state!=='inactive')btn._recorder.stop();
+  });
+}
+
+function fsmMicSetState(btn,recording){
+  btn.dataset.recording=recording?'1':'0';
+  btn.textContent=recording?'⏹':'🎤';
+  btn.style.color=recording?'#c0392b':'';
+  btn.style.borderColor=recording?'#c0392b':'';
+}
+
+function fsmMicStartSpeechRecognition(btn,target){
+  const rec=new FSM_SPEECH_REC();
+  rec.lang='en-US';
+  rec.continuous=true;
+  rec.interimResults=false;
+  const baseValue=target.value?target.value.trim()+' ':'';
+  rec.onresult=(e)=>{
+    let finalText='';
+    for(let i=e.resultIndex;i<e.results.length;i++){
+      if(e.results[i].isFinal)finalText+=e.results[i][0].transcript;
+    }
+    if(finalText)target.value=baseValue+finalText;
+  };
+  rec.onerror=()=>{fsmMicSetState(btn,false);};
+  rec.onend=()=>{fsmMicSetState(btn,false);};
+  btn._recognition=rec;
+  fsmMicSetState(btn,true);
+  try{rec.start();}catch(e){fsmMicSetState(btn,false);}
+}
+
+async function fsmMicStartRecording(btn,target){
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    const recorder=new MediaRecorder(stream);
+    const chunks=[];
+    recorder.ondataavailable=e=>{if(e.data.size>0)chunks.push(e.data);};
+    recorder.onstop=async()=>{
+      stream.getTracks().forEach(t=>t.stop());
+      const mimeType=recorder.mimeType||'audio/webm';
+      btn.textContent='⏳';
+      try{
+        const blob=new Blob(chunks,{type:mimeType});
+        const base64=await fsmBlobToBase64(blob);
+        const r=await api('POST','/api/fsm_ai',{action:'transcribe',audio_base64:base64,mime_type:mimeType});
+        if(r.error){alert(r.error);}
+        else{
+          const prefix=target.value?target.value.trim()+' ':'';
+          target.value=prefix+(r.transcript||'');
+        }
+      }catch(e){alert('Could not transcribe that recording.');}
+      finally{fsmMicSetState(btn,false);}
+    };
+    btn._recorder=recorder;
+    fsmMicSetState(btn,true);
+    recorder.start();
+  }catch(e){alert('Microphone access denied or unavailable.');}
+}
+
+function fsmBlobToBase64(blob){
+  return new Promise((resolve,reject)=>{
+    const reader=new FileReader();
+    reader.onloadend=()=>resolve(String(reader.result).split(',')[1]||'');
+    reader.onerror=reject;
+    reader.readAsDataURL(blob);
+  });
 }
 
 // ── PM Report PDF — branded service-documentation report generated from a

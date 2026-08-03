@@ -77,13 +77,17 @@ def rbac_gate():
     return None
 
 
-def _gemini(system_prompt, user_msg, max_tokens=2000):
+def _gemini(system_prompt, user_msg=None, max_tokens=2000, parts=None):
+    """parts lets a caller send non-text content (e.g. inlineData audio for
+    transcribe()) instead of the usual {"text": user_msg} — everything else
+    about the request/response shape stays identical."""
     if not GEMINI_API_KEY:
         return None, ('AI features are not configured yet (GEMINI_API_KEY is missing)', 500)
 
+    content_parts = parts if parts is not None else [{'text': user_msg}]
     body = json.dumps({
         'systemInstruction': {'parts': [{'text': system_prompt}]},
-        'contents': [{'role': 'user', 'parts': [{'text': user_msg}]}],
+        'contents': [{'role': 'user', 'parts': content_parts}],
         'generationConfig': {
             'temperature': 0.2,
             'maxOutputTokens': max_tokens,
@@ -141,6 +145,8 @@ def fsm_ai_router():
         return assign_suggest(body)
     if action == "pm_report_summary":
         return pm_report_summary(body)
+    if action == "transcribe":
+        return transcribe(body)
     return jsonify({"error": "unknown action"}), 400
 
 
@@ -483,3 +489,39 @@ def pm_report_summary(body):
         return jsonify({"error": "AI returned no summary"}), 502
 
     return jsonify({"summary_paragraphs": paragraphs})
+
+
+# ── Voice input (dictation fallback) ──────────────────────────────────────
+# Web Speech API is the primary path on the frontend (instant, free, no
+# backend call at all) for browsers that support it. This endpoint is only
+# hit as the fallback on browsers that don't (notably iOS Safari): the
+# frontend records a short voice note and sends the audio here as base64,
+# Gemini transcribes it directly (native audio input, no separate STT
+# vendor/cost center needed).
+
+TRANSCRIBE_PROMPT = """You transcribe short voice notes recorded by AV/ELV field service engineers (audio/video conferencing systems, LED walls, DSP/audio processors, control processors like Crestron/AMX/Extron, ClickShare, projectors). Transcribe exactly what is said, correcting obvious technical terms to their standard spelling (e.g. "click share" -> "ClickShare", "hdmi" -> "HDMI"). Do not add commentary, summarize, or omit anything said. If the audio is silent or unintelligible, return an empty string.
+
+Respond ONLY with valid JSON, no markdown fences: {"transcript":"..."}"""
+
+# Base64 is ~33% larger than raw bytes; this caps raw audio at roughly 15MB
+# (a several-minute voice note is nowhere near this) so a runaway recording
+# can't tie up the function on an oversized payload.
+MAX_AUDIO_BASE64_CHARS = 20_000_000
+
+
+def transcribe(body):
+    audio_b64 = body.get("audio_base64") or ""
+    mime_type = (body.get("mime_type") or "audio/webm").strip()
+    if not audio_b64:
+        return jsonify({"error": "audio_base64 required"}), 400
+    if len(audio_b64) > MAX_AUDIO_BASE64_CHARS:
+        return jsonify({"error": "Recording too long — please keep voice notes under a couple of minutes."}), 400
+
+    result, err = _gemini(
+        TRANSCRIBE_PROMPT, max_tokens=800,
+        parts=[{"inlineData": {"mimeType": mime_type, "data": audio_b64}}],
+    )
+    if err:
+        return jsonify({"error": err[0]}), err[1]
+
+    return jsonify({"transcript": str(result.get("transcript", "")).strip()[:5000]})
