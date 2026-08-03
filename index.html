@@ -5849,8 +5849,8 @@ function fsmBadge(val,map){
   return `<span class="sbadge ${cls}" style="text-transform:capitalize">${esc((val||'').replace(/_/g,' '))}</span>`;
 }
 
-const FSM_TAB_LABELS={tickets:'Tickets',schedule:'Schedule',sites:'Sites',assets:'Assets',engineers:'Engineers'};
-const FSM_NEW_BTN={tickets:['+ New Ticket','showFsmTicketModal()'],sites:['+ New Site','showFsmSiteModal()'],assets:['+ New Asset','showFsmAssetModal()'],engineers:['+ New Engineer','showFsmEngineerModal()']};
+const FSM_TAB_LABELS={tickets:'Tickets',schedule:'Schedule',maintenance:'Maintenance',sites:'Sites',assets:'Assets',engineers:'Engineers'};
+const FSM_NEW_BTN={tickets:['+ New Ticket','showFsmTicketModal()'],maintenance:['+ New PM Schedule','showFsmPmModal()'],sites:['+ New Site','showFsmSiteModal()'],assets:['+ New Asset','showFsmAssetModal()'],engineers:['+ New Engineer','showFsmEngineerModal()']};
 function fsmHTML(){
   const view=A.fsmView||'tickets';
   const newBtn=FSM_NEW_BTN[view];
@@ -5861,7 +5861,7 @@ function fsmHTML(){
       </div>
       ${newBtn?`<button class="btn btn-navy" onclick="${newBtn[1]}">${newBtn[0]}</button>`:''}
     </div>
-    ${view==='tickets'?fsmTicketsListHTML():view==='schedule'?fsmScheduleHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():fsmEngineersListHTML()}
+    ${view==='tickets'?fsmTicketsListHTML():view==='schedule'?fsmScheduleHTML():view==='maintenance'?fsmPmListHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():fsmEngineersListHTML()}
   </div>`;
 }
 
@@ -6081,6 +6081,137 @@ function fsmSwitchView(view){
   if(view==='sites'&&A.fsmSites==null)loadFSMSites();
   if(view==='assets'&&A.fsmAssets==null)loadFSMAssets();
   if(view==='schedule'&&A.fsmScheduleWO==null)loadFSMSchedule();
+  if(view==='maintenance'&&A.fsmPmSchedules==null)loadFSMPmSchedules();
+}
+
+// ── Module 8: Preventive Maintenance ─────────────────────────────────────
+const FSM_FREQUENCY_LABEL={monthly:'Monthly',quarterly:'Quarterly',half_yearly:'Half-Yearly',yearly:'Yearly'};
+const FSM_PM_CHECKLIST_SUGGESTIONS=['Verify LED wall pixel/module health, replace faulty modules','Check DSP gain staging and audio levels','Clean and inspect projector filters/lenses','Verify control system (Crestron/Extron/AMX) responsiveness','Check and update firmware versions','Inspect rack cabling and ventilation','Test audio-follow-video sync','Verify Dante/AV-over-IP network health','Inspect UPS/power conditioning'];
+
+function fsmPmListHTML(){
+  const list=A.fsmPmSchedules||null;
+  const cols='1fr 1fr 120px 130px 150px 90px';
+  const siteName=id=>{const s=(A.fsmSites||[]).find(x=>x.id===id);return s?s.name:'';};
+  const engName=id=>{const e=(A.fsmEngineers||[]).find(x=>x.id===id);return e?e.name:'';};
+  const today=new Date().toISOString().slice(0,10);
+  const rows=(list||[]).map(p=>{
+    const overdue=p.is_active&&p.next_due_date<=today;
+    return `<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="showFsmPmModal('${p.id}')">
+      <div data-label="Schedule"><strong>${esc(p.name)}</strong></div>
+      <div data-label="Site" style="color:var(--gray-500);font-size:13px">${esc(siteName(p.site_id))}</div>
+      <div data-label="Frequency" style="color:var(--gray-500);font-size:13px">${FSM_FREQUENCY_LABEL[p.frequency]||p.frequency}</div>
+      <div data-label="Next Due"><span class="sbadge ${overdue?'s-critical':'s-sent'}">${esc(p.next_due_date)}</span></div>
+      <div data-label="Engineer" style="color:var(--gray-500);font-size:13px">${esc(engName(p.assigned_engineer_id)||'—')}</div>
+      <div data-label="Active"><span class="sbadge ${p.is_active?'s-resolved':'s-cancelled'}">${p.is_active?'Active':'Paused'}</span></div>
+    </div>`;
+  }).join('');
+  const dueCount=(list||[]).filter(p=>p.is_active&&p.next_due_date<=today).length;
+  return `<div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-size:13px;color:var(--gray-500)">${dueCount} schedule${dueCount===1?'':'s'} due now</div>
+      <button class="btn btn-sm" onclick="fsmGeneratePmNow()" ${dueCount?'':'disabled'}>Generate Due Tickets Now</button>
+    </div>
+    ${list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
+    :!list.length?`<div style="padding:28px;text-align:center;color:var(--gray-500)">No PM schedules yet — add the first one.</div>`
+    :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Schedule</div><div>Site</div><div>Frequency</div><div>Next Due</div><div>Engineer</div><div>Active</div></div>${rows}`}
+  </div>`;
+}
+
+async function loadFSMPmSchedules(){
+  if(A.fsmSites==null){const sr=await api('GET','/api/fsm_assets?resource=site&action=list');A.fsmSites=Array.isArray(sr)?sr:[];}
+  if(A.fsmEngineers==null)await loadFSMEngineers();
+  const r=await api('GET','/api/fsm_pm?resource=schedule&action=list');
+  if(r.error){A.fsmPmSchedules=[];alert(r.error);draw();return;}
+  A.fsmPmSchedules=Array.isArray(r)?r:[];
+  draw();
+}
+
+async function fsmGeneratePmNow(){
+  const r=await api('POST','/api/fsm_pm?resource=schedule&action=generate_now',{});
+  if(r.error){alert(r.error);return;}
+  alert(`Generated ${r.count} ticket${r.count===1?'':'s'} from due PM schedules.`);
+  A.fsmPmSchedules=null;loadFSMPmSchedules();
+}
+
+function showFsmPmModal(pmId){
+  const p=pmId?(A.fsmPmSchedules||[]).find(x=>x.id===pmId):null;
+  const isNew=!p;
+  const sites=A.fsmSites||[];
+  const engineers=A.fsmEngineers||[];
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmPmModalOverlay" onclick="if(event.target===this)closeFsmPmModal()">
+    <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
+      <div class="modal-title">${isNew?'New PM Schedule':esc(p.name)}</div>
+      <div id="fsmPmError" class="auth-err" style="display:none"></div>
+      <div class="fld"><label>Schedule Name</label><input id="fsmPmName" class="iinput" value="${esc(p?.name||'')}" placeholder="e.g. Quarterly LED Wall Calibration"></div>
+      <div class="fld"><label>Site</label>
+        <select id="fsmPmSite" class="iinput" onchange="fsmPmSiteChanged()">
+          <option value="">— Select site —</option>
+          ${sites.map(s=>`<option value="${s.id}" ${p?.site_id===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="fld"><label>Asset <span style="color:var(--gray-500);font-weight:400">(optional — leave blank for whole-site PM)</span></label>
+        <select id="fsmPmAsset" class="iinput"><option value="">— None —</option></select>
+      </div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Frequency</label>
+          <select id="fsmPmFrequency" class="iinput">
+            ${Object.keys(FSM_FREQUENCY_LABEL).map(f=>`<option value="${f}" ${(!p&&f==='quarterly')||p?.frequency===f?'selected':''}>${FSM_FREQUENCY_LABEL[f]}</option>`).join('')}
+          </select>
+        </div>
+        <div class="fld"><label>Next Due Date</label><input id="fsmPmNextDue" type="date" class="iinput" value="${p?.next_due_date||''}"></div>
+      </div>
+      <div class="fld"><label>Default Engineer <span style="color:var(--gray-500);font-weight:400">(optional)</span></label>
+        <select id="fsmPmEngineer" class="iinput">
+          <option value="">— Unassigned —</option>
+          ${engineers.map(e=>`<option value="${e.id}" ${p?.assigned_engineer_id===e.id?'selected':''}>${esc(e.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="fld"><label>Checklist</label><textarea id="fsmPmChecklist" class="iinput" rows="4" placeholder="One item per line">${esc((p?.checklist||[]).map(c=>typeof c==='string'?c:c.text||'').join('\n'))}</textarea></div>
+      <div style="font-size:12px;color:var(--gray-500);margin-top:-6px;margin-bottom:10px">Common AV PM items: ${FSM_PM_CHECKLIST_SUGGESTIONS.slice(0,3).map(esc).join(' · ')}…</div>
+      ${!isNew?`<div class="fld"><label>Active</label><select id="fsmPmActive" class="iinput"><option value="true" ${p.is_active?'selected':''}>Active</option><option value="false" ${!p.is_active?'selected':''}>Paused</option></select></div>`:''}
+      <div class="modal-actions">
+        <button class="btn" onclick="closeFsmPmModal()">Cancel</button>
+        <button class="btn btn-navy" onclick="saveFsmPmSchedule(${isNew?'null':`'${p.id}'`})">${isNew?'Add Schedule':'Save'}</button>
+      </div>
+    </div>
+  </div>`);
+  if(p?.site_id)fsmPmSiteChanged(p.asset_id);
+}
+function closeFsmPmModal(){const el=document.getElementById('fsmPmModalOverlay');if(el)el.remove();}
+
+async function fsmPmSiteChanged(preselectAssetId){
+  const siteId=document.getElementById('fsmPmSite')?.value;
+  const assetSel=document.getElementById('fsmPmAsset');
+  if(!assetSel)return;
+  if(!siteId){assetSel.innerHTML='<option value="">— None —</option>';return;}
+  assetSel.innerHTML='<option value="">Loading…</option>';
+  const r=await api('GET','/api/fsm_assets?resource=asset&action=list&site_id='+siteId);
+  const assets=Array.isArray(r)?r:[];
+  assetSel.innerHTML='<option value="">— None —</option>'+assets.map(a=>`<option value="${a.id}" ${preselectAssetId===a.id?'selected':''}>${esc(a.asset_code)}${a.category?` — ${esc(a.category)}`:''}</option>`).join('');
+}
+
+async function saveFsmPmSchedule(pmId){
+  const errEl=document.getElementById('fsmPmError');
+  const name=(document.getElementById('fsmPmName')?.value||'').trim();
+  const site_id=document.getElementById('fsmPmSite')?.value;
+  const next_due_date=document.getElementById('fsmPmNextDue')?.value;
+  if(!name||!site_id||!next_due_date){if(errEl){errEl.textContent='Schedule Name, Site and Next Due Date are required.';errEl.style.display='block';}return;}
+  const checklist=(document.getElementById('fsmPmChecklist')?.value||'').split('\n').map(s=>s.trim()).filter(Boolean).map(text=>({text,done:false}));
+  const body={
+    name,site_id,next_due_date,
+    asset_id:document.getElementById('fsmPmAsset')?.value||null,
+    frequency:document.getElementById('fsmPmFrequency')?.value||'quarterly',
+    assigned_engineer_id:document.getElementById('fsmPmEngineer')?.value||null,
+    checklist,
+  };
+  const activeSel=document.getElementById('fsmPmActive');
+  if(activeSel)body.is_active=activeSel.value==='true';
+  const r=pmId
+    ?await api('PATCH','/api/fsm_pm?resource=schedule&action=update&id='+pmId,body)
+    :await api('POST','/api/fsm_pm?resource=schedule&action=create',body);
+  if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
+  closeFsmPmModal();
+  A.fsmPmSchedules=null;loadFSMPmSchedules();
 }
 
 // ── Module 6: Scheduling & Dispatch — drag-and-drop weekly board ───────────
