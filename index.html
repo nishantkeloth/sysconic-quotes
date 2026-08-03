@@ -2912,10 +2912,55 @@ const HELP_CONTENT={
     <p>Platform-admin only. Every company using this SaaS instance in one list.</p>
     <p><strong>+ Onboard company</strong> creates a new tenant. Suspending a company blocks that team from logging in (existing sessions may remain valid briefly) until it's reactivated.</p>
   `},
+  fsm:{title:'Field Service',body:`
+    <p>End-to-end AV/ELV field service management — tickets, engineers, scheduling, contracts, spare parts, and a self-service customer portal — built around the equipment types you actually install (LED walls, DSP/audio processors, control processors, video wall processors, projectors, matrix switchers).</p>
+    <p>Only visible if enabled for your company and your role has access — see <strong>Roles &amp; Permissions</strong>.</p>
+    <h4>Tickets</h4>
+    <p>The core record. <strong>+ New Ticket</strong> — pick Customer → Site → Asset (cascading, optional beyond Customer), Type (Incident, Service Request, Preventive/Corrective Maintenance, Inspection, Warranty, Installation Support, Change Request, Consultation), Priority, Subject, Description. Hit <strong>✨ AI Suggest Type &amp; Priority</strong> to have AI read the description and classify it for you.</p>
+    <p>A ticket moves through a fixed status lifecycle (New → Acknowledged → Assigned → Accepted → Travelling → On Site → Diagnosis → Waiting on Customer/Parts/Approval → Resolved → Closed, or Cancelled), with milestone timestamps captured automatically as it does — these drive SLA compliance reporting.</p>
+    <p><strong>Incident</strong> and <strong>Corrective Maintenance</strong> tickets get an extra Corrective Maintenance Details card: failure category, downtime, root cause, corrective/temporary/permanent fix. If the same asset gets the same type of breakdown again within 90 days, it's automatically flagged as a <strong>repeat failure</strong>.</p>
+    <h4>Schedule</h4>
+    <p>A weekly drag-and-drop board — drag a work order onto an engineer's day to assign/reschedule it, or drag it back to Unscheduled.</p>
+    <h4>Maintenance (Preventive Maintenance)</h4>
+    <p>Recurring PM schedules per site/asset (weekly/monthly/quarterly/etc., with a checklist). <strong>Generate Now</strong> creates due tickets + work orders on demand; the same logic also runs automatically every day via a scheduled job, so PM tickets show up on their own without anyone remembering to create them.</p>
+    <h4>Contracts</h4>
+    <p>Warranty, AMC, CMC, Time &amp; Material, Labour Only, Parts Only, or Fully Comprehensive, scoped to a customer or a specific site. SLA response/resolution hours set here flow automatically onto every ticket raised under that contract (see SLA below), and the contract type also sets a ticket's default billing classification.</p>
+    <h4>Billing</h4>
+    <p>Tracks classification (Warranty / AMC Included / Chargeable / Time &amp; Material / Fixed Price) and status (Pending → Quoted → Invoiced → Paid) per ticket — defaulted from the applicable contract, editable per ticket. This module only tracks status; it doesn't generate invoices — use the <strong>Quotes</strong> module for the actual document.</p>
+    <h4>SLA</h4>
+    <p>Whenever a ticket has an applicable contract with SLA hours set, response/resolution due-by timestamps are calculated automatically at creation and shown as a badge on the ticket (on track / due soon / overdue / met / missed). No contract or no SLA hours on it → no SLA badge, by design.</p>
+    <h4>Spare Parts</h4>
+    <p>Inventory with on-hand/reserved quantities, reorder level, unit cost. Every stock movement (stock in, reservation, consumption, return, warranty replacement, adjustment) is logged as a transaction and updates quantities automatically — nothing is edited directly.</p>
+    <h4>Sites &amp; Assets</h4>
+    <p>Sites are a customer's physical locations (with a site contact). Assets are the actual equipment installed there — category, brand/model, serial number, install date, warranty — and every ticket, work order and PM schedule links back to one.</p>
+    <h4>Engineers</h4>
+    <p>Your field team — skills, certifications, territory, availability (Available/Busy/On Leave/Off Duty). Assign one from a ticket's detail page, or let <strong>✨ AI Suggest</strong> rank the best fit by skill match and current open workload (a scoring calculation, not an AI call — so it can't hallucinate an engineer who doesn't exist).</p>
+    <h4>Knowledge Base</h4>
+    <p>Articles, videos, manuals, troubleshooting guides, FAQs and known errors, taggable and searchable. This is what grounds the AI Troubleshoot and customer-portal self-help suggestions below — the more it's kept current, the better those get.</p>
+    <h4>Customers (portal onboarding)</h4>
+    <p>Every customer with a <strong>Manage Access</strong> button and a live status badge (Portal Active / Portal Locked / No portal access). Send a portal invite here — typically at project handover or when a new AMC contract starts — or from inside a ticket's detail page. <strong>Lock</strong> immediately disables a customer's portal login (their next request is rejected, not just at their token's natural expiry); <strong>Unlock</strong> restores it.</p>
+    <h4>AI Capabilities</h4>
+    <p>Layered on top of the data above — no separate setup needed:</p>
+    <ul>
+      <li><strong>Triage</strong> — suggests ticket type/priority/failure category from the description (New Ticket modal).</li>
+      <li><strong>Troubleshoot</strong> — likely causes + a diagnostic checklist for a ticket, grounded in your Knowledge Base when relevant articles exist (ticket detail, CM section).</li>
+      <li><strong>Similar Tickets</strong> — surfaces past resolved tickets with the same failure/asset category and how they were actually fixed — plain retrieval, no AI guesswork.</li>
+      <li><strong>Suggest Spare Parts</strong> — picks likely-needed parts from your real inventory only; it can never suggest a part that doesn't exist.</li>
+      <li><strong>AI Suggest</strong> engineer assignment — see Engineers above.</li>
+    </ul>
+    <h4>Notifications</h4>
+    <p>Automatic emails: ticket created (to the site contact), engineer assigned (to the engineer), work completed (to the site contact), SLA warning (to the assigned engineer, when a ticket is within 2 hours of its resolution due time), and AMC/contract expiry (to company admins, 30 days out). Email only for now — no SMS/WhatsApp/push provider is configured.</p>
+    <h4>Reports</h4>
+    <p>Operational counts, engineer workload, parts consumption/cost, revenue and AMC contract value, and KPIs (avg resolution time, SLA compliance %, first-time-fix %, repeat call rate). Customer Satisfaction and Technician Utilization show as "not tracked yet" rather than a fabricated number — there's no CSAT survey or attendance-tracking mechanism feeding them yet.</p>
+    <h4>Customer Portal</h4>
+    <p>A separate, external-facing login (not this app) at <code>/portal</code> — customers see only their own tickets and can raise new ones. Before submitting, they're shown AI-generated self-resolution tips (safe, non-technical checks only — power/cable/input-selection type things, grounded in your Knowledge Base) in case the issue doesn't actually need a truck roll. Whether tips were shown gets logged on the ticket either way.</p>
+    <div class="help-tip">💡 A customer can't create or view a ticket for any customer other than their own — enforced server-side from their login, not from anything the portal page sends.</div>
+  `},
 };
-const HELP_ORDER=['dashboard','deals','editor','terms','summary','vendor','print','log','reviewQueue','testimonials','products','customers','vendorMaster','projects','projectPerformance','projectPerformanceDetail','team','integrations','companyProfile','rolesPermissions','platform'];
+const HELP_ORDER=['dashboard','deals','editor','terms','summary','vendor','print','log','reviewQueue','testimonials','products','customers','vendorMaster','projects','fsm','projectPerformance','projectPerformanceDetail','team','integrations','companyProfile','rolesPermissions','platform'];
 function currentHelpKey(){
   if(A.helpViewTopic&&HELP_CONTENT[A.helpViewTopic])return A.helpViewTopic;
+  if(A.page==='fsmDetail')return 'fsm';
   return HELP_CONTENT[A.page]?A.page:'dashboard';
 }
 function toggleHelp(){A.helpOpen=!A.helpOpen;if(!A.helpOpen)A.helpViewTopic=null;draw();}
