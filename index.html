@@ -5850,6 +5850,21 @@ function fsmBadge(val,map){
 }
 
 function fsmHTML(){
+  const view=A.fsmView||'tickets';
+  return `<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+      <div class="tab-btns">
+        <button class="tab-btn ${view==='tickets'?'active':''}" onclick="fsmSwitchView('tickets')">Tickets</button>
+        <button class="tab-btn ${view==='engineers'?'active':''}" onclick="fsmSwitchView('engineers')">Engineers</button>
+      </div>
+      ${view==='tickets'?`<button class="btn btn-navy" onclick="showFsmTicketModal()">+ New Ticket</button>`
+      :`<button class="btn btn-navy" onclick="showFsmEngineerModal()">+ New Engineer</button>`}
+    </div>
+    ${view==='tickets'?fsmTicketsListHTML():fsmEngineersListHTML()}
+  </div>`;
+}
+
+function fsmTicketsListHTML(){
   const list=A.fsmTickets||null;
   const cols='130px 1fr 170px 110px 140px 110px';
   const rows=(list||[]).map(t=>`<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="A.page='fsmDetail';A.fsmDetailId='${t.id}';A.fsmDetail=null;A.fsmActivity=null;draw();loadFSMDetail('${t.id}')">
@@ -5860,21 +5875,118 @@ function fsmHTML(){
     <div data-label="Status">${fsmBadge(t.status,FSM_STATUS_CLASS)}</div>
     <div data-label="Created" style="color:var(--gray-500);font-size:13px">${new Date(t.created_at).toLocaleDateString()}</div>
   </div>`).join('');
-  return `<div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <div class="card-title" style="margin-bottom:0">Field Service Tickets</div>
-      <button class="btn btn-navy" onclick="showFsmTicketModal()">+ New Ticket</button>
-    </div>
-    ${list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
+  return list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
     :!list.length?`<div style="padding:28px;text-align:center;color:var(--gray-500)">No tickets yet — create the first one.</div>`
-    :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Ticket #</div><div>Subject</div><div>Type</div><div>Priority</div><div>Status</div><div>Created</div></div>${rows}`}
-  </div>`;
+    :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Ticket #</div><div>Subject</div><div>Type</div><div>Priority</div><div>Status</div><div>Created</div></div>${rows}`;
+}
+
+function fsmSwitchView(view){
+  A.fsmView=view;draw();
+  if(view==='engineers'&&A.fsmEngineers==null)loadFSMEngineers();
+  if(view==='tickets'&&A.fsmTickets==null)loadFSMPage();
 }
 
 async function loadFSMPage(){
   const r=await api('GET','/api/fsm_tickets?resource=ticket&action=list');
   if(r.error){A.fsmTickets=[];alert(r.error);}else{A.fsmTickets=Array.isArray(r)?r:[];}
   draw();
+}
+
+const FSM_AVAILABILITY_CLASS={available:'s-resolved',busy:'s-waiting',on_leave:'s-draft',off_duty:'s-cancelled'};
+const FSM_COMMON_SKILLS=['LED Walls','Video Walls','DSP Programming','Audio Systems','Control Systems (Crestron/Extron/AMX)','Rack Building','Structured Cabling','Networking (AV over IP)','Projection','Videoconferencing','Digital Signage','Commissioning & Calibration'];
+const FSM_COMMON_CERTS=['CTS','CTS-I','CTS-D','Crestron DMC-E','Crestron DMC-D','Extron AV Associate','Extron AV Professional','QSC Q-SYS Level 1','QSC Q-SYS Level 2','Biamp Tesira','Dante Level 1','Dante Level 2','Dante Level 3','AVIXA Member'];
+
+function fsmEngineersListHTML(){
+  const list=A.fsmEngineers||null;
+  const cols='1fr 170px 220px 140px 130px';
+  const rows=(list||[]).map(e=>`<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="showFsmEngineerModal('${e.id}')">
+    <div data-label="Name"><strong>${esc(e.name)}</strong>${e.email?`<div style="color:var(--gray-500);font-size:12px">${esc(e.email)}</div>`:''}</div>
+    <div data-label="Territory" style="color:var(--gray-500);font-size:13px">${esc(e.territory||'')}</div>
+    <div data-label="Skills" style="color:var(--gray-500);font-size:13px">${esc((e.skills||[]).slice(0,3).join(', '))}${(e.skills||[]).length>3?'…':''}</div>
+    <div data-label="Availability">${fsmBadge(e.availability,FSM_AVAILABILITY_CLASS)}</div>
+    <div data-label="Open tickets" style="color:var(--gray-500);font-size:13px">${e.open_tickets!=null?e.open_tickets:'—'}</div>
+  </div>`).join('');
+  return list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
+    :!list.length?`<div style="padding:28px;text-align:center;color:var(--gray-500)">No engineers yet — add the first one.</div>`
+    :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Name</div><div>Territory</div><div>Skills</div><div>Availability</div><div>Open tickets</div></div>${rows}`;
+}
+
+async function loadFSMEngineers(){
+  const [list,workload]=await Promise.all([
+    api('GET','/api/fsm_engineers?resource=engineer&action=list'),
+    api('GET','/api/fsm_engineers?resource=engineer&action=workload'),
+  ]);
+  if(list.error){A.fsmEngineers=[];alert(list.error);draw();return;}
+  const wMap={};(Array.isArray(workload)?workload:[]).forEach(w=>wMap[w.id]=w.open_tickets);
+  A.fsmEngineers=(Array.isArray(list)?list:[]).map(e=>({...e,open_tickets:wMap[e.id]??0}));
+  draw();
+}
+
+function showFsmEngineerModal(engineerId){
+  const e=engineerId?(A.fsmEngineers||[]).find(x=>x.id===engineerId):null;
+  const isNew=!e;
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmEngModalOverlay" onclick="if(event.target===this)closeFsmEngineerModal()">
+    <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
+      <div class="modal-title">${isNew?'New Engineer':esc(e.name)}</div>
+      <div id="fsmEngError" class="auth-err" style="display:none"></div>
+      <div class="fld"><label>Name</label><input id="fsmEngName" class="iinput" value="${esc(e?.name||'')}" placeholder="Engineer full name"></div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Email</label><input id="fsmEngEmail" class="iinput" value="${esc(e?.email||'')}"></div>
+        <div class="fld"><label>Phone</label><input id="fsmEngPhone" class="iinput" value="${esc(e?.phone||'')}"></div>
+      </div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Territory</label><input id="fsmEngTerritory" class="iinput" value="${esc(e?.territory||'')}" placeholder="e.g. Abu Dhabi"></div>
+        <div class="fld"><label>Availability</label>
+          <select id="fsmEngAvailability" class="iinput">
+            ${['available','busy','on_leave','off_duty'].map(a=>`<option value="${a}" ${(!e&&a==='available')||e?.availability===a?'selected':''}>${a.replace(/_/g,' ')}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="fld"><label>Skills</label><input id="fsmEngSkills" class="iinput" list="fsmSkillsList" value="${esc((e?.skills||[]).join(', '))}" placeholder="Comma-separated, e.g. LED Walls, DSP Programming"></div>
+      <datalist id="fsmSkillsList">${FSM_COMMON_SKILLS.map(s=>`<option value="${esc(s)}">`).join('')}</datalist>
+      <div class="fld"><label>Certifications</label><input id="fsmEngCerts" class="iinput" list="fsmCertsList" value="${esc((e?.certifications||[]).join(', '))}" placeholder="Comma-separated, e.g. CTS, Crestron DMC-E"></div>
+      <datalist id="fsmCertsList">${FSM_COMMON_CERTS.map(c=>`<option value="${esc(c)}">`).join('')}</datalist>
+      <div class="fld"><label>Notes</label><textarea id="fsmEngNotes" class="iinput" rows="3">${esc(e?.notes||'')}</textarea></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeFsmEngineerModal()">Cancel</button>
+        ${!isNew?`<button class="btn" style="color:var(--red)" onclick="deactivateFsmEngineer('${e.id}')">Deactivate</button>`:''}
+        <button class="btn btn-navy" onclick="saveFsmEngineer(${isNew?'null':`'${e.id}'`})">${isNew?'Add Engineer':'Save'}</button>
+      </div>
+    </div>
+  </div>`);
+}
+function closeFsmEngineerModal(){const el=document.getElementById('fsmEngModalOverlay');if(el)el.remove();}
+
+function fsmSplitTags(v){return (v||'').split(',').map(s=>s.trim()).filter(Boolean);}
+
+async function saveFsmEngineer(engineerId){
+  const name=(document.getElementById('fsmEngName')?.value||'').trim();
+  const errEl=document.getElementById('fsmEngError');
+  if(!name){if(errEl){errEl.textContent='Name is required.';errEl.style.display='block';}return;}
+  const body={
+    name,
+    email:document.getElementById('fsmEngEmail')?.value||'',
+    phone:document.getElementById('fsmEngPhone')?.value||'',
+    territory:document.getElementById('fsmEngTerritory')?.value||'',
+    availability:document.getElementById('fsmEngAvailability')?.value||'available',
+    skills:fsmSplitTags(document.getElementById('fsmEngSkills')?.value),
+    certifications:fsmSplitTags(document.getElementById('fsmEngCerts')?.value),
+    notes:document.getElementById('fsmEngNotes')?.value||'',
+  };
+  const r=engineerId
+    ?await api('PATCH','/api/fsm_engineers?resource=engineer&action=update&id='+engineerId,body)
+    :await api('POST','/api/fsm_engineers?resource=engineer&action=create',body);
+  if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
+  closeFsmEngineerModal();
+  A.fsmEngineers=null;loadFSMEngineers();
+}
+
+async function deactivateFsmEngineer(engineerId){
+  if(!confirm('Deactivate this engineer? They will no longer appear in the assignment picker.'))return;
+  const r=await api('PATCH','/api/fsm_engineers?resource=engineer&action=update&id='+engineerId,{is_active:false});
+  if(r.error){alert(r.error);return;}
+  closeFsmEngineerModal();
+  A.fsmEngineers=null;loadFSMEngineers();
 }
 
 function showFsmTicketModal(){
@@ -5959,11 +6071,31 @@ function fsmDetailHTML(){
       </div>
       <div class="card">
         <div class="card-title">Assigned Engineer</div>
-        <div style="font-size:14px">${t.assigned_engineer_id?esc(t.assigned_engineer_id):'<span style="color:var(--gray-500)">Unassigned</span>'}</div>
-        <p style="font-size:12px;color:var(--gray-500);margin-top:6px">(Engineer picker not built yet — no engineer-list endpoint exists in Phase 1.)</p>
+        ${fsmEngineerPickerHTML(t)}
       </div>
     </div>
   </div>`;
+}
+
+function fsmEngineerPickerHTML(t){
+  const engineers=A.fsmEngineers;
+  if(engineers==null)return `<div style="color:var(--gray-500);font-size:13px">Loading engineers…</div>`;
+  const current=t.assigned_engineer_id;
+  const opts=engineers.map(e=>`<option value="${e.id}" ${e.id===current?'selected':''}>${esc(e.name)}${e.territory?` (${esc(e.territory)})`:''}</option>`).join('');
+  return `<select id="fsmEngineerSelect" class="iinput" style="width:auto">
+      <option value="">— Unassigned —</option>
+      ${opts}
+    </select>
+    <button class="btn btn-navy" onclick="assignFSMEngineer('${t.id}')">Assign</button>
+    ${!engineers.length?`<p style="font-size:12px;color:var(--gray-500);margin-top:6px">No engineers yet — add one from the Engineers tab.</p>`:''}`;
+}
+
+async function assignFSMEngineer(ticketId){
+  const engineerId=document.getElementById('fsmEngineerSelect')?.value;
+  if(!engineerId){alert('Pick an engineer first.');return;}
+  const r=await api('PATCH','/api/fsm_tickets?resource=ticket&action=assign&id='+ticketId,{engineer_id:engineerId});
+  if(r.error){alert(r.error);return;}
+  A.fsmDetail=null;loadFSMDetail(ticketId);
 }
 
 async function loadFSMDetail(id){
@@ -5973,6 +6105,7 @@ async function loadFSMDetail(id){
   ]);
   if(t.error){alert(t.error);A.page='fsm';draw();return;}
   A.fsmDetail=t;A.fsmActivity=Array.isArray(act)?act:[];draw();
+  if(A.fsmEngineers==null)loadFSMEngineers();
 }
 
 async function updateFSMStatus(id){
