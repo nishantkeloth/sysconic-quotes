@@ -5849,8 +5849,8 @@ function fsmBadge(val,map){
   return `<span class="sbadge ${cls}" style="text-transform:capitalize">${esc((val||'').replace(/_/g,' '))}</span>`;
 }
 
-const FSM_TAB_LABELS={tickets:'Tickets',schedule:'Schedule',maintenance:'Maintenance',contracts:'Contracts',sites:'Sites',assets:'Assets',engineers:'Engineers'};
-const FSM_NEW_BTN={tickets:['+ New Ticket','showFsmTicketModal()'],maintenance:['+ New PM Schedule','showFsmPmModal()'],contracts:['+ New Contract','showFsmContractModal()'],sites:['+ New Site','showFsmSiteModal()'],assets:['+ New Asset','showFsmAssetModal()'],engineers:['+ New Engineer','showFsmEngineerModal()']};
+const FSM_TAB_LABELS={tickets:'Tickets',schedule:'Schedule',maintenance:'Maintenance',contracts:'Contracts',parts:'Parts',sites:'Sites',assets:'Assets',engineers:'Engineers'};
+const FSM_NEW_BTN={tickets:['+ New Ticket','showFsmTicketModal()'],maintenance:['+ New PM Schedule','showFsmPmModal()'],contracts:['+ New Contract','showFsmContractModal()'],parts:['+ New Part','showFsmPartModal()'],sites:['+ New Site','showFsmSiteModal()'],assets:['+ New Asset','showFsmAssetModal()'],engineers:['+ New Engineer','showFsmEngineerModal()']};
 function fsmHTML(){
   const view=A.fsmView||'tickets';
   const newBtn=FSM_NEW_BTN[view];
@@ -5861,7 +5861,7 @@ function fsmHTML(){
       </div>
       ${newBtn?`<button class="btn btn-navy" onclick="${newBtn[1]}">${newBtn[0]}</button>`:''}
     </div>
-    ${view==='tickets'?fsmTicketsListHTML():view==='schedule'?fsmScheduleHTML():view==='maintenance'?fsmPmListHTML():view==='contracts'?fsmContractsListHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():fsmEngineersListHTML()}
+    ${view==='tickets'?fsmTicketsListHTML():view==='schedule'?fsmScheduleHTML():view==='maintenance'?fsmPmListHTML():view==='contracts'?fsmContractsListHTML():view==='parts'?fsmPartsListHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():fsmEngineersListHTML()}
   </div>`;
 }
 
@@ -6121,9 +6121,147 @@ function fsmSwitchView(view){
   if(view==='schedule'&&A.fsmScheduleWO==null)loadFSMSchedule();
   if(view==='maintenance'&&A.fsmPmSchedules==null)loadFSMPmSchedules();
   if(view==='contracts'&&A.fsmContracts==null)loadFSMContracts();
+  if(view==='parts'&&A.fsmParts==null)loadFSMParts();
 }
 
-// ── Module 10: Contract Management ──────────────────────────────────────
+// ── Module 12: Spare Parts ────────────────────────────────────────────────
+const FSM_PART_CATEGORIES=['LED Module','Power Supply','Connector/Cable','Fan/Cooling','PCB/Board','Remote/Control Unit','Lamp/Laser Module','Fuse','Bracket/Mount','Receiver Card','Sending Card'];
+const FSM_TXN_TYPE_LABEL={stock_in:'Stock In',reservation:'Reserve',release_reservation:'Release Reservation',consumption:'Consume (used on job)',return:'Return to Stock',warranty_replacement:'Warranty Replacement',adjustment:'Adjustment (+/-)'};
+
+function fsmPartsListHTML(){
+  const list=A.fsmParts||null;
+  const cols='120px 1fr 150px 90px 90px 1fr';
+  const rows=(list||[]).map(p=>{
+    const low=p.reorder_level!=null&&p.quantity_on_hand<=p.reorder_level;
+    return `<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="showFsmPartModal('${p.id}')">
+      <div data-label="Code"><strong>${esc(p.part_code)}</strong></div>
+      <div data-label="Name">${esc(p.name)}${p.category?`<div style="color:var(--gray-500);font-size:12px">${esc(p.category)}</div>`:''}</div>
+      <div data-label="Location" style="color:var(--gray-500);font-size:13px">${esc(p.stock_location||'')}</div>
+      <div data-label="On Hand"><span class="sbadge ${low?'s-critical':'s-resolved'}">${p.quantity_on_hand}</span></div>
+      <div data-label="Reserved" style="color:var(--gray-500);font-size:13px">${p.quantity_reserved||0}</div>
+      <div data-label="Supplier" style="color:var(--gray-500);font-size:13px">${esc(p.supplier||'')}</div>
+    </div>`;
+  }).join('');
+  return list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
+    :!list.length?`<div style="padding:28px;text-align:center;color:var(--gray-500)">No spare parts yet — add the first one.</div>`
+    :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Code</div><div>Name</div><div>Location</div><div>On Hand</div><div>Reserved</div><div>Supplier</div></div>${rows}`;
+}
+
+async function loadFSMParts(){
+  const r=await api('GET','/api/fsm_parts?resource=part&action=list');
+  if(r.error){A.fsmParts=[];alert(r.error);draw();return;}
+  A.fsmParts=Array.isArray(r)?r:[];
+  draw();
+}
+
+function showFsmPartModal(partId){
+  const p=partId?(A.fsmParts||[]).find(x=>x.id===partId):null;
+  const isNew=!p;
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmPartModalOverlay" onclick="if(event.target===this)closeFsmPartModal()">
+    <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
+      <div class="modal-title">${isNew?'New Spare Part':esc(p.part_code)+' — '+esc(p.name)}</div>
+      <div id="fsmPartError" class="auth-err" style="display:none"></div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Part Code</label><input id="fsmPartCode" class="iinput" value="${esc(p?.part_code||'')}" placeholder="e.g. LED-MOD-A3P" ${isNew?'':'disabled'}></div>
+        <div class="fld"><label>Category</label><input id="fsmPartCategory" class="iinput" list="fsmPartCatList" value="${esc(p?.category||'')}"></div>
+      </div>
+      <datalist id="fsmPartCatList">${FSM_PART_CATEGORIES.map(c=>`<option value="${esc(c)}">`).join('')}</datalist>
+      <div class="fld"><label>Name</label><input id="fsmPartName" class="iinput" value="${esc(p?.name||'')}" placeholder="e.g. Absen A3 Pro LED Module"></div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Manufacturer</label><input id="fsmPartMfr" class="iinput" value="${esc(p?.manufacturer||'')}"></div>
+        <div class="fld"><label>Supplier</label><input id="fsmPartSupplier" class="iinput" value="${esc(p?.supplier||'')}"></div>
+      </div>
+      <div class="fld"><label>Compatible Models</label><input id="fsmPartCompat" class="iinput" value="${esc(p?.compatible_models||'')}" placeholder="e.g. Absen A3 Pro, A2.5 Pro"></div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Stock Location</label><input id="fsmPartLocation" class="iinput" value="${esc(p?.stock_location||'')}" placeholder="e.g. Warehouse Shelf B3"></div>
+        <div class="fld"><label>Reorder Level</label><input id="fsmPartReorder" type="number" class="iinput" value="${p?.reorder_level??''}"></div>
+      </div>
+      ${isNew?`<div class="fld"><label>Initial Quantity</label><input id="fsmPartInitialQty" type="number" class="iinput" value="0"></div>
+        <div class="fld"><label>Unit Cost</label><input id="fsmPartUnitCost" type="number" class="iinput" value="${p?.unit_cost??''}"></div>`
+      :`<div class="field-grid g2" style="margin-bottom:10px">
+          <div style="font-size:13px"><strong>On Hand:</strong> ${p.quantity_on_hand}</div>
+          <div style="font-size:13px"><strong>Reserved:</strong> ${p.quantity_reserved||0}</div>
+        </div>
+        <div class="fld"><label>Unit Cost</label><input id="fsmPartUnitCost" type="number" class="iinput" value="${p?.unit_cost??''}"></div>
+        <div style="border-top:1px solid var(--gray-100);margin-top:12px;padding-top:12px">
+          <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Record Stock Movement</label>
+          <div class="field-grid g2" style="margin-bottom:8px">
+            <select id="fsmPartTxnType" class="iinput">${Object.keys(FSM_TXN_TYPE_LABEL).map(k=>`<option value="${k}">${FSM_TXN_TYPE_LABEL[k]}</option>`).join('')}</select>
+            <input id="fsmPartTxnQty" type="number" class="iinput" placeholder="Quantity">
+          </div>
+          <input id="fsmPartTxnNotes" class="iinput" placeholder="Notes (optional)" style="margin-bottom:8px">
+          <button class="btn btn-sm" onclick="recordFsmPartTransaction('${p.id}')">Record</button>
+        </div>
+        <div id="fsmPartTxnList" style="margin-top:12px;max-height:180px;overflow-y:auto"></div>`}
+      <div class="modal-actions">
+        <button class="btn" onclick="closeFsmPartModal()">Cancel</button>
+        <button class="btn btn-navy" onclick="saveFsmPart(${isNew?'null':`'${p.id}'`})">${isNew?'Add Part':'Save'}</button>
+      </div>
+    </div>
+  </div>`);
+  if(!isNew)loadFsmPartTransactions(p.id);
+}
+function closeFsmPartModal(){const el=document.getElementById('fsmPartModalOverlay');if(el)el.remove();}
+
+async function loadFsmPartTransactions(partId){
+  const el=document.getElementById('fsmPartTxnList');
+  if(!el)return;
+  const r=await api('GET','/api/fsm_parts?resource=transaction&action=list&part_id='+partId);
+  const txns=Array.isArray(r)?r:[];
+  el.innerHTML=txns.length?txns.map(t=>`<div style="padding:5px 0;border-bottom:1px solid var(--gray-100);font-size:12px">
+    <strong>${FSM_TXN_TYPE_LABEL[t.type]||t.type}</strong> — ${t.quantity} <span style="color:var(--gray-500)">${new Date(t.created_at).toLocaleString()}</span>${t.notes?`<div style="color:var(--gray-500)">${esc(t.notes)}</div>`:''}
+  </div>`).join(''):'<div style="color:var(--gray-500);font-size:12px">No stock movements yet.</div>';
+}
+
+async function recordFsmPartTransaction(partId){
+  const type=document.getElementById('fsmPartTxnType')?.value;
+  const quantity=document.getElementById('fsmPartTxnQty')?.value;
+  const notes=document.getElementById('fsmPartTxnNotes')?.value||'';
+  if(!quantity||Number(quantity)===0){alert('Enter a quantity.');return;}
+  const r=await api('POST','/api/fsm_parts?resource=transaction&action=create',{part_id:partId,type,quantity:Number(quantity),notes});
+  if(r.error){alert(r.error);return;}
+  closeFsmPartModal();
+  A.fsmParts=null;loadFSMParts();
+}
+
+async function saveFsmPart(partId){
+  const errEl=document.getElementById('fsmPartError');
+  const name=(document.getElementById('fsmPartName')?.value||'').trim();
+  if(!name){if(errEl){errEl.textContent='Name is required.';errEl.style.display='block';}return;}
+  const num=id=>{const v=document.getElementById(id)?.value;return v?Number(v):null;};
+  if(partId){
+    const body={
+      name,
+      category:document.getElementById('fsmPartCategory')?.value||'',
+      manufacturer:document.getElementById('fsmPartMfr')?.value||'',
+      supplier:document.getElementById('fsmPartSupplier')?.value||'',
+      compatible_models:document.getElementById('fsmPartCompat')?.value||'',
+      stock_location:document.getElementById('fsmPartLocation')?.value||'',
+      reorder_level:num('fsmPartReorder'),
+      unit_cost:num('fsmPartUnitCost'),
+    };
+    const r=await api('PATCH','/api/fsm_parts?resource=part&action=update&id='+partId,body);
+    if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
+  }else{
+    const part_code=(document.getElementById('fsmPartCode')?.value||'').trim();
+    if(!part_code){if(errEl){errEl.textContent='Part Code is required.';errEl.style.display='block';}return;}
+    const body={
+      part_code,name,
+      category:document.getElementById('fsmPartCategory')?.value||'',
+      manufacturer:document.getElementById('fsmPartMfr')?.value||'',
+      supplier:document.getElementById('fsmPartSupplier')?.value||'',
+      compatible_models:document.getElementById('fsmPartCompat')?.value||'',
+      stock_location:document.getElementById('fsmPartLocation')?.value||'',
+      reorder_level:num('fsmPartReorder'),
+      unit_cost:num('fsmPartUnitCost'),
+      quantity_on_hand:num('fsmPartInitialQty')||0,
+    };
+    const r=await api('POST','/api/fsm_parts?resource=part&action=create',body);
+    if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
+  }
+  closeFsmPartModal();
+  A.fsmParts=null;loadFSMParts();
+}
 const FSM_CONTRACT_TYPE_LABEL={warranty:'Warranty',amc:'AMC',cmc:'CMC',time_material:'Time & Material',labour_only:'Labour Only',parts_only:'Parts Only',fully_comprehensive:'Fully Comprehensive'};
 
 function fsmContractsListHTML(){

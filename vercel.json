@@ -18,6 +18,7 @@
 { "src": "api/fsm_engineers.py", "use": "@vercel/python" },
 { "src": "api/fsm_pm.py", "use": "@vercel/python" },
 { "src": "api/fsm_contracts.py", "use": "@vercel/python" },
+{ "src": "api/fsm_parts.py", "use": "@vercel/python" },
     { "src": "api/pdf-render.js", "use": "@vercel/node", "config": { "maxLambdaSize": "250mb", "maxDuration": 30, "memory": 3009 } },
         { "src": "index.html",    "use": "@vercel/static" }
   ],
@@ -62,6 +63,8 @@
 { "src": "/api/fsm_pm",      "dest": "api/fsm_pm.py" },
 { "src": "/api/fsm_contracts/(.*)", "dest": "api/fsm_contracts.py" },
 { "src": "/api/fsm_contracts",      "dest": "api/fsm_contracts.py" },
+{ "src": "/api/fsm_parts/(.*)", "dest": "api/fsm_parts.py" },
+{ "src": "/api/fsm_parts",      "dest": "api/fsm_parts.py" },
 { "src": "/(.*)",            "dest": "index.html" }
   ],
   "crons": [
