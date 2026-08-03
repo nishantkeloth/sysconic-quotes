@@ -139,6 +139,8 @@ def fsm_ai_router():
         return parts_suggest(body)
     if action == "assign_suggest":
         return assign_suggest(body)
+    if action == "pm_report_summary":
+        return pm_report_summary(body)
     return jsonify({"error": "unknown action"}), 400
 
 
@@ -422,3 +424,62 @@ def assign_suggest(body):
 
     scored.sort(key=lambda x: -x["score"])
     return jsonify({"suggestions": scored[:5]})
+
+
+# ── PM report executive summary (Module: PM Report generation) ───────────
+# Turns the raw checklist/asset-status numbers a completed work order already
+# has into a short client-facing narrative for the PM report PDF. Strictly
+# grounded: the prompt is given nothing but the actual counts/observations
+# computed from real data, and is explicitly told not to invent any detail
+# (a room name, a device, a finding) that isn't in the input -- this is a
+# rewriting task, not a research one, same caution as troubleshoot()'s
+# knowledge-base grounding.
+
+PM_SUMMARY_PROMPT = """You are writing the executive summary paragraph for a professional AV/ELV preventive maintenance service report, addressed to the client. You are given only real, already-verified facts from a completed service visit: checklist pass/fail counts by category, per-room status counts, the engineer's health rating, and their own observation notes.
+
+Write in a confident, professional, client-facing tone (the kind used in real vendor service documentation) — NOT a bullet-point recap. 2 short paragraphs: first paragraph covers what was done and the overall outcome; second paragraph covers any exceptions/follow-ups and the overall system health assessment.
+
+STRICT RULES:
+- Use ONLY the facts given to you. Never invent a room name, device, date, number, or finding that isn't in the input.
+- Do not exaggerate results beyond what the data shows (e.g. don't say "flawless" if there were any incomplete/issue items).
+- Keep it tight: under 130 words total.
+
+Respond ONLY with valid JSON, no markdown fences: {"summary_paragraphs":["paragraph 1", "paragraph 2"]}"""
+
+
+def pm_report_summary(body):
+    site_name = (body.get("site_name") or "").strip()
+    customer_name = (body.get("customer_name") or "").strip()
+    period = (body.get("period") or "").strip()
+    health_rating = (body.get("health_rating") or "").strip()
+    rooms_total = body.get("rooms_total")
+    rooms_passed = body.get("rooms_passed")
+    checklist_total = body.get("checklist_total")
+    checklist_completed = body.get("checklist_completed")
+    key_observations = [str(x)[:300] for x in (body.get("key_observations") or [])][:10]
+    exceptions = [str(x)[:300] for x in (body.get("exceptions") or [])][:10]
+
+    if not site_name and not customer_name:
+        return jsonify({"error": "site_name or customer_name required"}), 400
+
+    user_msg = json.dumps({
+        "customer_name": customer_name,
+        "site_name": site_name,
+        "period": period,
+        "health_rating": health_rating,
+        "rooms_total": rooms_total,
+        "rooms_passed": rooms_passed,
+        "checklist_total": checklist_total,
+        "checklist_completed": checklist_completed,
+        "key_observations": key_observations,
+        "exceptions": exceptions,
+    })
+    result, err = _gemini(PM_SUMMARY_PROMPT, user_msg, max_tokens=500)
+    if err:
+        return jsonify({"error": err[0]}), err[1]
+
+    paragraphs = [str(p)[:600] for p in (result.get("summary_paragraphs") or [])[:2]]
+    if not paragraphs:
+        return jsonify({"error": "AI returned no summary"}), 502
+
+    return jsonify({"summary_paragraphs": paragraphs})

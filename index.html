@@ -7923,7 +7923,7 @@ async function completeFsmWorkOrder(woId){
 // health rating, sign-off). Reuses the existing self-hosted /api/pdf/render2
 // route (same one downloadPDF() uses for quotes) — no new PDF backend needed.
 function fsmPmReportHTML(d){
-  const {company,ticket,wo,site,customerName,engineerName,assets}=d;
+  const {company,ticket,wo,site,customerName,engineerName,assets,aiSummary}=d;
   const rm=wo.report_meta||{};
   const checklist=(wo.checklist||[]).map(c=>typeof c==='string'?{text:c,category:'General'}:c);
   const byCategory={};
@@ -7946,9 +7946,14 @@ function fsmPmReportHTML(d){
 
   const observationsHTML=(rm.key_observations||[]).length?`<ul>${rm.key_observations.map(o=>`<li>${esc(o)}</li>`).join('')}</ul>`:'<p style="color:#888">None recorded.</p>';
 
+  const logoHTML=company?.logo_url?`<img src="${esc(company.logo_url)}" alt="" class="logo">`:'';
+  const summaryHTML=(aiSummary||[]).length?`<h2>Executive Summary</h2>${aiSummary.map(p=>`<p>${esc(p)}</p>`).join('')}`:'';
+
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
     @page{size:A4;margin:12mm 10mm 15mm 10mm}
     body{font-family:Arial,Helvetica,sans-serif;color:#1a1f2b;margin:0;padding:32px 40px}
+    .letterhead{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}
+    .logo{max-height:56px;max-width:180px;object-fit:contain}
     h1{font-size:22px;margin:0 0 4px}
     h2{font-size:16px;color:#1e3a5f;border-bottom:2px solid #1e3a5f;padding-bottom:6px;margin-top:28px}
     h3{font-size:13px;color:#1e3a5f;margin:16px 0 6px}
@@ -7968,8 +7973,15 @@ function fsmPmReportHTML(d){
     .stat span{font-size:11px;color:#667085}
     footer{margin-top:30px;font-size:11px;color:#888;border-top:1px solid #d8dce3;padding-top:10px}
   </style></head><body>
-    <h1>${esc(company?.legal_name||company?.name||'Preventive Maintenance Report')}</h1>
-    <div class="sub">Preventive Maintenance Report — ${esc(site?.name||'')}${period?` · ${esc(period)}`:''}</div>
+    <div class="letterhead">
+      <div>
+        <h1>${esc(company?.legal_name||company?.name||'Preventive Maintenance Report')}</h1>
+        <div class="sub">Preventive Maintenance Report — ${esc(site?.name||'')}${period?` · ${esc(period)}`:''}</div>
+      </div>
+      ${logoHTML}
+    </div>
+
+    ${summaryHTML}
 
     <h2>Customer Information</h2>
     <div class="meta">
@@ -8022,12 +8034,40 @@ async function downloadFsmPMReport(woId){
       api('GET','/api/fsm_tickets?resource=work_order&action=asset_statuses&id='+woId),
     ]);
     const engineer=(A.fsmEngineers||[]).find(e=>e.id===wo.engineer_id);
+    const assetList=Array.isArray(assets)?assets:[];
+    const customerName=customer?.company_name||customer?.name||'';
+
+    // AI executive summary — grounded in the same numbers the report tables
+    // already show (never given free rein to invent site/room details).
+    // Best-effort: if it fails (rate limit, no API key, etc.) the report
+    // still generates, just without this section, so a flaky AI call never
+    // blocks the actual deliverable.
+    const rm=wo.report_meta||{};
+    const checklist=(wo.checklist||[]).map(c=>typeof c==='string'?{text:c,category:'General'}:c);
+    const checklistCompleted=checklist.filter(c=>!c.status||c.status==='completed').length;
+    const exceptions=[
+      ...checklist.filter(c=>c.status&&c.status!=='completed').map(c=>`Checklist — ${c.text}: ${c.status.replace(/_/g,' ')}${c.remarks?` (${c.remarks})`:''}`),
+      ...assetList.filter(a=>a.status&&a.status!=='completed').map(a=>`${a.asset_code} — ${a.status.replace(/_/g,' ')}${a.remarks?` (${a.remarks})`:''}`),
+    ];
+    let aiSummary=[];
+    try{
+      const sr=await api('POST','/api/fsm_ai',{
+        action:'pm_report_summary',
+        customer_name:customerName, site_name:site?.name||'', period:wo.visit_date||'',
+        health_rating:rm.health_rating||'', rooms_total:assetList.length,
+        rooms_passed:assetList.filter(a=>a.status==='completed').length,
+        checklist_total:checklist.length, checklist_completed:checklistCompleted,
+        key_observations:rm.key_observations||[], exceptions,
+      });
+      if(Array.isArray(sr.summary_paragraphs))aiSummary=sr.summary_paragraphs;
+    }catch(e){/* non-fatal — report still generates without the AI summary */}
 
     const html=fsmPmReportHTML({
       company:PRINTCO, ticket:t, wo, site,
-      customerName:customer?.company_name||customer?.name||'',
+      customerName,
       engineerName:engineer?.name||'',
-      assets:Array.isArray(assets)?assets:[],
+      assets:assetList,
+      aiSummary,
     });
 
     const r=await api2Blob('/api/pdf/render2',{html,filename:`PM-Report-${t.ticket_number||woId.slice(0,8)}.pdf`});
