@@ -5849,18 +5849,19 @@ function fsmBadge(val,map){
   return `<span class="sbadge ${cls}" style="text-transform:capitalize">${esc((val||'').replace(/_/g,' '))}</span>`;
 }
 
+const FSM_TAB_LABELS={tickets:'Tickets',sites:'Sites',assets:'Assets',engineers:'Engineers'};
+const FSM_NEW_BTN={tickets:['+ New Ticket','showFsmTicketModal()'],sites:['+ New Site','showFsmSiteModal()'],assets:['+ New Asset','showFsmAssetModal()'],engineers:['+ New Engineer','showFsmEngineerModal()']};
 function fsmHTML(){
   const view=A.fsmView||'tickets';
+  const [btnLabel,btnAction]=FSM_NEW_BTN[view];
   return `<div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
       <div class="tab-btns">
-        <button class="tab-btn ${view==='tickets'?'active':''}" onclick="fsmSwitchView('tickets')">Tickets</button>
-        <button class="tab-btn ${view==='engineers'?'active':''}" onclick="fsmSwitchView('engineers')">Engineers</button>
+        ${Object.keys(FSM_TAB_LABELS).map(k=>`<button class="tab-btn ${view===k?'active':''}" onclick="fsmSwitchView('${k}')">${FSM_TAB_LABELS[k]}</button>`).join('')}
       </div>
-      ${view==='tickets'?`<button class="btn btn-navy" onclick="showFsmTicketModal()">+ New Ticket</button>`
-      :`<button class="btn btn-navy" onclick="showFsmEngineerModal()">+ New Engineer</button>`}
+      <button class="btn btn-navy" onclick="${btnAction}">${btnLabel}</button>
     </div>
-    ${view==='tickets'?fsmTicketsListHTML():fsmEngineersListHTML()}
+    ${view==='tickets'?fsmTicketsListHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():fsmEngineersListHTML()}
   </div>`;
 }
 
@@ -5880,10 +5881,205 @@ function fsmTicketsListHTML(){
     :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Ticket #</div><div>Subject</div><div>Type</div><div>Priority</div><div>Status</div><div>Created</div></div>${rows}`;
 }
 
+const FSM_ASSET_CATEGORIES=['LED Wall','Video Wall','Projector','Display / Monitor','DSP (Audio Processor)','Audio Amplifier','Speaker System','Control Processor','Matrix Switcher / Extender','Video Conferencing Codec','Camera','Microphone System','AV Rack','Network Switch (AV over IP)'];
+const FSM_ASSET_STATUS_CLASS={active:'s-resolved',faulty:'s-critical',under_repair:'s-waiting',retired:'s-cancelled'};
+
+function fsmSitesListHTML(){
+  const list=A.fsmSites||null;
+  const cols='1fr 1fr 170px 160px';
+  const custName=id=>{const c=(A.fsmCustomersCache||[]).find(x=>x.id===id);return c?c.name:'';};
+  const rows=(list||[]).map(s=>`<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="showFsmSiteModal('${s.id}')">
+    <div data-label="Site"><strong>${esc(s.name)}</strong></div>
+    <div data-label="Customer" style="color:var(--gray-500);font-size:13px">${esc(custName(s.customer_id))}</div>
+    <div data-label="Location" style="color:var(--gray-500);font-size:13px">${esc([s.building,s.floor].filter(Boolean).join(', '))}</div>
+    <div data-label="Contact" style="color:var(--gray-500);font-size:13px">${esc(s.contact_name||'')}</div>
+  </div>`).join('');
+  return list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
+    :!list.length?`<div style="padding:28px;text-align:center;color:var(--gray-500)">No sites yet — add the first one.</div>`
+    :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Site</div><div>Customer</div><div>Location</div><div>Contact</div></div>${rows}`;
+}
+
+async function loadFSMSites(){
+  if(A.fsmCustomersCache==null){
+    const cr=await api('GET','/api/customers?limit=500');
+    A.fsmCustomersCache=cr.customers||[];
+  }
+  const r=await api('GET','/api/fsm_assets?resource=site&action=list');
+  if(r.error){A.fsmSites=[];alert(r.error);draw();return;}
+  A.fsmSites=Array.isArray(r)?r:[];
+  draw();
+}
+
+function showFsmSiteModal(siteId){
+  const s=siteId?(A.fsmSites||[]).find(x=>x.id===siteId):null;
+  const isNew=!s;
+  const customers=A.fsmCustomersCache||[];
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmSiteModalOverlay" onclick="if(event.target===this)closeFsmSiteModal()">
+    <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
+      <div class="modal-title">${isNew?'New Site':esc(s.name)}</div>
+      <div id="fsmSiteError" class="auth-err" style="display:none"></div>
+      <div class="fld"><label>Customer</label>
+        <select id="fsmSiteCustomer" class="iinput">
+          <option value="">— Select customer —</option>
+          ${customers.map(c=>`<option value="${c.id}" ${s?.customer_id===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="fld"><label>Site Name</label><input id="fsmSiteName" class="iinput" value="${esc(s?.name||'')}" placeholder="e.g. HQ — Boardroom Level"></div>
+      <div class="fld"><label>Address</label><input id="fsmSiteAddress" class="iinput" value="${esc(s?.address||'')}"></div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Building</label><input id="fsmSiteBuilding" class="iinput" value="${esc(s?.building||'')}"></div>
+        <div class="fld"><label>Floor</label><input id="fsmSiteFloor" class="iinput" value="${esc(s?.floor||'')}"></div>
+      </div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Room</label><input id="fsmSiteRoom" class="iinput" value="${esc(s?.room||'')}"></div>
+        <div class="fld"><label>Department</label><input id="fsmSiteDept" class="iinput" value="${esc(s?.department||'')}"></div>
+      </div>
+      <div class="fld"><label>Site Contact Name</label><input id="fsmSiteContactName" class="iinput" value="${esc(s?.contact_name||'')}"></div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Contact Phone</label><input id="fsmSiteContactPhone" class="iinput" value="${esc(s?.contact_phone||'')}"></div>
+        <div class="fld"><label>Contact Email</label><input id="fsmSiteContactEmail" class="iinput" value="${esc(s?.contact_email||'')}"></div>
+      </div>
+      <div class="fld"><label>Notes</label><textarea id="fsmSiteNotes" class="iinput" rows="2">${esc(s?.notes||'')}</textarea></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeFsmSiteModal()">Cancel</button>
+        <button class="btn btn-navy" onclick="saveFsmSite(${isNew?'null':`'${s.id}'`})">${isNew?'Add Site':'Save'}</button>
+      </div>
+    </div>
+  </div>`);
+}
+function closeFsmSiteModal(){const el=document.getElementById('fsmSiteModalOverlay');if(el)el.remove();}
+
+async function saveFsmSite(siteId){
+  const errEl=document.getElementById('fsmSiteError');
+  const customer_id=document.getElementById('fsmSiteCustomer')?.value;
+  const name=(document.getElementById('fsmSiteName')?.value||'').trim();
+  if(!customer_id||!name){if(errEl){errEl.textContent='Customer and Site Name are required.';errEl.style.display='block';}return;}
+  const body={
+    customer_id,name,
+    address:document.getElementById('fsmSiteAddress')?.value||'',
+    building:document.getElementById('fsmSiteBuilding')?.value||'',
+    floor:document.getElementById('fsmSiteFloor')?.value||'',
+    room:document.getElementById('fsmSiteRoom')?.value||'',
+    department:document.getElementById('fsmSiteDept')?.value||'',
+    contact_name:document.getElementById('fsmSiteContactName')?.value||'',
+    contact_phone:document.getElementById('fsmSiteContactPhone')?.value||'',
+    contact_email:document.getElementById('fsmSiteContactEmail')?.value||'',
+    notes:document.getElementById('fsmSiteNotes')?.value||'',
+  };
+  const r=siteId
+    ?await api('PATCH','/api/fsm_assets?resource=site&action=update&id='+siteId,body)
+    :await api('POST','/api/fsm_assets?resource=site&action=create',body);
+  if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
+  closeFsmSiteModal();
+  A.fsmSites=null;loadFSMSites();
+}
+
+function fsmAssetsListHTML(){
+  const list=A.fsmAssets||null;
+  const cols='1fr 150px 1fr 140px 120px';
+  const siteName=id=>{const s=(A.fsmSites||[]).find(x=>x.id===id);return s?s.name:'';};
+  const rows=(list||[]).map(a=>`<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="showFsmAssetModal('${a.id}')">
+    <div data-label="Asset"><strong>${esc(a.asset_code)}</strong></div>
+    <div data-label="Category" style="color:var(--gray-500);font-size:13px">${esc(a.category||'')}</div>
+    <div data-label="Make/Model" style="color:var(--gray-500);font-size:13px">${esc([a.manufacturer,a.model].filter(Boolean).join(' — '))}</div>
+    <div data-label="Site" style="color:var(--gray-500);font-size:13px">${esc(siteName(a.site_id))}</div>
+    <div data-label="Status"><span class="sbadge ${FSM_ASSET_STATUS_CLASS[a.status]||'s-draft'}" style="text-transform:capitalize">${esc((a.status||'active').replace(/_/g,' '))}</span></div>
+  </div>`).join('');
+  return list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
+    :!list.length?`<div style="padding:28px;text-align:center;color:var(--gray-500)">No assets yet — add the first one.</div>`
+    :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Asset</div><div>Category</div><div>Make/Model</div><div>Site</div><div>Status</div></div>${rows}`;
+}
+
+async function loadFSMAssets(){
+  if(A.fsmSites==null){
+    const sr=await api('GET','/api/fsm_assets?resource=site&action=list');
+    A.fsmSites=Array.isArray(sr)?sr:[];
+  }
+  const r=await api('GET','/api/fsm_assets?resource=asset&action=list');
+  if(r.error){A.fsmAssets=[];alert(r.error);draw();return;}
+  A.fsmAssets=Array.isArray(r)?r:[];
+  draw();
+}
+
+function showFsmAssetModal(assetId){
+  const a=assetId?(A.fsmAssets||[]).find(x=>x.id===assetId):null;
+  const isNew=!a;
+  const sites=A.fsmSites||[];
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmAssetModalOverlay" onclick="if(event.target===this)closeFsmAssetModal()">
+    <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
+      <div class="modal-title">${isNew?'New Asset':esc(a.asset_code)}</div>
+      <div id="fsmAssetError" class="auth-err" style="display:none"></div>
+      <div class="fld"><label>Site</label>
+        <select id="fsmAssetSite" class="iinput">
+          <option value="">— Select site —</option>
+          ${sites.map(s=>`<option value="${s.id}" ${a?.site_id===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Asset Code</label><input id="fsmAssetCode" class="iinput" value="${esc(a?.asset_code||'')}" placeholder="e.g. LED-BR-01"></div>
+        <div class="fld"><label>Category</label><input id="fsmAssetCategory" class="iinput" list="fsmAssetCatList" value="${esc(a?.category||'')}"></div>
+      </div>
+      <datalist id="fsmAssetCatList">${FSM_ASSET_CATEGORIES.map(c=>`<option value="${esc(c)}">`).join('')}</datalist>
+      <div class="field-grid g2">
+        <div class="fld"><label>Manufacturer</label><input id="fsmAssetMfr" class="iinput" value="${esc(a?.manufacturer||'')}" placeholder="e.g. Absen, Crestron, QSC"></div>
+        <div class="fld"><label>Model</label><input id="fsmAssetModel" class="iinput" value="${esc(a?.model||'')}"></div>
+      </div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Serial Number</label><input id="fsmAssetSerial" class="iinput" value="${esc(a?.serial_number||'')}"></div>
+        <div class="fld"><label>Status</label>
+          <select id="fsmAssetStatus" class="iinput">
+            ${['active','faulty','under_repair','retired'].map(v=>`<option value="${v}" ${(!a&&v==='active')||a?.status===v?'selected':''}>${v.replace(/_/g,' ')}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Installation Date</label><input id="fsmAssetInstallDate" type="date" class="iinput" value="${a?.installation_date||''}"></div>
+        <div class="fld"><label>Warranty Expiry</label><input id="fsmAssetWarrantyExpiry" type="date" class="iinput" value="${a?.warranty_expiry||''}"></div>
+      </div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Firmware Version</label><input id="fsmAssetFirmware" class="iinput" value="${esc(a?.firmware_version||'')}"></div>
+        <div class="fld"><label>Supplier</label><input id="fsmAssetSupplier" class="iinput" value="${esc(a?.supplier||'')}"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeFsmAssetModal()">Cancel</button>
+        <button class="btn btn-navy" onclick="saveFsmAsset(${isNew?'null':`'${a.id}'`})">${isNew?'Add Asset':'Save'}</button>
+      </div>
+    </div>
+  </div>`);
+}
+function closeFsmAssetModal(){const el=document.getElementById('fsmAssetModalOverlay');if(el)el.remove();}
+
+async function saveFsmAsset(assetId){
+  const errEl=document.getElementById('fsmAssetError');
+  const site_id=document.getElementById('fsmAssetSite')?.value;
+  const asset_code=(document.getElementById('fsmAssetCode')?.value||'').trim();
+  if(!site_id||!asset_code){if(errEl){errEl.textContent='Site and Asset Code are required.';errEl.style.display='block';}return;}
+  const body={
+    site_id,asset_code,
+    category:document.getElementById('fsmAssetCategory')?.value||'',
+    manufacturer:document.getElementById('fsmAssetMfr')?.value||'',
+    model:document.getElementById('fsmAssetModel')?.value||'',
+    serial_number:document.getElementById('fsmAssetSerial')?.value||'',
+    status:document.getElementById('fsmAssetStatus')?.value||'active',
+    installation_date:document.getElementById('fsmAssetInstallDate')?.value||null,
+    warranty_expiry:document.getElementById('fsmAssetWarrantyExpiry')?.value||null,
+    firmware_version:document.getElementById('fsmAssetFirmware')?.value||'',
+    supplier:document.getElementById('fsmAssetSupplier')?.value||'',
+  };
+  const r=assetId
+    ?await api('PATCH','/api/fsm_assets?resource=asset&action=update&id='+assetId,body)
+    :await api('POST','/api/fsm_assets?resource=asset&action=create',body);
+  if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
+  closeFsmAssetModal();
+  A.fsmAssets=null;loadFSMAssets();
+}
+
 function fsmSwitchView(view){
   A.fsmView=view;draw();
   if(view==='engineers'&&A.fsmEngineers==null)loadFSMEngineers();
   if(view==='tickets'&&A.fsmTickets==null)loadFSMPage();
+  if(view==='sites'&&A.fsmSites==null)loadFSMSites();
+  if(view==='assets'&&A.fsmAssets==null)loadFSMAssets();
 }
 
 async function loadFSMPage(){
@@ -5989,12 +6185,30 @@ async function deactivateFsmEngineer(engineerId){
   A.fsmEngineers=null;loadFSMEngineers();
 }
 
-function showFsmTicketModal(){
+async function showFsmTicketModal(){
+  if(A.fsmCustomersCache==null){
+    const cr=await api('GET','/api/customers?limit=500');
+    A.fsmCustomersCache=cr.customers||[];
+  }
+  const customers=A.fsmCustomersCache||[];
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmModalOverlay" onclick="if(event.target===this)closeFsmTicketModal()">
     <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
       <div class="modal-title">New Service Ticket</div>
       <div id="fsmCreateError" class="auth-err" style="display:none"></div>
-      <div class="fld"><label>Customer ID</label><input id="fsmNewCustomer" class="iinput" placeholder="customer UUID"></div>
+      <div class="fld"><label>Customer</label>
+        <select id="fsmNewCustomer" class="iinput" onchange="fsmTicketCustomerChanged()">
+          <option value="">— Select customer —</option>
+          ${customers.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Site <span style="color:var(--gray-500);font-weight:400">(optional)</span></label>
+          <select id="fsmNewSite" class="iinput" onchange="fsmTicketSiteChanged()"><option value="">— None —</option></select>
+        </div>
+        <div class="fld"><label>Asset <span style="color:var(--gray-500);font-weight:400">(optional)</span></label>
+          <select id="fsmNewAsset" class="iinput"><option value="">— None —</option></select>
+        </div>
+      </div>
       <div class="fld"><label>Ticket Type</label>
         <select id="fsmNewType" class="iinput">
           <option value="incident">Incident</option>
@@ -6025,15 +6239,41 @@ function showFsmTicketModal(){
 }
 function closeFsmTicketModal(){const el=document.getElementById('fsmModalOverlay');if(el)el.remove();}
 
+async function fsmTicketCustomerChanged(){
+  const customerId=document.getElementById('fsmNewCustomer')?.value;
+  const siteSel=document.getElementById('fsmNewSite');
+  const assetSel=document.getElementById('fsmNewAsset');
+  if(!siteSel)return;
+  assetSel.innerHTML='<option value="">— None —</option>';
+  if(!customerId){siteSel.innerHTML='<option value="">— None —</option>';return;}
+  siteSel.innerHTML='<option value="">Loading…</option>';
+  const r=await api('GET','/api/fsm_assets?resource=site&action=list&customer_id='+customerId);
+  const sites=Array.isArray(r)?r:[];
+  siteSel.innerHTML='<option value="">— None —</option>'+sites.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('');
+}
+
+async function fsmTicketSiteChanged(){
+  const siteId=document.getElementById('fsmNewSite')?.value;
+  const assetSel=document.getElementById('fsmNewAsset');
+  if(!assetSel)return;
+  if(!siteId){assetSel.innerHTML='<option value="">— None —</option>';return;}
+  assetSel.innerHTML='<option value="">Loading…</option>';
+  const r=await api('GET','/api/fsm_assets?resource=asset&action=list&site_id='+siteId);
+  const assets=Array.isArray(r)?r:[];
+  assetSel.innerHTML='<option value="">— None —</option>'+assets.map(a=>`<option value="${a.id}">${esc(a.asset_code)}${a.category?` — ${esc(a.category)}`:''}</option>`).join('');
+}
+
 async function createFSMTicket(){
-  const customer_id=(document.getElementById('fsmNewCustomer')?.value||'').trim();
+  const customer_id=document.getElementById('fsmNewCustomer')?.value;
+  const site_id=document.getElementById('fsmNewSite')?.value||null;
+  const asset_id=document.getElementById('fsmNewAsset')?.value||null;
   const ticket_type=document.getElementById('fsmNewType')?.value;
   const priority=document.getElementById('fsmNewPriority')?.value;
   const subject=(document.getElementById('fsmNewSubject')?.value||'').trim();
   const description=(document.getElementById('fsmNewDescription')?.value||'').trim();
   const errEl=document.getElementById('fsmCreateError');
-  if(!customer_id||!subject){if(errEl){errEl.textContent='Customer ID and Subject are required.';errEl.style.display='block';}return;}
-  const r=await api('POST','/api/fsm_tickets?resource=ticket&action=create',{customer_id,ticket_type,priority,subject,description});
+  if(!customer_id||!subject){if(errEl){errEl.textContent='Customer and Subject are required.';errEl.style.display='block';}return;}
+  const r=await api('POST','/api/fsm_tickets?resource=ticket&action=create',{customer_id,site_id,asset_id,ticket_type,priority,subject,description});
   if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
   closeFsmTicketModal();
   A.fsmTickets=null;A.page='fsm';draw();loadFSMPage();
