@@ -5937,7 +5937,7 @@ function fsmDetailHTML(){
     <div style="font-size:11px;color:var(--gray-500)">${new Date(a.created_at).toLocaleString()}</div>
   </div>`).join('')||'<div style="color:var(--gray-500);font-size:13px">No activity yet.</div>';
   return `<div>
-    <button class="btn-link" onclick="A.page='fsm';draw()">&larr; Back to tickets</button>
+    <button class="btn" onclick="A.page='fsm';draw()">&larr; Back to tickets</button>
     <div class="card" style="margin-top:12px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">
         <div>
