@@ -7312,7 +7312,7 @@ async function showFsmTicketModal(){
         </select>
       </div>
       <div class="fld"><label>Subject</label><input id="fsmNewSubject" class="iinput" placeholder="Short summary"></div>
-      <div class="fld"><label>Description</label><textarea id="fsmNewDescription" class="iinput" rows="4"></textarea>${micBtnHTML()}</div>
+      <div class="fld"><label>Description</label>${micFieldWrap('<textarea id="fsmNewDescription" class="iinput" rows="4" style="padding-right:36px"></textarea>')}</div>
       <button class="btn btn-sm" onclick="fsmAiTriage()" id="fsmAiTriageBtn">✨ AI Suggest Type &amp; Priority</button>
       <div id="fsmAiTriageResult" style="font-size:12px;color:var(--gray-500);margin-top:6px"></div>
       <div class="modal-actions">
@@ -7834,8 +7834,8 @@ async function showFsmCompleteWorkOrderModal(woId){
         </div>
         <div class="fld"><label>Customer Sign-off Name (optional)</label><input id="fsmWoCustSignName" class="iinput" placeholder="Left blank if not yet signed"></div>
       </div>
-      <div class="fld"><label>Key Observations (one per line, optional)</label><textarea id="fsmWoObservations" class="iinput" rows="2" placeholder="e.g. Cable Cubby fuse replaced in L4 Board Room"></textarea>${micBtnHTML()}</div>
-      <div class="fld"><label>Completion Notes</label><textarea id="fsmWoCompletionNotes" class="iinput" rows="3" placeholder="What was done, findings, follow-up needed…"></textarea>${micBtnHTML()}</div>
+      <div class="fld"><label>Key Observations (one per line, optional)</label>${micFieldWrap('<textarea id="fsmWoObservations" class="iinput" rows="2" placeholder="e.g. Cable Cubby fuse replaced in L4 Board Room" style="padding-right:36px"></textarea>')}</div>
+      <div class="fld"><label>Completion Notes</label>${micFieldWrap('<textarea id="fsmWoCompletionNotes" class="iinput" rows="3" placeholder="What was done, findings, follow-up needed…" style="padding-right:36px"></textarea>')}</div>
       <div class="modal-actions">
         <button class="btn" onclick="closeFsmCompleteWorkOrderModal()">Cancel</button>
         <button class="btn btn-navy" onclick="completeFsmWorkOrder('${woId}')">Mark Complete</button>
@@ -7928,8 +7928,21 @@ async function completeFsmWorkOrder(woId){
 // `previousElementSibling` without needing a unique id per field — this is
 // what lets the same button work for the dynamically-rendered per-row
 // checklist/asset remarks inputs, which don't have individual ids.
+// micBtnHTML() — compact inline button, for fields already sitting in a
+// flex row with room beside them (the per-row checklist/asset remarks
+// inputs, which are fixed-width and never had a layout problem).
+// micFieldWrap() — for a full-width textarea/input inside a block-level
+// .fld: a block-level .iinput (width:100%) pushes an inline sibling button
+// onto its own line below, tiny and easy to miss, so this instead wraps
+// the field in a position:relative container and absolutely positions the
+// mic button inside its top-right corner. Either way the button stays the
+// field's immediate next DOM sibling, which is what fsmMicToggle's
+// previousElementSibling lookup depends on.
 function micBtnHTML(){
   return `<button type="button" class="mic-btn" onclick="fsmMicToggle(this)" title="Dictate" style="margin-left:6px;border:1px solid var(--gray-300);background:#fff;border-radius:6px;width:28px;height:26px;cursor:pointer;font-size:13px;vertical-align:middle">🎤</button>`;
+}
+function micFieldWrap(fieldHTML){
+  return `<div style="position:relative">${fieldHTML}<button type="button" class="mic-btn" onclick="fsmMicToggle(this)" title="Dictate" style="position:absolute;top:6px;right:6px;border:1px solid var(--gray-300);background:#fff;border-radius:6px;width:28px;height:26px;cursor:pointer;font-size:13px;box-shadow:0 1px 3px rgba(0,0,0,.12);z-index:2">🎤</button></div>`;
 }
 const FSM_SPEECH_REC = window.SpeechRecognition || window.webkitSpeechRecognition;
 
