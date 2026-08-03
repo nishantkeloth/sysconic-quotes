@@ -6074,7 +6074,39 @@ function fsmDetailHTML(){
         ${fsmEngineerPickerHTML(t)}
       </div>
     </div>
+    <div class="card" style="margin-top:20px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div class="card-title" style="margin-bottom:0">Work Orders</div>
+        <button class="btn btn-navy" onclick="showFsmWorkOrderModal('${t.id}')">+ New Work Order</button>
+      </div>
+      ${fsmWorkOrdersHTML()}
+    </div>
   </div>`;
+}
+
+function fsmWorkOrdersHTML(){
+  const list=A.fsmWorkOrders;
+  if(list==null)return `<div style="color:var(--gray-500);font-size:13px">Loading…</div>`;
+  if(!list.length)return `<div style="color:var(--gray-500);font-size:13px">No work orders yet for this ticket.</div>`;
+  const engById={};(A.fsmEngineers||[]).forEach(e=>engById[e.id]=e.name);
+  return list.map(w=>{
+    const done=!!w.completion_notes;
+    return `<div style="border:1px solid var(--gray-200);border-radius:10px;padding:14px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap">
+        <div>
+          <strong>${w.engineer_id?esc(engById[w.engineer_id]||'Unknown engineer'):'Unassigned'}</strong>
+          ${w.visit_date?` — ${esc(w.visit_date)}`:''}${w.expected_duration_mins?` (${w.expected_duration_mins} min)`:''}
+        </div>
+        <span class="sbadge ${done?'s-resolved':'s-sent'}">${done?'Completed':'Scheduled'}</span>
+      </div>
+      ${w.instructions?`<div style="font-size:13px;color:var(--gray-500);margin-top:8px">${esc(w.instructions)}</div>`:''}
+      ${w.materials_required?`<div style="font-size:12px;color:var(--gray-500);margin-top:4px">Materials: ${esc(w.materials_required)}</div>`:''}
+      ${w.tools_required?`<div style="font-size:12px;color:var(--gray-500);margin-top:4px">Tools: ${esc(w.tools_required)}</div>`:''}
+      ${(w.checklist||[]).length?`<ul style="margin:8px 0 0 18px;font-size:13px;color:var(--gray-700)">${(w.checklist||[]).map(c=>`<li>${esc(typeof c==='string'?c:c.text||'')}</li>`).join('')}</ul>`:''}
+      ${done?`<div style="font-size:13px;margin-top:10px;padding-top:10px;border-top:1px solid var(--gray-100)"><strong>Completion notes:</strong> ${esc(w.completion_notes)}</div>`
+        :`<button class="btn btn-sm" style="margin-top:10px" onclick="showFsmCompleteWorkOrderModal('${w.id}')">Mark Complete</button>`}
+    </div>`;
+  }).join('');
 }
 
 function fsmEngineerPickerHTML(t){
@@ -6099,13 +6131,85 @@ async function assignFSMEngineer(ticketId){
 }
 
 async function loadFSMDetail(id){
-  const [t,act]=await Promise.all([
+  const [t,act,wo]=await Promise.all([
     api('GET','/api/fsm_tickets?resource=ticket&action=get&id='+id),
-    api('GET','/api/fsm_tickets?resource=activity&action=list&ticket_id='+id)
+    api('GET','/api/fsm_tickets?resource=activity&action=list&ticket_id='+id),
+    api('GET','/api/fsm_tickets?resource=work_order&action=list&ticket_id='+id)
   ]);
   if(t.error){alert(t.error);A.page='fsm';draw();return;}
-  A.fsmDetail=t;A.fsmActivity=Array.isArray(act)?act:[];draw();
+  A.fsmDetail=t;A.fsmActivity=Array.isArray(act)?act:[];A.fsmWorkOrders=Array.isArray(wo)?wo:[];draw();
   if(A.fsmEngineers==null)loadFSMEngineers();
+}
+
+function showFsmWorkOrderModal(ticketId){
+  const engineers=A.fsmEngineers||[];
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmWoModalOverlay" onclick="if(event.target===this)closeFsmWorkOrderModal()">
+    <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
+      <div class="modal-title">New Work Order</div>
+      <div id="fsmWoError" class="auth-err" style="display:none"></div>
+      <div class="fld"><label>Engineer</label>
+        <select id="fsmWoEngineer" class="iinput">
+          <option value="">— Unassigned —</option>
+          ${engineers.map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Visit Date</label><input id="fsmWoDate" type="date" class="iinput"></div>
+        <div class="fld"><label>Expected Duration (mins)</label><input id="fsmWoDuration" type="number" class="iinput" placeholder="60"></div>
+      </div>
+      <div class="fld"><label>Materials Required</label><input id="fsmWoMaterials" class="iinput" placeholder="e.g. HDMI cable, mounting bracket"></div>
+      <div class="fld"><label>Tools Required</label><input id="fsmWoTools" class="iinput" placeholder="e.g. crimping tool, multimeter"></div>
+      <div class="fld"><label>Instructions</label><textarea id="fsmWoInstructions" class="iinput" rows="3"></textarea></div>
+      <div class="fld"><label>Checklist</label><textarea id="fsmWoChecklist" class="iinput" rows="3" placeholder="One item per line, e.g.&#10;Verify signal at LED wall input&#10;Check DSP gain staging&#10;Test audio-follow-video sync"></textarea></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeFsmWorkOrderModal()">Cancel</button>
+        <button class="btn btn-navy" onclick="saveFsmWorkOrder('${ticketId}')">Create Work Order</button>
+      </div>
+    </div>
+  </div>`);
+}
+function closeFsmWorkOrderModal(){const el=document.getElementById('fsmWoModalOverlay');if(el)el.remove();}
+
+async function saveFsmWorkOrder(ticketId){
+  const errEl=document.getElementById('fsmWoError');
+  const checklist=(document.getElementById('fsmWoChecklist')?.value||'').split('\n').map(s=>s.trim()).filter(Boolean).map(text=>({text,done:false}));
+  const body={
+    ticket_id:ticketId,
+    engineer_id:document.getElementById('fsmWoEngineer')?.value||null,
+    visit_date:document.getElementById('fsmWoDate')?.value||null,
+    expected_duration_mins:Number(document.getElementById('fsmWoDuration')?.value)||null,
+    materials_required:document.getElementById('fsmWoMaterials')?.value||'',
+    tools_required:document.getElementById('fsmWoTools')?.value||'',
+    instructions:document.getElementById('fsmWoInstructions')?.value||'',
+    checklist,
+  };
+  const r=await api('POST','/api/fsm_tickets?resource=work_order&action=create',body);
+  if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
+  closeFsmWorkOrderModal();
+  loadFSMDetail(ticketId);
+}
+
+function showFsmCompleteWorkOrderModal(woId){
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmWoCompleteOverlay" onclick="if(event.target===this)closeFsmCompleteWorkOrderModal()">
+    <div class="modal" style="max-width:480px">
+      <div class="modal-title">Complete Work Order</div>
+      <div class="fld"><label>Completion Notes</label><textarea id="fsmWoCompletionNotes" class="iinput" rows="4" placeholder="What was done, findings, follow-up needed…"></textarea></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeFsmCompleteWorkOrderModal()">Cancel</button>
+        <button class="btn btn-navy" onclick="completeFsmWorkOrder('${woId}')">Mark Complete</button>
+      </div>
+    </div>
+  </div>`);
+}
+function closeFsmCompleteWorkOrderModal(){const el=document.getElementById('fsmWoCompleteOverlay');if(el)el.remove();}
+
+async function completeFsmWorkOrder(woId){
+  const notes=(document.getElementById('fsmWoCompletionNotes')?.value||'').trim();
+  if(!notes){alert('Add completion notes first.');return;}
+  const r=await api('PATCH','/api/fsm_tickets?resource=work_order&action=complete&id='+woId,{completion_notes:notes});
+  if(r.error){alert(r.error);return;}
+  closeFsmCompleteWorkOrderModal();
+  loadFSMDetail(A.fsmDetailId);
 }
 
 async function updateFSMStatus(id){
