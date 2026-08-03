@@ -5849,7 +5849,7 @@ function fsmBadge(val,map){
   return `<span class="sbadge ${cls}" style="text-transform:capitalize">${esc((val||'').replace(/_/g,' '))}</span>`;
 }
 
-const FSM_TAB_LABELS={tickets:'Tickets',schedule:'Schedule',maintenance:'Maintenance',contracts:'Contracts',billing:'Billing',parts:'Parts',sites:'Sites',assets:'Assets',engineers:'Engineers'};
+const FSM_TAB_LABELS={tickets:'Tickets',schedule:'Schedule',maintenance:'Maintenance',contracts:'Contracts',billing:'Billing',parts:'Parts',sites:'Sites',assets:'Assets',engineers:'Engineers',reports:'Reports'};
 const FSM_NEW_BTN={tickets:['+ New Ticket','showFsmTicketModal()'],maintenance:['+ New PM Schedule','showFsmPmModal()'],contracts:['+ New Contract','showFsmContractModal()'],parts:['+ New Part','showFsmPartModal()'],sites:['+ New Site','showFsmSiteModal()'],assets:['+ New Asset','showFsmAssetModal()'],engineers:['+ New Engineer','showFsmEngineerModal()']};
 function fsmHTML(){
   const view=A.fsmView||'tickets';
@@ -5861,7 +5861,7 @@ function fsmHTML(){
       </div>
       ${newBtn?`<button class="btn btn-navy" onclick="${newBtn[1]}">${newBtn[0]}</button>`:''}
     </div>
-    ${view==='tickets'?fsmTicketsListHTML():view==='schedule'?fsmScheduleHTML():view==='maintenance'?fsmPmListHTML():view==='contracts'?fsmContractsListHTML():view==='billing'?fsmBillingListHTML():view==='parts'?fsmPartsListHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():fsmEngineersListHTML()}
+    ${view==='reports'?fsmReportsHTML():view==='tickets'?fsmTicketsListHTML():view==='schedule'?fsmScheduleHTML():view==='maintenance'?fsmPmListHTML():view==='contracts'?fsmContractsListHTML():view==='billing'?fsmBillingListHTML():view==='parts'?fsmPartsListHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():fsmEngineersListHTML()}
   </div>`;
 }
 
@@ -6123,6 +6123,63 @@ function fsmSwitchView(view){
   if(view==='contracts'&&A.fsmContracts==null)loadFSMContracts();
   if(view==='parts'&&A.fsmParts==null)loadFSMParts();
   if(view==='billing'&&A.fsmBillingTickets==null)loadFSMBilling();
+  if(view==='reports'&&A.fsmReport==null)loadFSMReport();
+}
+
+// ── Module 17: Reports & Dashboards ─────────────────────────────────────
+function fsmMcard(label,val,sub){
+  return `<div class="mcard"><div class="mcard-label">${label}</div><div class="mcard-val">${val==null?'—':val}</div>${sub?`<div style="font-size:12px;color:var(--gray-500);margin-top:4px">${sub}</div>`:''}</div>`;
+}
+
+function fsmReportsHTML(){
+  const r=A.fsmReport;
+  if(r==null)return `<div style="padding:22px;color:var(--gray-500)">Loading…</div>`;
+  const op=r.operational,fin=r.financial,k=r.kpis;
+  const workloadRows=(op.engineer_workload||[]).map(e=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--gray-100);font-size:13px"><div>${esc(e.name)}</div><div style="color:var(--gray-500)">${e.open_tickets} open</div></div>`).join('')||'<div style="color:var(--gray-500);font-size:13px">No engineers yet.</div>';
+  return `<div>
+    <div class="card-title" style="margin-bottom:10px">Operational</div>
+    <div class="dash-metrics">
+      ${fsmMcard('Open Tickets',op.open_tickets)}
+      ${fsmMcard('Pending',op.pending_tickets,'waiting on customer/parts/approval')}
+      ${fsmMcard('Closed',op.closed_tickets)}
+      ${fsmMcard('Repeat Failures',op.repeat_failures)}
+    </div>
+    <div class="card-title" style="margin-bottom:10px">Operational KPIs</div>
+    <div class="dash-metrics">
+      ${fsmMcard('Avg Resolution',k.avg_resolution_hours!=null?k.avg_resolution_hours+'h':null)}
+      ${fsmMcard('SLA Compliance',k.sla_compliance_pct!=null?k.sla_compliance_pct+'%':null)}
+      ${fsmMcard('First-Time Fix',k.first_time_fix_pct!=null?k.first_time_fix_pct+'%':null)}
+      ${fsmMcard('Repeat Call Rate',k.repeat_call_pct!=null?k.repeat_call_pct+'%':null)}
+    </div>
+    <div class="dash-metrics" style="grid-template-columns:repeat(2,1fr)">
+      ${fsmMcard('Customer Satisfaction','—',k.customer_satisfaction_note)}
+      ${fsmMcard('Technician Utilization','—',k.technician_utilization_note)}
+    </div>
+    <div class="card-title" style="margin-bottom:10px">Financial</div>
+    <div class="dash-metrics">
+      ${fsmMcard('Service Revenue',fin.service_revenue.toLocaleString(undefined,{minimumFractionDigits:2}),'invoiced + paid chargeable tickets')}
+      ${fsmMcard('AMC Contract Value',fin.amc_contract_value.toLocaleString(undefined,{minimumFractionDigits:2}),'active AMC/CMC/fully-comprehensive, recurring estimate')}
+      ${fsmMcard('Parts Cost Consumed',fin.parts_cost_consumed.toLocaleString(undefined,{minimumFractionDigits:2}))}
+      ${fsmMcard('Parts Consumed (qty)',op.parts_consumed_qty)}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+      <div class="card">
+        <div class="card-title">Engineer Workload</div>
+        ${workloadRows}
+      </div>
+      <div class="card">
+        <div class="card-title">Tickets by Status</div>
+        ${Object.entries(op.tickets_by_status||{}).sort((a,b)=>b[1]-a[1]).map(([s,c])=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--gray-100);font-size:13px"><div style="text-transform:capitalize">${s.replace(/_/g,' ')}</div><div style="color:var(--gray-500)">${c}</div></div>`).join('')||'<div style="color:var(--gray-500);font-size:13px">No tickets yet.</div>'}
+      </div>
+    </div>
+  </div>`;
+}
+
+async function loadFSMReport(){
+  const r=await api('GET','/api/fsm_reports?action=summary');
+  if(r.error){alert(r.error);return;}
+  A.fsmReport=r;
+  draw();
 }
 
 // ── Module 13: Billing overview tab ─────────────────────────────────────
