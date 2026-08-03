@@ -5865,20 +5865,58 @@ function fsmHTML(){
   </div>`;
 }
 
+// ── Module 11: SLA Management ────────────────────────────────────────────
+function fsmSlaBadge(label,dueAt,actualAt){
+  if(!dueAt)return '';
+  const due=new Date(dueAt),now=new Date();
+  const pfx=label?label+' ':'';
+  let cls,text;
+  if(actualAt){
+    const actual=new Date(actualAt);
+    const met=actual<=due;
+    cls=met?'s-resolved':'s-critical';
+    text=`${pfx}${met?'met':'missed'}`;
+  }else{
+    const hoursLeft=(due-now)/3600000;
+    cls=hoursLeft<0?'s-critical':hoursLeft<=2?'s-waiting':'s-resolved';
+    text=hoursLeft<0?`${pfx}overdue`:`${pfx}${hoursLeft<1?Math.round(hoursLeft*60)+'m':Math.round(hoursLeft)+'h'} left`;
+  }
+  return `<span class="sbadge ${cls}" title="${label?label+' d':'D'}ue ${due.toLocaleString()}">${text}</span>`;
+}
+function fsmTicketSlaCell(t){
+  if(t.status==='closed'||t.status==='cancelled')return '';
+  return fsmSlaBadge('Resolution',t.sla_resolution_due_at,t.resolved_at)||fsmSlaBadge('Response',t.sla_response_due_at,t.first_response_at)||'<span style="color:var(--gray-400);font-size:12px">No SLA</span>';
+}
+
+function fsmSlaCardHTML(t){
+  if(!t.sla_response_due_at&&!t.sla_resolution_due_at){
+    return `<div style="color:var(--gray-500);font-size:13px">No SLA on this ticket — its site/customer has no active contract with SLA hours set.</div>`;
+  }
+  const row=(label,dueAt,actualAt)=>{
+    if(!dueAt)return '';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--gray-100)">
+      <div style="font-size:13px"><strong>${label}</strong>${actualAt?` <span style="color:var(--gray-500)">— ${new Date(actualAt).toLocaleString()}</span>`:''}</div>
+      ${fsmSlaBadge('',dueAt,actualAt)}
+    </div>`;
+  };
+  return row('Response',t.sla_response_due_at,t.first_response_at)+row('Resolution',t.sla_resolution_due_at,t.resolved_at);
+}
+
 function fsmTicketsListHTML(){
   const list=A.fsmTickets||null;
-  const cols='130px 1fr 170px 110px 140px 110px';
+  const cols='120px 1fr 140px 90px 120px 140px 100px';
   const rows=(list||[]).map(t=>`<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="A.page='fsmDetail';A.fsmDetailId='${t.id}';A.fsmDetail=null;A.fsmActivity=null;draw();loadFSMDetail('${t.id}')">
     <div data-label="Ticket #"><strong>${esc(t.ticket_number)}</strong></div>
     <div data-label="Subject">${esc(t.subject)}</div>
     <div data-label="Type" style="color:var(--gray-500);font-size:13px">${esc((t.ticket_type||'').replace(/_/g,' '))}</div>
     <div data-label="Priority">${fsmBadge(t.priority,FSM_PRIORITY_CLASS)}</div>
     <div data-label="Status">${fsmBadge(t.status,FSM_STATUS_CLASS)}</div>
+    <div data-label="SLA">${fsmTicketSlaCell(t)}</div>
     <div data-label="Created" style="color:var(--gray-500);font-size:13px">${new Date(t.created_at).toLocaleDateString()}</div>
   </div>`).join('');
   return list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
     :!list.length?`<div style="padding:28px;text-align:center;color:var(--gray-500)">No tickets yet — create the first one.</div>`
-    :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Ticket #</div><div>Subject</div><div>Type</div><div>Priority</div><div>Status</div><div>Created</div></div>${rows}`;
+    :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Ticket #</div><div>Subject</div><div>Type</div><div>Priority</div><div>Status</div><div>SLA</div><div>Created</div></div>${rows}`;
 }
 
 const FSM_ASSET_CATEGORIES=['LED Wall','Video Wall','Projector','Display / Monitor','DSP (Audio Processor)','Audio Amplifier','Speaker System','Control Processor','Matrix Switcher / Extender','Video Conferencing Codec','Camera','Microphone System','AV Rack','Network Switch (AV over IP)'];
@@ -6667,9 +6705,15 @@ function fsmDetailHTML(){
         <div class="card-title" style="margin-top:20px">Activity Timeline</div>
         <div style="max-height:300px;overflow-y:auto">${timeline}</div>
       </div>
-      <div class="card">
-        <div class="card-title">Assigned Engineer</div>
-        ${fsmEngineerPickerHTML(t)}
+      <div>
+        <div class="card">
+          <div class="card-title">Assigned Engineer</div>
+          ${fsmEngineerPickerHTML(t)}
+        </div>
+        <div class="card" style="margin-top:20px">
+          <div class="card-title">SLA</div>
+          ${fsmSlaCardHTML(t)}
+        </div>
       </div>
     </div>
     <div class="card" style="margin-top:20px">

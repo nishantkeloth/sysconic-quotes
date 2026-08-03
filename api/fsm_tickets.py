@@ -119,6 +119,31 @@ def _next_ticket_number(sb, company_id):
     return f"FSM-{year}-{seq:04d}"
 
 
+def _find_applicable_contract(sb, company_id, customer_id, site_id):
+    """Module 11 (SLA Management): prefer a contract scoped to this exact
+    site; fall back to a customer-wide contract (site_id is null). Only
+    considers active contracts that haven't passed their end_date."""
+    today = datetime.utcnow().date().isoformat()
+
+    def _query(site_filter):
+        q = (
+            sb.table("fsm_contracts")
+            .select("*")
+            .eq("company_id", company_id)
+            .eq("customer_id", customer_id)
+            .eq("is_active", True)
+        )
+        q = q.is_("site_id", "null") if site_filter is None else q.eq("site_id", site_filter)
+        return q.execute().data or []
+
+    candidates = []
+    if site_id:
+        candidates = [c for c in _query(site_id) if not c.get("end_date") or c["end_date"] >= today]
+    if not candidates:
+        candidates = [c for c in _query(None) if not c.get("end_date") or c["end_date"] >= today]
+    return candidates[0] if candidates else None
+
+
 def _log_activity(sb, ticket_id, company_id, event_type, actor_id=None, note=None, metadata=None):
     entry = {
         "id": str(uuid.uuid4()),
@@ -171,6 +196,17 @@ def create_ticket():
         "description": payload.get("description"),
         "created_at": datetime.utcnow().isoformat(),
     }
+
+    # Module 11: apply SLA deadlines from whichever contract covers this
+    # ticket's site/customer, if any.
+    contract = _find_applicable_contract(sb, company_id, record["customer_id"], record["site_id"])
+    if contract:
+        record["contract_id"] = contract["id"]
+        created_dt = datetime.utcnow()
+        if contract.get("sla_response_hours") is not None:
+            record["sla_response_due_at"] = (created_dt + timedelta(hours=float(contract["sla_response_hours"]))).isoformat()
+        if contract.get("sla_resolution_hours") is not None:
+            record["sla_resolution_due_at"] = (created_dt + timedelta(hours=float(contract["sla_resolution_hours"]))).isoformat()
 
     # Module 9: auto-detect repeat failures — same asset, same breakdown-type
     # ticket, resolved/closed within the last REPEAT_FAILURE_WINDOW_DAYS.
@@ -239,7 +275,29 @@ def update_ticket_status():
         return jsonify({"error": f"invalid status: {new_status}"}), 400
 
     sb = get_sb()
-    update = {"status": new_status, "updated_at": datetime.utcnow().isoformat()}
+
+    current = (
+        sb.table("fsm_tickets")
+        .select("status,first_response_at")
+        .eq("id", ticket_id).eq("company_id", company_id).single().execute().data
+    )
+    now_iso = datetime.utcnow().isoformat()
+    update = {"status": new_status, "updated_at": now_iso}
+
+    # Module 11: stamp SLA milestone timestamps as the ticket moves through
+    # its lifecycle. Each is set once (first time reached), except
+    # resolved_at which refreshes if a ticket bounces back and gets
+    # re-resolved.
+    if current:
+        if new_status != "new" and not current.get("first_response_at"):
+            update["first_response_at"] = now_iso
+        if new_status == "on_site":
+            update["arrived_at"] = now_iso
+        if new_status == "resolved":
+            update["resolved_at"] = now_iso
+        if new_status == "closed":
+            update["closed_at"] = now_iso
+
     result = sb.table("fsm_tickets").update(update).eq("id", ticket_id).eq("company_id", company_id).execute()
     if not result.data:
         return jsonify({"error": "not found"}), 404
@@ -262,11 +320,15 @@ def assign_ticket():
         return jsonify({"error": "id and engineer_id required"}), 400
 
     sb = get_sb()
+    current = sb.table("fsm_tickets").select("first_response_at").eq("id", ticket_id).eq("company_id", company_id).single().execute().data
+    now_iso = datetime.utcnow().isoformat()
     update = {
         "assigned_engineer_id": engineer_id,
         "status": "assigned",
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": now_iso,
     }
+    if current and not current.get("first_response_at"):
+        update["first_response_at"] = now_iso
     result = sb.table("fsm_tickets").update(update).eq("id", ticket_id).eq("company_id", company_id).execute()
     if not result.data:
         return jsonify({"error": "not found"}), 404
