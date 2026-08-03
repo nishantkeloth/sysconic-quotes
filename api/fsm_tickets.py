@@ -9,7 +9,7 @@ Add this file to BOTH `builds` and `routes` in vercel.json.
 
 from flask import Flask, request, jsonify, g
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from api.auth import verify_token, get_sb
 
@@ -24,6 +24,14 @@ VALID_STATUSES = {
     "new", "acknowledged", "assigned", "accepted", "travelling", "on_site", "diagnosis",
     "waiting_customer", "waiting_parts", "waiting_approval", "resolved", "closed", "cancelled",
 }
+# Module 9 (Corrective Maintenance) — a ticket carries breakdown-diagnosis
+# fields when it's one of these types.
+CM_TICKET_TYPES = {"incident", "corrective_maintenance"}
+VALID_FAILURE_CATEGORIES = {
+    "hardware_failure", "firmware_software", "cabling_connectivity", "power_electrical",
+    "configuration_error", "environmental", "user_error", "wear_and_tear", "other",
+}
+REPEAT_FAILURE_WINDOW_DAYS = 90
 
 
 def has_page_access(claims, page_key):
@@ -70,6 +78,8 @@ def fsm_tickets_router():
             return update_ticket_status()
         if action == "assign":
             return assign_ticket()
+        if action == "update_cm":
+            return update_corrective_details()
 
     if resource == "activity":
         if action == "list":
@@ -162,6 +172,23 @@ def create_ticket():
         "created_at": datetime.utcnow().isoformat(),
     }
 
+    # Module 9: auto-detect repeat failures — same asset, same breakdown-type
+    # ticket, resolved/closed within the last REPEAT_FAILURE_WINDOW_DAYS.
+    if record["ticket_type"] in CM_TICKET_TYPES and record["asset_id"]:
+        cutoff = (datetime.utcnow() - timedelta(days=REPEAT_FAILURE_WINDOW_DAYS)).isoformat()
+        prior = (
+            sb.table("fsm_tickets")
+            .select("id")
+            .eq("company_id", company_id)
+            .eq("asset_id", record["asset_id"])
+            .in_("ticket_type", list(CM_TICKET_TYPES))
+            .in_("status", ["resolved", "closed"])
+            .gte("created_at", cutoff)
+            .limit(1)
+            .execute()
+        )
+        record["is_repeat_failure"] = bool(prior.data)
+
     result = sb.table("fsm_tickets").insert(record).execute()
     created = result.data[0]
 
@@ -249,6 +276,40 @@ def assign_ticket():
     # TODO (Phase 1 notifications): enqueue into fsm_notifications here,
     # then wire to your existing Microsoft Graph email sender in auth.py
     # (see send_invite_email for the pattern to follow).
+
+    return jsonify(result.data[0])
+
+
+def update_corrective_details():
+    """Module 9 (Corrective Maintenance): root cause / fix / downtime fields
+    captured as an incident/corrective_maintenance ticket gets diagnosed and
+    resolved. Available on any ticket type — not force-restricted server-side
+    since some 'service_request' tickets turn out to be breakdowns too — but
+    the frontend only surfaces this form for CM-flavored ticket types."""
+    company_id = g.claims['company_id']
+    actor_id = g.claims['user_id']
+    ticket_id = request.args.get("id")
+    if not ticket_id:
+        return jsonify({"error": "id required"}), 400
+
+    payload = request.get_json(force=True) or {}
+    if "failure_category" in payload and payload["failure_category"] and payload["failure_category"] not in VALID_FAILURE_CATEGORIES:
+        return jsonify({"error": f"invalid failure_category: {payload['failure_category']}"}), 400
+
+    allowed = {"failure_category", "root_cause", "corrective_action",
+               "temporary_fix", "permanent_fix", "downtime_minutes"}
+    update = {k: v for k, v in payload.items() if k in allowed}
+    if not update:
+        return jsonify({"error": "no valid fields provided"}), 400
+    update["updated_at"] = datetime.utcnow().isoformat()
+
+    sb = get_sb()
+    result = sb.table("fsm_tickets").update(update).eq("id", ticket_id).eq("company_id", company_id).execute()
+    if not result.data:
+        return jsonify({"error": "not found"}), 404
+
+    _log_activity(sb, ticket_id, company_id, "cm_details_updated", actor_id=actor_id,
+                  note="Corrective maintenance details updated")
 
     return jsonify(result.data[0])
 

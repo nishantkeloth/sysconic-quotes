@@ -6525,7 +6525,7 @@ function fsmDetailHTML(){
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">
         <div>
           <div class="card-title" style="margin-bottom:4px">${esc(t.ticket_number)} — ${esc(t.subject)}</div>
-          <div style="display:flex;gap:8px">${fsmBadge(t.priority,FSM_PRIORITY_CLASS)}${fsmBadge(t.status,FSM_STATUS_CLASS)}</div>
+          <div style="display:flex;gap:8px">${fsmBadge(t.priority,FSM_PRIORITY_CLASS)}${fsmBadge(t.status,FSM_STATUS_CLASS)}${t.is_repeat_failure?`<span class="sbadge s-critical" title="Same asset had another breakdown ticket resolved in the last 90 days">⚠ Repeat Failure</span>`:''}</div>
         </div>
       </div>
       <p style="color:var(--gray-500);font-size:14px;margin-top:12px">${esc(t.description||'No description provided.')}</p>
@@ -6552,7 +6552,50 @@ function fsmDetailHTML(){
       </div>
       ${fsmWorkOrdersHTML()}
     </div>
+    ${CM_TICKET_TYPES.has(t.ticket_type)?`<div class="card" style="margin-top:20px">
+      <div class="card-title">Corrective Maintenance Details</div>
+      ${fsmCmDetailsHTML(t)}
+    </div>`:''}
   </div>`;
+}
+
+const CM_TICKET_TYPES=new Set(['incident','corrective_maintenance']);
+const FSM_FAILURE_CATEGORY_LABEL={hardware_failure:'Hardware Failure',firmware_software:'Firmware/Software',cabling_connectivity:'Cabling/Connectivity',power_electrical:'Power/Electrical',configuration_error:'Configuration Error',environmental:'Environmental',user_error:'User Error',wear_and_tear:'Wear and Tear',other:'Other'};
+
+function fsmCmDetailsHTML(t){
+  return `<div class="field-grid g2">
+    <div class="fld"><label>Failure Category</label>
+      <select id="fsmCmCategory" class="iinput">
+        <option value="">— Select —</option>
+        ${Object.keys(FSM_FAILURE_CATEGORY_LABEL).map(k=>`<option value="${k}" ${t.failure_category===k?'selected':''}>${FSM_FAILURE_CATEGORY_LABEL[k]}</option>`).join('')}
+      </select>
+    </div>
+    <div class="fld"><label>Downtime (minutes)</label><input id="fsmCmDowntime" type="number" class="iinput" value="${t.downtime_minutes??''}"></div>
+  </div>
+  <div class="fld"><label>Root Cause</label><textarea id="fsmCmRootCause" class="iinput" rows="2">${esc(t.root_cause||'')}</textarea></div>
+  <div class="fld"><label>Corrective Action</label><textarea id="fsmCmCorrectiveAction" class="iinput" rows="2">${esc(t.corrective_action||'')}</textarea></div>
+  <div class="field-grid g2">
+    <div class="fld"><label>Temporary Fix</label><textarea id="fsmCmTempFix" class="iinput" rows="2">${esc(t.temporary_fix||'')}</textarea></div>
+    <div class="fld"><label>Permanent Fix</label><textarea id="fsmCmPermFix" class="iinput" rows="2">${esc(t.permanent_fix||'')}</textarea></div>
+  </div>
+  <button class="btn btn-navy" onclick="saveFsmCmDetails('${t.id}')">Save Details</button>
+  <div id="fsmCmError" class="auth-err" style="display:none;margin-top:8px"></div>`;
+}
+
+async function saveFsmCmDetails(ticketId){
+  const errEl=document.getElementById('fsmCmError');
+  const downtimeVal=document.getElementById('fsmCmDowntime')?.value;
+  const body={
+    failure_category:document.getElementById('fsmCmCategory')?.value||null,
+    downtime_minutes:downtimeVal?Number(downtimeVal):null,
+    root_cause:document.getElementById('fsmCmRootCause')?.value||'',
+    corrective_action:document.getElementById('fsmCmCorrectiveAction')?.value||'',
+    temporary_fix:document.getElementById('fsmCmTempFix')?.value||'',
+    permanent_fix:document.getElementById('fsmCmPermFix')?.value||'',
+  };
+  const r=await api('PATCH','/api/fsm_tickets?resource=ticket&action=update_cm&id='+ticketId,body);
+  if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
+  A.fsmDetail=null;loadFSMDetail(ticketId);
 }
 
 function fsmWorkOrdersHTML(){
