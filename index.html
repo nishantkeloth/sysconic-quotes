@@ -1323,7 +1323,7 @@ async function showPortalNewTicketModal(){
     P.sites=r.sites||[];
   }
   P.newTicketSelfHelp=null;P.newTicketSelfHelpShown=false;
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="portalTicketModalOverlay" onclick="if(event.target===this)closePortalTicketModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="portalTicketModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closePortalTicketModal()">
     <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
       <div class="modal-title">Report an Issue</div>
       <div id="portalTicketError" class="auth-err" style="display:none"></div>
@@ -1671,7 +1671,7 @@ async function reviewQuote(){
 }
 function showReviewModal(body){
   closeReviewModal();
-  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="revOverlay" onclick="if(event.target===this)closeReviewModal()">'+
+  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="revOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeReviewModal()">'+
     '<div class="modal" style="max-width:560px;max-height:80vh;overflow-y:auto">'+
     '<div class="modal-title">🔍 Quote review</div>'+
     '<div class="modal-sub">AI completeness check for '+esc(opt()?.label||'')+'</div>'+
@@ -1702,7 +1702,7 @@ async function submitForReview(){
 }
 function showSelectReviewersModal(users){
   const isAdmin=A.user?.role==='admin';
-  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="revPickOverlay" onclick="if(event.target===this)closeSelectReviewersModal()">'+
+  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="revPickOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeSelectReviewersModal()">'+
     '<div class="modal" style="max-width:480px;max-height:80vh;overflow-y:auto">'+
     '<div class="modal-title">📤 Send to review</div>'+
     '<div class="modal-sub">Pick who should review this quote before it goes to the customer.</div>'+
@@ -1739,7 +1739,7 @@ async function confirmSubmitForReview(){
 }
 async function showVersionHistoryModal(){
   if(!A.activeQuote)return;
-  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="verOverlay" onclick="if(event.target===this)closeVersionModal()">'+
+  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="verOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeVersionModal()">'+
     '<div class="modal" style="max-width:600px;max-height:80vh;overflow-y:auto">'+
     '<div class="modal-title">📜 Review history</div>'+
     '<div class="modal-sub">'+esc(A.activeQuote.title||'')+'</div>'+
@@ -1778,7 +1778,7 @@ function closeVersionModal(){const el=document.getElementById('verOverlay');if(e
 // compare any two of either kind) ───────────────────────────────────────────
 async function showCompareModal(){
   if(!A.activeQuote)return;
-  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="cmpOverlay" onclick="if(event.target===this)closeCompareModal()">'+
+  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="cmpOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeCompareModal()">'+
     '<div class="modal" style="max-width:1160px;max-height:86vh;overflow-y:auto">'+
     '<div class="modal-title">🔍 Compare versions</div>'+
     '<div class="modal-sub">'+esc(A.activeQuote.title||'')+'</div>'+
@@ -2137,7 +2137,7 @@ function showReviewDecisionModal(qid,vid,vnum){
       '<button class="btn btn-sm btn-navy" onclick="adminDecide(\''+qid+'\',\''+vid+'\',\'approved\')">Force approve</button>'+
     '</div></div>'
   ):'';
-  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="rdOverlay" onclick="if(event.target===this)closeReviewDecisionModal()">'+
+  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="rdOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeReviewDecisionModal()">'+
     '<div class="modal" style="max-width:520px">'+
     '<div class="modal-title">Review version '+vnum+'</div>'+
     '<div class="modal-sub">'+esc(A.activeQuote?.title||'')+(A.activeQuote?.customer?' · '+esc(A.activeQuote.customer):'')+'</div>'+
@@ -2185,7 +2185,7 @@ async function adminReassignReviewers(qid,vid){
   showReassignReviewersModal(qid,vid,r.users||[]);
 }
 function showReassignReviewersModal(qid,vid,users){
-  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="reassignOverlay" onclick="if(event.target===this)closeReassignReviewersModal()">'+
+  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="reassignOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeReassignReviewersModal()">'+
     '<div class="modal" style="max-width:480px;max-height:80vh;overflow-y:auto">'+
     '<div class="modal-title">🔁 Reassign reviewers</div>'+
     '<div class="modal-sub">Undecided assignments will be replaced. Anyone who already responded stays on record.</div>'+
@@ -2271,7 +2271,7 @@ function showEmailQuoteModal(){
   if(!A.activeQuote)return;
   EML={attachments:[]};
   const fromVal=A.user?.ms365_email||A.user?.email||'';
-  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="emlOverlay" onclick="if(event.target===this)closeEmailQuoteModal()">'+
+  document.body.insertAdjacentHTML('beforeend','<div class="modal-overlay" id="emlOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeEmailQuoteModal()">'+
     '<div class="modal" style="max-width:480px">'+
     '<div class="modal-title">✉️ Email quote to customer</div>'+
     '<div class="modal-sub">Sends with the quote attached as a PDF. Review the draft below before sending.</div>'+
@@ -2385,7 +2385,7 @@ function pickCustomer(name){
 function hideCustDrop(){const el=document.getElementById('custDrop');if(el)el.style.display='none';}
 function openCustModal(){
   closeCustModal();
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="custOverlay" onclick="if(event.target===this)closeCustModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="custOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeCustModal()">
     <div class="modal" style="max-width:520px">
       <div class="modal-title">🔍 Select customer</div>
       <div class="modal-sub">Search your Customer Master</div>
@@ -2927,7 +2927,7 @@ function helpDrawerHTML(){
   if(!A.helpOpen)return'';
   const key=currentHelpKey();
   const h=HELP_CONTENT[key]||{title:'Help',body:'<p>No help available for this section yet.</p>'};
-  return `<div class="help-overlay" onclick="if(event.target===this)toggleHelp()">
+  return `<div class="help-overlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)toggleHelp()">
     <div class="help-drawer">
       <div class="help-drawer-hd">
         <div>
@@ -3942,7 +3942,7 @@ function pmManualFormHTML(query,brand,desc){
 async function showPmOnlineModal(si,ii,query){
   closePmOnlineModal();
   PMOS={si,ii,images:[],selectedImg:''};
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="pmOnlineOverlay" onclick="if(event.target===this)closePmOnlineModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="pmOnlineOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closePmOnlineModal()">
     <div class="modal" style="max-width:560px;max-height:85vh;overflow-y:auto">
       <div class="modal-title">🔍 Search online</div>
       <div class="modal-sub">"${esc(query)}"</div>
@@ -4008,7 +4008,7 @@ async function openRowImage(si,ii){
 
 function showImagePicker(pid,query,si,ii){
   closeImgPicker();
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="imgOverlay" onclick="if(event.target===this)closeImgPicker()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="imgOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeImgPicker()">
     <div class="modal" style="max-width:640px;max-height:85vh;overflow-y:auto">
       <div class="modal-title">🖼 Product image</div>
       <div style="display:flex;gap:8px;margin:10px 0 14px">
@@ -4109,7 +4109,7 @@ async function showProdModal(pid){
   const p=pid?PRODS.list.find(x=>x.id===pid):null;
   let vendors=[];
   try{const vr=await api('GET','/api/vendors?limit=200');vendors=vr.vendors||[];}catch(e){}
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="prodOverlay" onclick="if(event.target===this)document.getElementById('prodOverlay').remove()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="prodOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('prodOverlay').remove()">
     <div class="modal" style="max-width:520px;max-height:85vh;overflow-y:auto">
       <div class="modal-title">${p?'Edit product':'Add product'}</div>
       <div id="prodErr" class="auth-err" style="display:none"></div>
@@ -4222,7 +4222,7 @@ function openPriceCheckModal(){
       </table>
     </div>`;
   }).join('');
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="priceCheckOverlay" onclick="if(event.target===this)closePriceCheckModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="priceCheckOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closePriceCheckModal()">
     <div class="modal" style="max-width:560px;max-height:85vh;overflow-y:auto">
       <div class="modal-title">Price Check - Cost by Vendor</div>
       <div class="modal-sub">Raw cost price x qty, grouped by vendor per option. Compare against the distributor's quoted totals to catch entry errors before sending.</div>
@@ -4233,7 +4233,7 @@ function openPriceCheckModal(){
 function closePriceCheckModal(){const el=document.getElementById('priceCheckOverlay');if(el)el.remove();}
 function openBomModal(){
   if(!A.activeQuote)return;
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="bomOverlay" onclick="if(event.target===this)closeBomModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="bomOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeBomModal()">
     <div class="modal" style="max-width:640px;max-height:85vh;overflow-y:auto">
       <div class="modal-title">✨ Auto-BOM generator</div>
       <div class="modal-sub">Describe the project in plain language — AI will suggest a bill of materials, matching your product catalog where it can.</div>
@@ -4321,7 +4321,7 @@ function openDiagramModal(){
   if(!A.activeQuote)return;
   const o=opt();if(!o)return;
   DIAG={busy:false,code:(o.diagram&&o.diagram.code)||'',showCode:false,photos:true};
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="diagOverlay" onclick="if(event.target===this)closeDiagramModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="diagOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeDiagramModal()">
     <div class="modal" style="max-width:900px;max-height:90vh;overflow-y:auto" id="diagModalBox"></div></div>`);
   renderDiagramModal();
   if(DIAG.code)renderDiagPreview();
@@ -4625,7 +4625,7 @@ function openProposalModal(){
   const which=String(A.activeOpt);
   PROP={busy:false,file:null,step:'input',content:null,brief:'',which,model:'gemini-3.5-flash',briefAuto:true};
   PROP.brief=propAutoBriefFromBOM(which);
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="propOverlay" onclick="if(event.target===this)closeProposalModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="propOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeProposalModal()">
     <div class="modal" style="max-width:700px;max-height:88vh;overflow-y:auto" id="propModalBox"></div></div>`);
   renderProposalModal();
 }
@@ -4962,7 +4962,7 @@ async function delCustomer(cid){
 }
 function showCustModal(cid){
   const c=cid?CUSTS.list.find(x=>x.id===cid):null;
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="custModalOverlay" onclick="if(event.target===this)document.getElementById('custModalOverlay').remove()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="custModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('custModalOverlay').remove()">
     <div class="modal">
       <div class="modal-title">${c?'Edit customer':'Add customer'}</div>
       <div id="custModalErr" class="auth-err" style="display:none"></div>
@@ -5096,7 +5096,7 @@ async function dealDrop(ev,stageId){
 
 function showDealModal(dealId){
   const d=dealId?DEALS.list.find(x=>x.id===dealId):null;
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="dealModalOverlay" onclick="if(event.target===this)closeDealModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="dealModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeDealModal()">
     <div class="modal" style="max-width:560px;max-height:88vh;overflow-y:auto" id="dealModalBox">Loading…</div></div>`);
   renderDealModal(d, dealId?null:undefined);
   if(dealId)loadDealDetail(dealId);
@@ -5237,7 +5237,7 @@ function openConvertedQuote(quoteId){
 }
 
 function showDealStagesModal(){
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="dealStagesOverlay" onclick="if(event.target===this)document.getElementById('dealStagesOverlay').remove()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="dealStagesOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('dealStagesOverlay').remove()">
     <div class="modal" style="max-width:520px" id="dealStagesBox"></div></div>`);
   renderDealStagesModal();
 }
@@ -5344,7 +5344,7 @@ async function delVendorMaster(vid){
 }
 function showVendModal(vid){
   const v=vid?VENDS.list.find(x=>x.id===vid):null;
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="vendModalOverlay" onclick="if(event.target===this)document.getElementById('vendModalOverlay').remove()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="vendModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('vendModalOverlay').remove()">
     <div class="modal">
       <div class="modal-title">${v?'Edit vendor':'Add vendor'}</div>
       <div id="vendModalErr" class="auth-err" style="display:none"></div>
@@ -5650,7 +5650,7 @@ async function loadPlatformCompanies(){
     </div>`).join('');
 }
 function showInviteToCompanyModal(cid,coName){
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="platInviteOverlay" onclick="if(event.target===this)document.getElementById('platInviteOverlay').remove()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="platInviteOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('platInviteOverlay').remove()">
     <div class="modal">
       <div class="modal-title">Invite a Company Admin to ${esc(coName)}</div>
       <div class="modal-sub">Global Admin can only onboard a Company Admin here — the invited user's data access will be limited to ${esc(coName)}, and they'll invite their own end users afterwards.</div>
@@ -5682,7 +5682,7 @@ async function reactivateCompany(cid){
   loadPlatformCompanies();
 }
 function showAddCompanyModal(){
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="addCoOverlay" onclick="if(event.target===this)document.getElementById('addCoOverlay').remove()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="addCoOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('addCoOverlay').remove()">
     <div class="modal">
       <div class="modal-title">Onboard a new company</div>
       <div class="modal-sub">Creates the company and its first admin login. Share the credentials with them yourself.</div>
@@ -5834,7 +5834,7 @@ function showIntegrationModal(provider){
   const fields=(i.required_fields||[]).map(f=>`
     <div class="fld"><label>${esc(FIELD_LABELS[f]||f)}</label><input id="intf-${f}" type="password" placeholder="${i.fields&&i.fields[f]?i.fields[f]+' (leave blank to keep)':''}"></div>
   `).join('');
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="integOverlay" onclick="if(event.target===this)document.getElementById('integOverlay').remove()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="integOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('integOverlay').remove()">
     <div class="modal">
       <div class="modal-title">Connect ${esc(i.label)}</div>
       <div class="modal-sub">These credentials are stored for your company only and never shared with other companies on this platform.</div>
@@ -6218,7 +6218,7 @@ function showFsmSiteModal(siteId){
   const s=siteId?(A.fsmSites||[]).find(x=>x.id===siteId):null;
   const isNew=!s;
   const customers=A.fsmCustomersCache||[];
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmSiteModalOverlay" onclick="if(event.target===this)closeFsmSiteModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmSiteModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmSiteModal()">
     <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
       <div class="modal-title">${isNew?'New Site':esc(s.name)}</div>
       <div id="fsmSiteError" class="auth-err" style="display:none"></div>
@@ -6309,7 +6309,7 @@ function showFsmAssetModal(assetId){
   const a=assetId?(A.fsmAssets||[]).find(x=>x.id===assetId):null;
   const isNew=!a;
   const sites=A.fsmSites||[];
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmAssetModalOverlay" onclick="if(event.target===this)closeFsmAssetModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmAssetModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmAssetModal()">
     <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
       <div class="modal-title">${isNew?'New Asset':esc(a.asset_code)}</div>
       <div id="fsmAssetError" class="auth-err" style="display:none"></div>
@@ -6427,7 +6427,7 @@ function showFsmCustomerPortalModal(customerId){
   const c=(A.fsmCustomersCache||[]).find(x=>x.id===customerId);
   if(!c)return;
   A.fsmPortalAccess=undefined;
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmCustPortalOverlay" onclick="if(event.target===this)closeFsmCustomerPortalModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmCustPortalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmCustomerPortalModal()">
     <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
       <div class="modal-title">Portal Access — ${esc(c.name)}</div>
       <div id="fsmCustPortalBody">${fsmPortalAccessHTML(customerId)}</div>
@@ -6533,7 +6533,7 @@ async function loadFSMKb(){
 function showFsmKbModal(articleId){
   const a=articleId?(A.fsmKb||[]).find(x=>x.id===articleId):null;
   const isNew=!a;
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmKbModalOverlay" onclick="if(event.target===this)closeFsmKbModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmKbModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmKbModal()">
     <div class="modal" style="max-width:640px;max-height:88vh;overflow-y:auto">
       <div class="modal-title">${isNew?'New Knowledge Base Article':'Edit Article'}</div>
       <div id="fsmKbError" class="auth-err" style="display:none"></div>
@@ -6649,7 +6649,7 @@ async function loadFSMParts(){
 function showFsmPartModal(partId){
   const p=partId?(A.fsmParts||[]).find(x=>x.id===partId):null;
   const isNew=!p;
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmPartModalOverlay" onclick="if(event.target===this)closeFsmPartModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmPartModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmPartModal()">
     <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
       <div class="modal-title">${isNew?'New Spare Part':esc(p.part_code)+' — '+esc(p.name)}</div>
       <div id="fsmPartError" class="auth-err" style="display:none"></div>
@@ -6794,7 +6794,7 @@ function showFsmContractModal(contractId){
   const isNew=!c;
   const customers=A.fsmCustomersCache||[];
   const sites=A.fsmSites||[];
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmContractModalOverlay" onclick="if(event.target===this)closeFsmContractModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmContractModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmContractModal()">
     <div class="modal" style="max-width:560px;max-height:88vh;overflow-y:auto">
       <div class="modal-title">${isNew?'New Contract':esc(c.contract_number||'Contract')}</div>
       <div id="fsmContractError" class="auth-err" style="display:none"></div>
@@ -6933,7 +6933,7 @@ function showFsmPmModal(pmId){
   const isNew=!p;
   const sites=A.fsmSites||[];
   const engineers=A.fsmEngineers||[];
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmPmModalOverlay" onclick="if(event.target===this)closeFsmPmModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmPmModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmPmModal()">
     <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
       <div class="modal-title">${isNew?'New PM Schedule':esc(p.name)}</div>
       <div id="fsmPmError" class="auth-err" style="display:none"></div>
@@ -7147,7 +7147,7 @@ async function loadFSMEngineers(){
 function showFsmEngineerModal(engineerId){
   const e=engineerId?(A.fsmEngineers||[]).find(x=>x.id===engineerId):null;
   const isNew=!e;
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmEngModalOverlay" onclick="if(event.target===this)closeFsmEngineerModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmEngModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmEngineerModal()">
     <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
       <div class="modal-title">${isNew?'New Engineer':esc(e.name)}</div>
       <div id="fsmEngError" class="auth-err" style="display:none"></div>
@@ -7217,7 +7217,7 @@ async function showFsmTicketModal(){
     A.fsmCustomersCache=cr.customers||[];
   }
   const customers=A.fsmCustomersCache||[];
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmModalOverlay" onclick="if(event.target===this)closeFsmTicketModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmTicketModal()">
     <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
       <div class="modal-title">New Service Ticket</div>
       <div id="fsmCreateError" class="auth-err" style="display:none"></div>
@@ -7671,7 +7671,7 @@ async function loadFSMDetail(id){
 
 function showFsmWorkOrderModal(ticketId){
   const engineers=A.fsmEngineers||[];
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmWoModalOverlay" onclick="if(event.target===this)closeFsmWorkOrderModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmWoModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmWorkOrderModal()">
     <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
       <div class="modal-title">New Work Order</div>
       <div id="fsmWoError" class="auth-err" style="display:none"></div>
@@ -7718,7 +7718,7 @@ async function saveFsmWorkOrder(ticketId){
 }
 
 function showFsmCompleteWorkOrderModal(woId){
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmWoCompleteOverlay" onclick="if(event.target===this)closeFsmCompleteWorkOrderModal()">
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmWoCompleteOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmCompleteWorkOrderModal()">
     <div class="modal" style="max-width:480px">
       <div class="modal-title">Complete Work Order</div>
       <div class="fld"><label>Completion Notes</label><textarea id="fsmWoCompletionNotes" class="iinput" rows="4" placeholder="What was done, findings, follow-up needed…"></textarea></div>
