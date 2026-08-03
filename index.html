@@ -5849,19 +5849,19 @@ function fsmBadge(val,map){
   return `<span class="sbadge ${cls}" style="text-transform:capitalize">${esc((val||'').replace(/_/g,' '))}</span>`;
 }
 
-const FSM_TAB_LABELS={tickets:'Tickets',sites:'Sites',assets:'Assets',engineers:'Engineers'};
+const FSM_TAB_LABELS={tickets:'Tickets',schedule:'Schedule',sites:'Sites',assets:'Assets',engineers:'Engineers'};
 const FSM_NEW_BTN={tickets:['+ New Ticket','showFsmTicketModal()'],sites:['+ New Site','showFsmSiteModal()'],assets:['+ New Asset','showFsmAssetModal()'],engineers:['+ New Engineer','showFsmEngineerModal()']};
 function fsmHTML(){
   const view=A.fsmView||'tickets';
-  const [btnLabel,btnAction]=FSM_NEW_BTN[view];
+  const newBtn=FSM_NEW_BTN[view];
   return `<div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
       <div class="tab-btns">
         ${Object.keys(FSM_TAB_LABELS).map(k=>`<button class="tab-btn ${view===k?'active':''}" onclick="fsmSwitchView('${k}')">${FSM_TAB_LABELS[k]}</button>`).join('')}
       </div>
-      <button class="btn btn-navy" onclick="${btnAction}">${btnLabel}</button>
+      ${newBtn?`<button class="btn btn-navy" onclick="${newBtn[1]}">${newBtn[0]}</button>`:''}
     </div>
-    ${view==='tickets'?fsmTicketsListHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():fsmEngineersListHTML()}
+    ${view==='tickets'?fsmTicketsListHTML():view==='schedule'?fsmScheduleHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():fsmEngineersListHTML()}
   </div>`;
 }
 
@@ -6080,6 +6080,106 @@ function fsmSwitchView(view){
   if(view==='tickets'&&A.fsmTickets==null)loadFSMPage();
   if(view==='sites'&&A.fsmSites==null)loadFSMSites();
   if(view==='assets'&&A.fsmAssets==null)loadFSMAssets();
+  if(view==='schedule'&&A.fsmScheduleWO==null)loadFSMSchedule();
+}
+
+// ── Module 6: Scheduling & Dispatch — drag-and-drop weekly board ───────────
+let FSM_SCHED={dragId:null};
+
+function fsmWeekStart(offsetWeeks){
+  const d=new Date();d.setHours(0,0,0,0);
+  const dow=(d.getDay()+6)%7; // 0=Mon .. 6=Sun
+  d.setDate(d.getDate()-dow+(offsetWeeks||0)*7);
+  return d;
+}
+function fsmISODate(d){return d.toISOString().slice(0,10);}
+
+async function loadFSMSchedule(){
+  if(A.fsmEngineers==null)await loadFSMEngineers();
+  const [wo,tk]=await Promise.all([
+    api('GET','/api/fsm_tickets?resource=work_order&action=list'),
+    api('GET','/api/fsm_tickets?resource=ticket&action=list'),
+  ]);
+  A.fsmScheduleWO=Array.isArray(wo)?wo:[];
+  A.fsmScheduleTickets={};(Array.isArray(tk)?tk:[]).forEach(t=>A.fsmScheduleTickets[t.id]=t);
+  draw();
+}
+
+function fsmScheduleHTML(){
+  if(A.fsmScheduleWO==null)return `<div style="padding:22px;color:var(--gray-500)">Loading…</div>`;
+  const offset=A.fsmScheduleOffset||0;
+  const weekStart=fsmWeekStart(offset);
+  const days=[...Array(7)].map((_,i)=>{const d=new Date(weekStart);d.setDate(d.getDate()+i);return d;});
+  const engineers=(A.fsmEngineers||[]).filter(e=>e.is_active!==false);
+  const tkById=A.fsmScheduleTickets||{};
+  const open=(A.fsmScheduleWO||[]).filter(w=>!w.completion_notes);
+  const unscheduled=open.filter(w=>!w.engineer_id||!w.visit_date);
+
+  const card=w=>{
+    const t=tkById[w.ticket_id]||{};
+    return `<div class="sbadge s-sent" draggable="true" ondragstart="fsmSchedDragStart(event,'${w.id}')"
+      style="display:block;cursor:grab;margin-bottom:4px;padding:4px 8px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
+      title="${esc(t.subject||'')}" onclick="A.page='fsmDetail';A.fsmDetailId='${w.ticket_id}';A.fsmDetail=null;A.fsmActivity=null;draw();loadFSMDetail('${w.ticket_id}')">
+      ${esc(t.ticket_number||'—')}
+    </div>`;
+  };
+
+  const dayHeaders=days.map(d=>`<div style="padding:8px;font-size:12px;font-weight:700;color:var(--gray-500);text-align:center">${d.toLocaleDateString(undefined,{weekday:'short'})}<br>${d.getDate()}/${d.getMonth()+1}</div>`).join('');
+
+  const rows=engineers.map(e=>{
+    const cells=days.map(d=>{
+      const iso=fsmISODate(d);
+      const items=open.filter(w=>w.engineer_id===e.id&&w.visit_date===iso);
+      return `<div style="border:1px solid var(--gray-100);min-height:56px;padding:4px" ondragover="event.preventDefault()" ondrop="fsmSchedDrop(event,'${e.id}','${iso}')">
+        ${items.map(card).join('')}
+      </div>`;
+    }).join('');
+    return `<div style="display:grid;grid-template-columns:140px repeat(7,1fr);align-items:stretch">
+      <div style="padding:8px;font-size:13px;font-weight:600;border:1px solid var(--gray-100);display:flex;align-items:center">${esc(e.name)}</div>
+      ${cells}
+    </div>`;
+  }).join('');
+
+  return `<div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm" onclick="A.fsmScheduleOffset=${offset-1};draw()">&larr; Prev week</button>
+        <button class="btn btn-sm" onclick="A.fsmScheduleOffset=0;draw()">This week</button>
+        <button class="btn btn-sm" onclick="A.fsmScheduleOffset=${offset+1};draw()">Next week &rarr;</button>
+      </div>
+      <div style="font-size:13px;color:var(--gray-500)">${weekStart.toLocaleDateString()} – ${days[6].toLocaleDateString()}</div>
+    </div>
+    <div style="margin-bottom:16px;border:1px dashed var(--gray-300);border-radius:8px;padding:10px" ondragover="event.preventDefault()" ondrop="fsmSchedDropUnscheduled(event)">
+      <div style="font-size:12px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">Unscheduled (${unscheduled.length})</div>
+      ${unscheduled.length?`<div style="display:flex;flex-wrap:wrap;gap:6px">${unscheduled.map(card).join('')}</div>`:`<div style="color:var(--gray-500);font-size:13px">Nothing waiting to be scheduled.</div>`}
+    </div>
+    ${engineers.length?`<div style="overflow-x:auto">
+      <div style="display:grid;grid-template-columns:140px repeat(7,1fr);min-width:760px">
+        <div></div>${dayHeaders}
+      </div>
+      <div style="min-width:760px">${rows}</div>
+    </div>`:`<div style="color:var(--gray-500);font-size:13px">No active engineers yet — add one from the Engineers tab.</div>`}
+  </div>`;
+}
+
+function fsmSchedDragStart(ev,id){FSM_SCHED.dragId=id;ev.dataTransfer.effectAllowed='move';}
+
+async function fsmSchedDrop(ev,engineerId,isoDate){
+  ev.preventDefault();
+  const woId=FSM_SCHED.dragId;FSM_SCHED.dragId=null;
+  if(!woId)return;
+  const r=await api('PATCH','/api/fsm_tickets?resource=work_order&action=reschedule&id='+woId,{engineer_id:engineerId,visit_date:isoDate});
+  if(r.error){alert(r.error);return;}
+  A.fsmScheduleWO=null;loadFSMSchedule();
+}
+
+async function fsmSchedDropUnscheduled(ev){
+  ev.preventDefault();
+  const woId=FSM_SCHED.dragId;FSM_SCHED.dragId=null;
+  if(!woId)return;
+  const r=await api('PATCH','/api/fsm_tickets?resource=work_order&action=reschedule&id='+woId,{engineer_id:null,visit_date:null});
+  if(r.error){alert(r.error);return;}
+  A.fsmScheduleWO=null;loadFSMSchedule();
 }
 
 async function loadFSMPage(){

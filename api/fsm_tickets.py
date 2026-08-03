@@ -84,6 +84,8 @@ def fsm_tickets_router():
             return list_work_orders()
         if action == "complete":
             return complete_work_order()
+        if action == "reschedule":
+            return reschedule_work_order()
 
     return jsonify({"error": "unknown resource/action"}), 400
 
@@ -349,5 +351,48 @@ def complete_work_order():
 
     ticket_id = result.data[0]["ticket_id"]
     _log_activity(sb, ticket_id, company_id, "completed", note="Work order completed")
+
+    return jsonify(result.data[0])
+
+
+def reschedule_work_order():
+    """Module 6 (Scheduling & Dispatch): drag-and-drop a work order onto a
+    different engineer and/or day on the scheduler. Also keeps the parent
+    ticket's assigned_engineer_id in sync so the ticket detail picker and
+    the scheduler never disagree about who's assigned."""
+    company_id = g.claims['company_id']
+    actor_id = g.claims['user_id']
+    wo_id = request.args.get("id")
+    if not wo_id:
+        return jsonify({"error": "id required"}), 400
+
+    payload = request.get_json(force=True) or {}
+    update = {"updated_at": datetime.utcnow().isoformat()}
+    if "engineer_id" in payload:
+        update["engineer_id"] = payload["engineer_id"]
+    if "visit_date" in payload:
+        update["visit_date"] = payload["visit_date"]
+
+    sb = get_sb()
+    result = sb.table("fsm_work_orders").update(update).eq("id", wo_id).eq("company_id", company_id).execute()
+    if not result.data:
+        return jsonify({"error": "not found"}), 404
+
+    wo = result.data[0]
+    ticket_id = wo["ticket_id"]
+
+    if "engineer_id" in payload and payload["engineer_id"]:
+        sb.table("fsm_tickets").update({
+            "assigned_engineer_id": payload["engineer_id"],
+            "updated_at": datetime.utcnow().isoformat(),
+        }).eq("id", ticket_id).eq("company_id", company_id).execute()
+
+    note_bits = []
+    if "engineer_id" in payload:
+        note_bits.append(f"engineer -> {payload['engineer_id']}")
+    if "visit_date" in payload:
+        note_bits.append(f"visit date -> {payload['visit_date']}")
+    _log_activity(sb, ticket_id, company_id, "rescheduled", actor_id=actor_id,
+                  note="Work order rescheduled: " + ", ".join(note_bits) if note_bits else "Work order rescheduled")
 
     return jsonify(result.data[0])
