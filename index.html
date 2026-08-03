@@ -6946,6 +6946,8 @@ async function showFsmTicketModal(){
       </div>
       <div class="fld"><label>Subject</label><input id="fsmNewSubject" class="iinput" placeholder="Short summary"></div>
       <div class="fld"><label>Description</label><textarea id="fsmNewDescription" class="iinput" rows="4"></textarea></div>
+      <button class="btn btn-sm" onclick="fsmAiTriage()" id="fsmAiTriageBtn">✨ AI Suggest Type &amp; Priority</button>
+      <div id="fsmAiTriageResult" style="font-size:12px;color:var(--gray-500);margin-top:6px"></div>
       <div class="modal-actions">
         <button class="btn" onclick="closeFsmTicketModal()">Cancel</button>
         <button class="btn btn-navy" onclick="createFSMTicket()">Create Ticket</button>
@@ -6954,6 +6956,24 @@ async function showFsmTicketModal(){
   </div>`);
 }
 function closeFsmTicketModal(){const el=document.getElementById('fsmModalOverlay');if(el)el.remove();}
+
+async function fsmAiTriage(){
+  const subject=(document.getElementById('fsmNewSubject')?.value||'').trim();
+  const description=(document.getElementById('fsmNewDescription')?.value||'').trim();
+  const assetSel=document.getElementById('fsmNewAsset');
+  const asset_category=assetSel?.selectedOptions?.[0]?.textContent?.split('—')[1]?.trim()||'';
+  const resultEl=document.getElementById('fsmAiTriageResult');
+  const btn=document.getElementById('fsmAiTriageBtn');
+  if(!subject&&!description){if(resultEl)resultEl.textContent='Enter a subject or description first.';return;}
+  if(btn){btn.disabled=true;btn.textContent='Thinking…';}
+  const r=await api('POST','/api/fsm_ai',{action:'triage',subject,description,asset_category});
+  if(btn){btn.disabled=false;btn.textContent='✨ AI Suggest Type & Priority';}
+  if(r.error){if(resultEl)resultEl.textContent=r.error;return;}
+  if(r.ticket_type)document.getElementById('fsmNewType').value=r.ticket_type;
+  if(r.priority)document.getElementById('fsmNewPriority').value=r.priority;
+  A.fsmNewAiFailureCategory=r.failure_category||null;
+  if(resultEl)resultEl.textContent=r.reasoning?`Suggested: ${r.reasoning}`:'Suggestion applied.';
+}
 
 async function fsmTicketCustomerChanged(){
   const customerId=document.getElementById('fsmNewCustomer')?.value;
@@ -6989,8 +7009,11 @@ async function createFSMTicket(){
   const description=(document.getElementById('fsmNewDescription')?.value||'').trim();
   const errEl=document.getElementById('fsmCreateError');
   if(!customer_id||!subject){if(errEl){errEl.textContent='Customer and Subject are required.';errEl.style.display='block';}return;}
-  const r=await api('POST','/api/fsm_tickets?resource=ticket&action=create',{customer_id,site_id,asset_id,ticket_type,priority,subject,description});
+  const body={customer_id,site_id,asset_id,ticket_type,priority,subject,description};
+  if(A.fsmNewAiFailureCategory&&(ticket_type==='incident'||ticket_type==='corrective_maintenance'))body.failure_category=A.fsmNewAiFailureCategory;
+  const r=await api('POST','/api/fsm_tickets?resource=ticket&action=create',body);
   if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
+  A.fsmNewAiFailureCategory=null;
   closeFsmTicketModal();
   A.fsmTickets=null;A.page='fsm';draw();loadFSMPage();
 }
@@ -7074,7 +7097,77 @@ function fsmCmDetailsHTML(t){
     <div class="fld"><label>Permanent Fix</label><textarea id="fsmCmPermFix" class="iinput" rows="2">${esc(t.permanent_fix||'')}</textarea></div>
   </div>
   <button class="btn btn-navy" onclick="saveFsmCmDetails('${t.id}')">Save Details</button>
-  <div id="fsmCmError" class="auth-err" style="display:none;margin-top:8px"></div>`;
+  <div id="fsmCmError" class="auth-err" style="display:none;margin-top:8px"></div>
+  <div style="border-top:1px solid var(--gray-100);margin-top:16px;padding-top:14px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+      <button class="btn btn-sm" onclick="fsmAiTroubleshoot('${t.id}')">✨ AI Troubleshoot</button>
+      <button class="btn btn-sm" onclick="fsmAiSimilarTickets('${t.id}')">Find Similar Past Tickets</button>
+      <button class="btn btn-sm" onclick="fsmAiPartsSuggest('${t.id}')">Suggest Spare Parts</button>
+    </div>
+    <div id="fsmAiCmResult"></div>
+  </div>`;
+}
+
+async function fsmGetAssetCategory(assetId){
+  if(!assetId)return '';
+  A.fsmAssetCatCache=A.fsmAssetCatCache||{};
+  if(A.fsmAssetCatCache[assetId]!==undefined)return A.fsmAssetCatCache[assetId];
+  const cached=(A.fsmAssets||[]).find(x=>x.id===assetId);
+  if(cached){A.fsmAssetCatCache[assetId]=cached.category||'';return A.fsmAssetCatCache[assetId];}
+  const r=await api('GET','/api/fsm_assets?resource=asset&action=get&id='+assetId);
+  const cat=(r&&!r.error&&r.category)||'';
+  A.fsmAssetCatCache[assetId]=cat;
+  return cat;
+}
+
+function fsmAiResultBox(html){
+  const el=document.getElementById('fsmAiCmResult');
+  if(el)el.innerHTML=html;
+}
+
+async function fsmAiTroubleshoot(ticketId){
+  const t=A.fsmDetail;
+  fsmAiResultBox('<div style="color:var(--gray-500);font-size:13px">Thinking…</div>');
+  const asset_category=await fsmGetAssetCategory(t.asset_id);
+  const r=await api('POST','/api/fsm_ai',{action:'troubleshoot',subject:t.subject,description:t.description,asset_category});
+  if(r.error){fsmAiResultBox(`<div class="auth-err" style="display:block">${esc(r.error)}</div>`);return;}
+  const causes=(r.likely_causes||[]).map(c=>`<li>${esc(c)}</li>`).join('');
+  const steps=(r.checklist||[]).map(c=>`<li>${esc(c)}</li>`).join('');
+  fsmAiResultBox(`<div style="border:1px solid var(--gray-200);border-radius:10px;padding:14px">
+    <div style="font-size:12px;font-weight:700;color:var(--gray-500);margin-bottom:6px">LIKELY CAUSES${r.grounded_in_kb?' (grounded in your Knowledge Base)':''}</div>
+    <ul style="margin:0 0 12px 18px;font-size:13px">${causes||'<li style="color:var(--gray-500)">None suggested.</li>'}</ul>
+    <div style="font-size:12px;font-weight:700;color:var(--gray-500);margin-bottom:6px">DIAGNOSTIC CHECKLIST</div>
+    <ol style="margin:0 0 0 18px;font-size:13px">${steps||'<li style="color:var(--gray-500)">None suggested.</li>'}</ol>
+    ${(r.kb_sources||[]).length?`<div style="font-size:12px;color:var(--gray-500);margin-top:10px">Sources: ${r.kb_sources.map(s=>esc(s.title)).join(', ')}</div>`:''}
+  </div>`);
+}
+
+async function fsmAiSimilarTickets(ticketId){
+  const t=A.fsmDetail;
+  fsmAiResultBox('<div style="color:var(--gray-500);font-size:13px">Searching…</div>');
+  const r=await api('POST','/api/fsm_ai',{action:'similar_tickets',ticket_id:ticketId,failure_category:t.failure_category});
+  if(r.error){fsmAiResultBox(`<div class="auth-err" style="display:block">${esc(r.error)}</div>`);return;}
+  const matches=r.matches||[];
+  if(!matches.length){fsmAiResultBox('<div style="color:var(--gray-500);font-size:13px">No similar resolved tickets found yet.</div>');return;}
+  fsmAiResultBox(matches.map(m=>`<div style="border:1px solid var(--gray-200);border-radius:10px;padding:12px;margin-bottom:8px;font-size:13px">
+    <strong>${esc(m.ticket_number)}</strong> — ${esc(m.subject)}
+    ${m.root_cause?`<div style="color:var(--gray-500);margin-top:4px"><strong>Root cause:</strong> ${esc(m.root_cause)}</div>`:''}
+    ${m.corrective_action?`<div style="color:var(--gray-500);margin-top:2px"><strong>Fixed by:</strong> ${esc(m.corrective_action)}</div>`:''}
+  </div>`).join(''));
+}
+
+async function fsmAiPartsSuggest(ticketId){
+  const t=A.fsmDetail;
+  fsmAiResultBox('<div style="color:var(--gray-500);font-size:13px">Checking inventory…</div>');
+  let asset_category='';
+  if(t.asset_id){
+    const a=(A.fsmAssets||[]).find(x=>x.id===t.asset_id);
+    asset_category=a?.category||'';
+  }
+  const r=await api('POST','/api/fsm_ai',{action:'parts_suggest',description:t.description,asset_category,failure_category:t.failure_category});
+  if(r.error){fsmAiResultBox(`<div class="auth-err" style="display:block">${esc(r.error)}</div>`);return;}
+  const parts=r.suggested_parts||[];
+  fsmAiResultBox(`<div style="font-size:13px">${parts.length?parts.map(p=>`<div style="padding:6px 0;border-bottom:1px solid var(--gray-100)"><strong>${esc(p.name)}</strong> ${p.category?`— ${esc(p.category)}`:''} <span style="color:var(--gray-500)">(${p.quantity_on_hand??0} on hand)</span></div>`).join(''):'<div style="color:var(--gray-500)">No matching parts found in inventory.</div>'}${r.reasoning?`<div style="color:var(--gray-500);margin-top:8px">${esc(r.reasoning)}</div>`:''}</div>`);
 }
 
 async function saveFsmCmDetails(ticketId){
@@ -7175,7 +7268,23 @@ function fsmEngineerPickerHTML(t){
       ${opts}
     </select>
     <button class="btn btn-navy" onclick="assignFSMEngineer('${t.id}')">Assign</button>
-    ${!engineers.length?`<p style="font-size:12px;color:var(--gray-500);margin-top:6px">No engineers yet — add one from the Engineers tab.</p>`:''}`;
+    ${engineers.length?`<button class="btn btn-sm" onclick="fsmAiAssignSuggest('${t.id}')">✨ AI Suggest</button>`:''}
+    ${!engineers.length?`<p style="font-size:12px;color:var(--gray-500);margin-top:6px">No engineers yet — add one from the Engineers tab.</p>`:''}
+    <div id="fsmAiAssignResult" style="margin-top:8px"></div>`;
+}
+
+async function fsmAiAssignSuggest(ticketId){
+  const el=document.getElementById('fsmAiAssignResult');
+  if(el)el.innerHTML='<div style="color:var(--gray-500);font-size:13px">Scoring engineers…</div>';
+  const r=await api('POST','/api/fsm_ai',{action:'assign_suggest',ticket_id:ticketId});
+  if(!el)return;
+  if(r.error){el.innerHTML=`<div class="auth-err" style="display:block">${esc(r.error)}</div>`;return;}
+  const suggestions=r.suggestions||[];
+  if(!suggestions.length){el.innerHTML='<div style="color:var(--gray-500);font-size:13px">No active engineers to suggest.</div>';return;}
+  el.innerHTML=suggestions.map((s,i)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--gray-100);font-size:13px">
+    <div><strong>${i===0?'★ ':''}${esc(s.name)}</strong><div style="color:var(--gray-500);font-size:12px">${s.reasons.map(r=>esc(r)).join(', ')}</div></div>
+    <button class="btn btn-sm" onclick="document.getElementById('fsmEngineerSelect').value='${s.id}'">Pick</button>
+  </div>`).join('');
 }
 
 async function assignFSMEngineer(ticketId){
