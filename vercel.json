@@ -21,6 +21,7 @@
 { "src": "api/fsm_parts.py", "use": "@vercel/python" },
 { "src": "api/fsm_notify.py", "use": "@vercel/python" },
 { "src": "api/fsm_reports.py", "use": "@vercel/python" },
+{ "src": "api/fsm_kb.py", "use": "@vercel/python" },
     { "src": "api/pdf-render.js", "use": "@vercel/node", "config": { "maxLambdaSize": "250mb", "maxDuration": 30, "memory": 3009 } },
         { "src": "index.html",    "use": "@vercel/static" }
   ],
@@ -71,6 +72,8 @@
 { "src": "/api/fsm_notify",      "dest": "api/fsm_notify.py" },
 { "src": "/api/fsm_reports/(.*)", "dest": "api/fsm_reports.py" },
 { "src": "/api/fsm_reports",      "dest": "api/fsm_reports.py" },
+{ "src": "/api/fsm_kb/(.*)", "dest": "api/fsm_kb.py" },
+{ "src": "/api/fsm_kb",      "dest": "api/fsm_kb.py" },
 { "src": "/(.*)",            "dest": "index.html" }
   ],
   "crons": [

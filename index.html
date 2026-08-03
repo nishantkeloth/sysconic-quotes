@@ -5849,8 +5849,8 @@ function fsmBadge(val,map){
   return `<span class="sbadge ${cls}" style="text-transform:capitalize">${esc((val||'').replace(/_/g,' '))}</span>`;
 }
 
-const FSM_TAB_LABELS={tickets:'Tickets',schedule:'Schedule',maintenance:'Maintenance',contracts:'Contracts',billing:'Billing',parts:'Parts',sites:'Sites',assets:'Assets',engineers:'Engineers',reports:'Reports'};
-const FSM_NEW_BTN={tickets:['+ New Ticket','showFsmTicketModal()'],maintenance:['+ New PM Schedule','showFsmPmModal()'],contracts:['+ New Contract','showFsmContractModal()'],parts:['+ New Part','showFsmPartModal()'],sites:['+ New Site','showFsmSiteModal()'],assets:['+ New Asset','showFsmAssetModal()'],engineers:['+ New Engineer','showFsmEngineerModal()']};
+const FSM_TAB_LABELS={tickets:'Tickets',schedule:'Schedule',maintenance:'Maintenance',contracts:'Contracts',billing:'Billing',parts:'Parts',sites:'Sites',assets:'Assets',engineers:'Engineers',kb:'Knowledge Base',reports:'Reports'};
+const FSM_NEW_BTN={tickets:['+ New Ticket','showFsmTicketModal()'],maintenance:['+ New PM Schedule','showFsmPmModal()'],contracts:['+ New Contract','showFsmContractModal()'],parts:['+ New Part','showFsmPartModal()'],sites:['+ New Site','showFsmSiteModal()'],assets:['+ New Asset','showFsmAssetModal()'],engineers:['+ New Engineer','showFsmEngineerModal()'],kb:['+ New Article','showFsmKbModal()']};
 function fsmHTML(){
   const view=A.fsmView||'tickets';
   const newBtn=FSM_NEW_BTN[view];
@@ -5861,7 +5861,7 @@ function fsmHTML(){
       </div>
       ${newBtn?`<button class="btn btn-navy" onclick="${newBtn[1]}">${newBtn[0]}</button>`:''}
     </div>
-    ${view==='reports'?fsmReportsHTML():view==='tickets'?fsmTicketsListHTML():view==='schedule'?fsmScheduleHTML():view==='maintenance'?fsmPmListHTML():view==='contracts'?fsmContractsListHTML():view==='billing'?fsmBillingListHTML():view==='parts'?fsmPartsListHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():fsmEngineersListHTML()}
+    ${view==='reports'?fsmReportsHTML():view==='tickets'?fsmTicketsListHTML():view==='schedule'?fsmScheduleHTML():view==='maintenance'?fsmPmListHTML():view==='contracts'?fsmContractsListHTML():view==='billing'?fsmBillingListHTML():view==='parts'?fsmPartsListHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():view==='kb'?fsmKbListHTML():fsmEngineersListHTML()}
   </div>`;
 }
 
@@ -6124,6 +6124,7 @@ function fsmSwitchView(view){
   if(view==='parts'&&A.fsmParts==null)loadFSMParts();
   if(view==='billing'&&A.fsmBillingTickets==null)loadFSMBilling();
   if(view==='reports'&&A.fsmReport==null)loadFSMReport();
+  if(view==='kb'&&A.fsmKb==null)loadFSMKb();
 }
 
 // ── Module 17: Reports & Dashboards ─────────────────────────────────────
@@ -6180,6 +6181,100 @@ async function loadFSMReport(){
   if(r.error){alert(r.error);return;}
   A.fsmReport=r;
   draw();
+}
+
+// ── Module 15: Knowledge Base ────────────────────────────────────────────
+const FSM_KB_CATEGORY_LABEL={article:'Article',video:'Video',manual:'Manual',troubleshooting_guide:'Troubleshooting Guide',faq:'FAQ',known_error:'Known Error'};
+const FSM_KB_ASSET_CATEGORIES=['LED Wall','DSP/Audio Processor','Control Processor (Crestron/AMX/Extron)','Video Wall Processor','Projector','Matrix Switcher','Amplifier','Microphone System','Camera/PTZ','Network/AV-over-IP','UPS/Power'];
+
+function fsmKbListHTML(){
+  const list=A.fsmKb;
+  if(list==null)return `<div style="padding:22px;color:var(--gray-500)">Loading…</div>`;
+  const search=A.fsmKbSearch||'';
+  const cat=A.fsmKbCat||'';
+  const filtered=list.filter(a=>(!cat||a.category===cat)&&(!search||(a.title||'').toLowerCase().includes(search.toLowerCase())||(a.content||'').toLowerCase().includes(search.toLowerCase())||(a.tags||[]).some(t=>(t||'').toLowerCase().includes(search.toLowerCase()))));
+  const cols='1fr 160px 1fr 120px';
+  const rows=filtered.map(a=>`<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="showFsmKbModal('${a.id}')">
+    <div data-label="Title"><strong>${esc(a.title)}</strong>${a.asset_category?`<div style="color:var(--gray-500);font-size:12px">${esc(a.asset_category)}</div>`:''}</div>
+    <div data-label="Category"><span class="sbadge s-waiting">${esc(FSM_KB_CATEGORY_LABEL[a.category]||a.category)}</span></div>
+    <div data-label="Tags" style="color:var(--gray-500);font-size:13px">${(a.tags||[]).map(t=>esc(t)).join(', ')}</div>
+    <div data-label="Updated" style="color:var(--gray-500);font-size:13px">${a.updated_at?new Date(a.updated_at).toLocaleDateString():''}</div>
+  </div>`).join('');
+  return `<div>
+    <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+      <input class="iinput" style="max-width:280px" placeholder="Search title, content, tags…" value="${esc(search)}" oninput="A.fsmKbSearch=this.value;draw()">
+      <select class="iinput" style="max-width:220px" onchange="A.fsmKbCat=this.value;draw()">
+        <option value="">All categories</option>
+        ${Object.keys(FSM_KB_CATEGORY_LABEL).map(k=>`<option value="${k}" ${cat===k?'selected':''}>${FSM_KB_CATEGORY_LABEL[k]}</option>`).join('')}
+      </select>
+    </div>
+    ${!filtered.length?`<div style="padding:28px;text-align:center;color:var(--gray-500)">${list.length?'No articles match your search.':'No knowledge base articles yet — add the first one.'}</div>`
+      :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Title</div><div>Category</div><div>Tags</div><div>Updated</div></div>${rows}`}
+  </div>`;
+}
+
+async function loadFSMKb(){
+  const r=await api('GET','/api/fsm_kb?action=list');
+  if(r.error){A.fsmKb=[];alert(r.error);draw();return;}
+  A.fsmKb=r.articles||[];
+  draw();
+}
+
+function showFsmKbModal(articleId){
+  const a=articleId?(A.fsmKb||[]).find(x=>x.id===articleId):null;
+  const isNew=!a;
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmKbModalOverlay" onclick="if(event.target===this)closeFsmKbModal()">
+    <div class="modal" style="max-width:640px;max-height:88vh;overflow-y:auto">
+      <div class="modal-title">${isNew?'New Knowledge Base Article':'Edit Article'}</div>
+      <div id="fsmKbError" class="auth-err" style="display:none"></div>
+      <div class="fld"><label>Title</label><input id="fsmKbTitle" class="iinput" value="${esc(a?.title||'')}" placeholder="e.g. LED Wall pixel dropout — troubleshooting"></div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Category</label><select id="fsmKbCategory" class="iinput">${Object.keys(FSM_KB_CATEGORY_LABEL).map(k=>`<option value="${k}" ${a?.category===k?'selected':''}>${FSM_KB_CATEGORY_LABEL[k]}</option>`).join('')}</select></div>
+        <div class="fld"><label>Related Asset Category</label><input id="fsmKbAssetCat" class="iinput" list="fsmKbAssetCatList" value="${esc(a?.asset_category||'')}"></div>
+      </div>
+      <datalist id="fsmKbAssetCatList">${FSM_KB_ASSET_CATEGORIES.map(c=>`<option value="${esc(c)}">`).join('')}</datalist>
+      <div class="fld"><label>Tags (comma-separated)</label><input id="fsmKbTags" class="iinput" value="${esc((a?.tags||[]).join(', '))}" placeholder="e.g. LED wall, calibration, receiver card"></div>
+      <div class="fld"><label>Content</label><textarea id="fsmKbContent" class="iinput" rows="8" placeholder="Article body, steps, or notes…">${esc(a?.content||'')}</textarea></div>
+      <div class="fld"><label>Attachment URL (manual PDF, video link, etc.)</label><input id="fsmKbAttachment" class="iinput" value="${esc(a?.attachment_url||'')}" placeholder="https://…"></div>
+      <div class="modal-actions">
+        ${!isNew?`<button class="btn" style="color:var(--red-600,#c0392b)" onclick="deleteFsmKbArticle('${a.id}')">Delete</button>`:''}
+        <button class="btn" onclick="closeFsmKbModal()">Cancel</button>
+        <button class="btn btn-navy" onclick="saveFsmKbArticle(${isNew?'null':`'${a.id}'`})">${isNew?'Add Article':'Save'}</button>
+      </div>
+    </div>
+  </div>`);
+}
+function closeFsmKbModal(){const el=document.getElementById('fsmKbModalOverlay');if(el)el.remove();}
+
+async function saveFsmKbArticle(articleId){
+  const errEl=document.getElementById('fsmKbError');
+  const title=(document.getElementById('fsmKbTitle')?.value||'').trim();
+  if(!title){if(errEl){errEl.textContent='Title is required.';errEl.style.display='block';}return;}
+  const body={
+    title,
+    category:document.getElementById('fsmKbCategory')?.value||'article',
+    asset_category:document.getElementById('fsmKbAssetCat')?.value||'',
+    tags:document.getElementById('fsmKbTags')?.value||'',
+    content:document.getElementById('fsmKbContent')?.value||'',
+    attachment_url:document.getElementById('fsmKbAttachment')?.value||'',
+  };
+  let r;
+  if(articleId){
+    r=await api('POST','/api/fsm_kb',{...body,action:'update',id:articleId});
+  }else{
+    r=await api('POST','/api/fsm_kb',{...body,action:'create'});
+  }
+  if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
+  closeFsmKbModal();
+  A.fsmKb=null;loadFSMKb();
+}
+
+async function deleteFsmKbArticle(articleId){
+  if(!confirm('Delete this article?'))return;
+  const r=await api('POST','/api/fsm_kb',{action:'delete',id:articleId});
+  if(r.error){alert(r.error);return;}
+  closeFsmKbModal();
+  A.fsmKb=null;loadFSMKb();
 }
 
 // ── Module 13: Billing overview tab ─────────────────────────────────────
