@@ -5849,8 +5849,8 @@ function fsmBadge(val,map){
   return `<span class="sbadge ${cls}" style="text-transform:capitalize">${esc((val||'').replace(/_/g,' '))}</span>`;
 }
 
-const FSM_TAB_LABELS={tickets:'Tickets',schedule:'Schedule',maintenance:'Maintenance',sites:'Sites',assets:'Assets',engineers:'Engineers'};
-const FSM_NEW_BTN={tickets:['+ New Ticket','showFsmTicketModal()'],maintenance:['+ New PM Schedule','showFsmPmModal()'],sites:['+ New Site','showFsmSiteModal()'],assets:['+ New Asset','showFsmAssetModal()'],engineers:['+ New Engineer','showFsmEngineerModal()']};
+const FSM_TAB_LABELS={tickets:'Tickets',schedule:'Schedule',maintenance:'Maintenance',contracts:'Contracts',sites:'Sites',assets:'Assets',engineers:'Engineers'};
+const FSM_NEW_BTN={tickets:['+ New Ticket','showFsmTicketModal()'],maintenance:['+ New PM Schedule','showFsmPmModal()'],contracts:['+ New Contract','showFsmContractModal()'],sites:['+ New Site','showFsmSiteModal()'],assets:['+ New Asset','showFsmAssetModal()'],engineers:['+ New Engineer','showFsmEngineerModal()']};
 function fsmHTML(){
   const view=A.fsmView||'tickets';
   const newBtn=FSM_NEW_BTN[view];
@@ -5861,7 +5861,7 @@ function fsmHTML(){
       </div>
       ${newBtn?`<button class="btn btn-navy" onclick="${newBtn[1]}">${newBtn[0]}</button>`:''}
     </div>
-    ${view==='tickets'?fsmTicketsListHTML():view==='schedule'?fsmScheduleHTML():view==='maintenance'?fsmPmListHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():fsmEngineersListHTML()}
+    ${view==='tickets'?fsmTicketsListHTML():view==='schedule'?fsmScheduleHTML():view==='maintenance'?fsmPmListHTML():view==='contracts'?fsmContractsListHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():fsmEngineersListHTML()}
   </div>`;
 }
 
@@ -6082,6 +6082,133 @@ function fsmSwitchView(view){
   if(view==='assets'&&A.fsmAssets==null)loadFSMAssets();
   if(view==='schedule'&&A.fsmScheduleWO==null)loadFSMSchedule();
   if(view==='maintenance'&&A.fsmPmSchedules==null)loadFSMPmSchedules();
+  if(view==='contracts'&&A.fsmContracts==null)loadFSMContracts();
+}
+
+// ── Module 10: Contract Management ──────────────────────────────────────
+const FSM_CONTRACT_TYPE_LABEL={warranty:'Warranty',amc:'AMC',cmc:'CMC',time_material:'Time & Material',labour_only:'Labour Only',parts_only:'Parts Only',fully_comprehensive:'Fully Comprehensive'};
+
+function fsmContractsListHTML(){
+  const list=A.fsmContracts||null;
+  const cols='140px 1fr 150px 1fr 130px 90px';
+  const custName=id=>{const c=(A.fsmCustomersCache||[]).find(x=>x.id===id);return c?c.name:'';};
+  const siteName=id=>{const s=(A.fsmSites||[]).find(x=>x.id===id);return s?s.name:'';};
+  const today=new Date().toISOString().slice(0,10);
+  const soon=new Date();soon.setDate(soon.getDate()+30);const soonISO=soon.toISOString().slice(0,10);
+  const rows=(list||[]).map(c=>{
+    const expiring=c.is_active&&c.end_date&&c.end_date<=soonISO;
+    const expired=c.end_date&&c.end_date<today;
+    return `<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="showFsmContractModal('${c.id}')">
+      <div data-label="Contract #"><strong>${esc(c.contract_number||'—')}</strong></div>
+      <div data-label="Customer" style="color:var(--gray-500);font-size:13px">${esc(custName(c.customer_id))}</div>
+      <div data-label="Type">${FSM_CONTRACT_TYPE_LABEL[c.contract_type]||c.contract_type}</div>
+      <div data-label="Site" style="color:var(--gray-500);font-size:13px">${esc(c.site_id?siteName(c.site_id):'All sites')}</div>
+      <div data-label="End Date">${c.end_date?`<span class="sbadge ${expired?'s-critical':expiring?'s-waiting':'s-sent'}">${esc(c.end_date)}</span>`:'—'}</div>
+      <div data-label="Status"><span class="sbadge ${c.is_active?'s-resolved':'s-cancelled'}">${c.is_active?'Active':'Inactive'}</span></div>
+    </div>`;
+  }).join('');
+  return list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
+    :!list.length?`<div style="padding:28px;text-align:center;color:var(--gray-500)">No contracts yet — add the first one.</div>`
+    :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Contract #</div><div>Customer</div><div>Type</div><div>Site</div><div>End Date</div><div>Status</div></div>${rows}`;
+}
+
+async function loadFSMContracts(){
+  if(A.fsmCustomersCache==null){const cr=await api('GET','/api/customers?limit=500');A.fsmCustomersCache=cr.customers||[];}
+  if(A.fsmSites==null){const sr=await api('GET','/api/fsm_assets?resource=site&action=list');A.fsmSites=Array.isArray(sr)?sr:[];}
+  const r=await api('GET','/api/fsm_contracts?resource=contract&action=list');
+  if(r.error){A.fsmContracts=[];alert(r.error);draw();return;}
+  A.fsmContracts=Array.isArray(r)?r:[];
+  draw();
+}
+
+function showFsmContractModal(contractId){
+  const c=contractId?(A.fsmContracts||[]).find(x=>x.id===contractId):null;
+  const isNew=!c;
+  const customers=A.fsmCustomersCache||[];
+  const sites=A.fsmSites||[];
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmContractModalOverlay" onclick="if(event.target===this)closeFsmContractModal()">
+    <div class="modal" style="max-width:560px;max-height:88vh;overflow-y:auto">
+      <div class="modal-title">${isNew?'New Contract':esc(c.contract_number||'Contract')}</div>
+      <div id="fsmContractError" class="auth-err" style="display:none"></div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Customer</label>
+          <select id="fsmContractCustomer" class="iinput">
+            <option value="">— Select customer —</option>
+            ${customers.map(cu=>`<option value="${cu.id}" ${c?.customer_id===cu.id?'selected':''}>${esc(cu.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="fld"><label>Site <span style="color:var(--gray-500);font-weight:400">(optional)</span></label>
+          <select id="fsmContractSite" class="iinput">
+            <option value="">— All sites —</option>
+            ${sites.map(s=>`<option value="${s.id}" ${c?.site_id===s.id?'selected':''}>${esc(s.name)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Contract Number</label><input id="fsmContractNumber" class="iinput" value="${esc(c?.contract_number||'')}" placeholder="e.g. AMC-2026-004"></div>
+        <div class="fld"><label>Contract Type</label>
+          <select id="fsmContractType" class="iinput">
+            ${Object.keys(FSM_CONTRACT_TYPE_LABEL).map(k=>`<option value="${k}" ${(!c&&k==='amc')||c?.contract_type===k?'selected':''}>${FSM_CONTRACT_TYPE_LABEL[k]}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Start Date</label><input id="fsmContractStart" type="date" class="iinput" value="${c?.start_date||''}"></div>
+        <div class="fld"><label>End Date / Renewal</label><input id="fsmContractEnd" type="date" class="iinput" value="${c?.end_date||''}"></div>
+      </div>
+      <div class="fld"><label>Coverage</label><textarea id="fsmContractCoverage" class="iinput" rows="2" placeholder="What's covered — e.g. LED wall, DSP, control system">${esc(c?.coverage_notes||'')}</textarea></div>
+      <div class="fld"><label>Excluded Items</label><textarea id="fsmContractExclusions" class="iinput" rows="2">${esc(c?.excluded_items||'')}</textarea></div>
+      <div class="field-grid g2">
+        <div class="fld"><label>SLA Response (hours)</label><input id="fsmContractSlaResponse" type="number" class="iinput" value="${c?.sla_response_hours??''}"></div>
+        <div class="fld"><label>SLA Resolution (hours)</label><input id="fsmContractSlaResolution" type="number" class="iinput" value="${c?.sla_resolution_hours??''}"></div>
+      </div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Billing Rate</label><input id="fsmContractBillingRate" type="number" class="iinput" value="${c?.billing_rate??''}" placeholder="e.g. per-hour or per-visit rate"></div>
+        <div class="fld"><label>Working Hours</label><input id="fsmContractWorkingHours" class="iinput" value="${esc(c?.working_hours||'')}" placeholder="e.g. Mon-Fri 8am-6pm"></div>
+      </div>
+      <div class="fld"><label>Billing Notes</label><textarea id="fsmContractBillingNotes" class="iinput" rows="2">${esc(c?.billing_notes||'')}</textarea></div>
+      <div class="fld"><label>Holiday Calendar</label><textarea id="fsmContractHolidays" class="iinput" rows="2">${esc(c?.holiday_calendar_notes||'')}</textarea></div>
+      <div class="fld"><label>Escalation Matrix</label><textarea id="fsmContractEscalation" class="iinput" rows="2" placeholder="e.g. L1 Engineer (2h) -> L2 Supervisor (4h) -> L3 Manager (8h)">${esc(c?.escalation_matrix||'')}</textarea></div>
+      ${!isNew?`<div class="fld"><label>Status</label><select id="fsmContractActive" class="iinput"><option value="true" ${c.is_active?'selected':''}>Active</option><option value="false" ${!c.is_active?'selected':''}>Inactive</option></select></div>`:''}
+      <div class="modal-actions">
+        <button class="btn" onclick="closeFsmContractModal()">Cancel</button>
+        <button class="btn btn-navy" onclick="saveFsmContract(${isNew?'null':`'${c.id}'`})">${isNew?'Add Contract':'Save'}</button>
+      </div>
+    </div>
+  </div>`);
+}
+function closeFsmContractModal(){const el=document.getElementById('fsmContractModalOverlay');if(el)el.remove();}
+
+async function saveFsmContract(contractId){
+  const errEl=document.getElementById('fsmContractError');
+  const customer_id=document.getElementById('fsmContractCustomer')?.value;
+  const contract_type=document.getElementById('fsmContractType')?.value;
+  if(!customer_id||!contract_type){if(errEl){errEl.textContent='Customer and Contract Type are required.';errEl.style.display='block';}return;}
+  const num=id=>{const v=document.getElementById(id)?.value;return v?Number(v):null;};
+  const body={
+    customer_id,contract_type,
+    site_id:document.getElementById('fsmContractSite')?.value||null,
+    contract_number:document.getElementById('fsmContractNumber')?.value||'',
+    start_date:document.getElementById('fsmContractStart')?.value||null,
+    end_date:document.getElementById('fsmContractEnd')?.value||null,
+    coverage_notes:document.getElementById('fsmContractCoverage')?.value||'',
+    excluded_items:document.getElementById('fsmContractExclusions')?.value||'',
+    sla_response_hours:num('fsmContractSlaResponse'),
+    sla_resolution_hours:num('fsmContractSlaResolution'),
+    billing_rate:num('fsmContractBillingRate'),
+    working_hours:document.getElementById('fsmContractWorkingHours')?.value||'',
+    billing_notes:document.getElementById('fsmContractBillingNotes')?.value||'',
+    holiday_calendar_notes:document.getElementById('fsmContractHolidays')?.value||'',
+    escalation_matrix:document.getElementById('fsmContractEscalation')?.value||'',
+  };
+  const activeSel=document.getElementById('fsmContractActive');
+  if(activeSel)body.is_active=activeSel.value==='true';
+  const r=contractId
+    ?await api('PATCH','/api/fsm_contracts?resource=contract&action=update&id='+contractId,body)
+    :await api('POST','/api/fsm_contracts?resource=contract&action=create',body);
+  if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
+  closeFsmContractModal();
+  A.fsmContracts=null;loadFSMContracts();
 }
 
 // ── Module 8: Preventive Maintenance ─────────────────────────────────────
