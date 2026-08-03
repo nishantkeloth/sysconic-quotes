@@ -9,9 +9,10 @@ Add this file to BOTH `builds` and `routes` in vercel.json.
 
 from flask import Flask, request, jsonify, g
 import uuid
+import requests
 from datetime import datetime, timedelta
 
-from api.auth import verify_token, get_sb
+from api.auth import verify_token, get_sb, get_ms_token, SENDER_EMAIL
 
 app = Flask(__name__)
 
@@ -166,6 +167,67 @@ def _log_activity(sb, ticket_id, company_id, event_type, actor_id=None, note=Non
 
 
 # ------------------------------------------------------------------
+# Module 16 (Notifications) — email only for Phase 1. SMS/WhatsApp/push
+# need a provider (Twilio/WhatsApp Business API/etc.) that isn't wired up
+# yet; every send is logged to fsm_notifications regardless of outcome so
+# there's a visible record even when delivery fails. Reuses the same
+# Microsoft Graph sender api/auth.py already uses for invite/reset emails.
+# ------------------------------------------------------------------
+def _notify(sb, company_id, ticket_id, event_type, to_email, subject, html_body):
+    if not to_email:
+        return
+    entry = {
+        "id": str(uuid.uuid4()),
+        "company_id": company_id,
+        "ticket_id": ticket_id,
+        "recipient_email": to_email,
+        "event_type": event_type,
+        "status": "pending",
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    try:
+        token = get_ms_token()
+        if not token:
+            entry["status"] = "failed"
+        else:
+            payload = {
+                "message": {
+                    "subject": subject,
+                    "body": {"contentType": "HTML", "content": html_body},
+                    "toRecipients": [{"emailAddress": {"address": to_email}}],
+                    "from": {"emailAddress": {"address": SENDER_EMAIL}},
+                }
+            }
+            r = requests.post(
+                f"https://graph.microsoft.com/v1.0/users/{SENDER_EMAIL}/sendMail",
+                json=payload,
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            )
+            entry["status"] = "sent" if r.status_code == 202 else "failed"
+    except Exception as e:
+        print(f"FSM notification email error: {e}")
+        entry["status"] = "failed"
+
+    if entry["status"] == "sent":
+        entry["sent_at"] = datetime.utcnow().isoformat()
+    sb.table("fsm_notifications").insert(entry).execute()
+
+    if ticket_id:
+        _log_activity(sb, ticket_id, company_id, "notification_sent",
+                      note=f"{event_type.replace('_',' ').title()} email to {to_email} — {entry['status']}")
+
+
+def _notify_wrapper(fn):
+    """Notifications should never fail the request they're attached to —
+    wrap each call site so an email/DB hiccup doesn't turn a successful
+    ticket action into a 500."""
+    try:
+        fn()
+    except Exception as e:
+        print(f"FSM notification dispatch error: {e}")
+
+
+# ------------------------------------------------------------------
 # Tickets
 # ------------------------------------------------------------------
 def create_ticket():
@@ -246,6 +308,15 @@ def create_ticket():
     created = result.data[0]
 
     _log_activity(sb, ticket_id, company_id, "created", actor_id=actor_id, note="Ticket created")
+
+    if record["site_id"]:
+        def _send():
+            site = sb.table("fsm_sites").select("contact_email,name").eq("id", record["site_id"]).single().execute().data
+            if site and site.get("contact_email"):
+                _notify(sb, company_id, ticket_id, "ticket_created", site["contact_email"],
+                        f"Service ticket {created['ticket_number']} created",
+                        f"<p>A new service ticket <strong>{created['ticket_number']}</strong> — {created['subject']} — has been logged for {site.get('name','your site')}.</p>")
+        _notify_wrapper(_send)
 
     return jsonify(created), 201
 
@@ -352,9 +423,14 @@ def assign_ticket():
 
     _log_activity(sb, ticket_id, company_id, "assigned", actor_id=actor_id, note=f"Assigned to engineer {engineer_id}")
 
-    # TODO (Phase 1 notifications): enqueue into fsm_notifications here,
-    # then wire to your existing Microsoft Graph email sender in auth.py
-    # (see send_invite_email for the pattern to follow).
+    def _send():
+        eng = sb.table("fsm_engineers").select("email").eq("id", engineer_id).single().execute().data
+        tk = result.data[0]
+        if eng and eng.get("email"):
+            _notify(sb, company_id, ticket_id, "engineer_assigned", eng["email"],
+                    f"Assigned: {tk['ticket_number']} — {tk['subject']}",
+                    f"<p>You've been assigned to ticket <strong>{tk['ticket_number']}</strong> — {tk['subject']}. Priority: {tk['priority']}.</p>")
+    _notify_wrapper(_send)
 
     return jsonify(result.data[0])
 
@@ -526,6 +602,17 @@ def complete_work_order():
 
     ticket_id = result.data[0]["ticket_id"]
     _log_activity(sb, ticket_id, company_id, "completed", note="Work order completed")
+
+    def _send():
+        tk = sb.table("fsm_tickets").select("ticket_number,subject,site_id").eq("id", ticket_id).single().execute().data
+        if not tk or not tk.get("site_id"):
+            return
+        site = sb.table("fsm_sites").select("contact_email").eq("id", tk["site_id"]).single().execute().data
+        if site and site.get("contact_email"):
+            _notify(sb, company_id, ticket_id, "work_completed", site["contact_email"],
+                    f"Work completed: {tk['ticket_number']}",
+                    f"<p>The service visit for ticket <strong>{tk['ticket_number']}</strong> — {tk['subject']} — has been completed.</p>")
+    _notify_wrapper(_send)
 
     return jsonify(result.data[0])
 
