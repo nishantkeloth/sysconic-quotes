@@ -33,6 +33,10 @@ VALID_FAILURE_CATEGORIES = {
 }
 REPEAT_FAILURE_WINDOW_DAYS = 90
 
+# Module 13 (Billing) — classification + status tracked on the ticket.
+VALID_BILLING_TYPES = {"warranty", "amc_included", "chargeable_visit", "time_material", "fixed_price"}
+VALID_BILLING_STATUSES = {"not_billable", "pending", "quoted", "invoiced", "paid"}
+
 
 def has_page_access(claims, page_key):
     if claims.get('role') == 'admin':
@@ -80,6 +84,8 @@ def fsm_tickets_router():
             return assign_ticket()
         if action == "update_cm":
             return update_corrective_details()
+        if action == "update_billing":
+            return update_billing()
 
     if resource == "activity":
         if action == "list":
@@ -207,6 +213,17 @@ def create_ticket():
             record["sla_response_due_at"] = (created_dt + timedelta(hours=float(contract["sla_response_hours"]))).isoformat()
         if contract.get("sla_resolution_hours") is not None:
             record["sla_resolution_due_at"] = (created_dt + timedelta(hours=float(contract["sla_resolution_hours"]))).isoformat()
+
+    # Module 13: default billing classification from the same contract.
+    ctype = contract.get("contract_type") if contract else None
+    if ctype == "warranty":
+        record["billing_type"], record["billing_status"] = "warranty", "not_billable"
+    elif ctype in ("amc", "cmc", "fully_comprehensive"):
+        record["billing_type"], record["billing_status"] = "amc_included", "not_billable"
+    elif ctype in ("time_material", "labour_only", "parts_only"):
+        record["billing_type"], record["billing_status"] = "time_material", "pending"
+    else:
+        record["billing_type"], record["billing_status"] = "chargeable_visit", "pending"
 
     # Module 9: auto-detect repeat failures — same asset, same breakdown-type
     # ticket, resolved/closed within the last REPEAT_FAILURE_WINDOW_DAYS.
@@ -372,6 +389,41 @@ def update_corrective_details():
 
     _log_activity(sb, ticket_id, company_id, "cm_details_updated", actor_id=actor_id,
                   note="Corrective maintenance details updated")
+
+    return jsonify(result.data[0])
+
+
+def update_billing():
+    """Module 13 (Billing): classification/amount/status for a service visit.
+    Actual quotation/invoice documents are NOT generated here — for a
+    chargeable ticket the expected flow is to use the app's existing
+    Quotes module (Deals-style 'Convert to Quote') rather than duplicating
+    that pipeline in FSM."""
+    company_id = g.claims['company_id']
+    actor_id = g.claims['user_id']
+    ticket_id = request.args.get("id")
+    if not ticket_id:
+        return jsonify({"error": "id required"}), 400
+
+    payload = request.get_json(force=True) or {}
+    if "billing_type" in payload and payload["billing_type"] not in VALID_BILLING_TYPES:
+        return jsonify({"error": f"invalid billing_type: {payload['billing_type']}"}), 400
+    if "billing_status" in payload and payload["billing_status"] not in VALID_BILLING_STATUSES:
+        return jsonify({"error": f"invalid billing_status: {payload['billing_status']}"}), 400
+
+    allowed = {"billing_type", "billing_status", "billing_amount", "billing_notes"}
+    update = {k: v for k, v in payload.items() if k in allowed}
+    if not update:
+        return jsonify({"error": "no valid fields provided"}), 400
+    update["updated_at"] = datetime.utcnow().isoformat()
+
+    sb = get_sb()
+    result = sb.table("fsm_tickets").update(update).eq("id", ticket_id).eq("company_id", company_id).execute()
+    if not result.data:
+        return jsonify({"error": "not found"}), 404
+
+    _log_activity(sb, ticket_id, company_id, "billing_updated", actor_id=actor_id,
+                  note="Billing details updated")
 
     return jsonify(result.data[0])
 

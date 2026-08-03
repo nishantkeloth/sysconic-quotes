@@ -5849,7 +5849,7 @@ function fsmBadge(val,map){
   return `<span class="sbadge ${cls}" style="text-transform:capitalize">${esc((val||'').replace(/_/g,' '))}</span>`;
 }
 
-const FSM_TAB_LABELS={tickets:'Tickets',schedule:'Schedule',maintenance:'Maintenance',contracts:'Contracts',parts:'Parts',sites:'Sites',assets:'Assets',engineers:'Engineers'};
+const FSM_TAB_LABELS={tickets:'Tickets',schedule:'Schedule',maintenance:'Maintenance',contracts:'Contracts',billing:'Billing',parts:'Parts',sites:'Sites',assets:'Assets',engineers:'Engineers'};
 const FSM_NEW_BTN={tickets:['+ New Ticket','showFsmTicketModal()'],maintenance:['+ New PM Schedule','showFsmPmModal()'],contracts:['+ New Contract','showFsmContractModal()'],parts:['+ New Part','showFsmPartModal()'],sites:['+ New Site','showFsmSiteModal()'],assets:['+ New Asset','showFsmAssetModal()'],engineers:['+ New Engineer','showFsmEngineerModal()']};
 function fsmHTML(){
   const view=A.fsmView||'tickets';
@@ -5861,7 +5861,7 @@ function fsmHTML(){
       </div>
       ${newBtn?`<button class="btn btn-navy" onclick="${newBtn[1]}">${newBtn[0]}</button>`:''}
     </div>
-    ${view==='tickets'?fsmTicketsListHTML():view==='schedule'?fsmScheduleHTML():view==='maintenance'?fsmPmListHTML():view==='contracts'?fsmContractsListHTML():view==='parts'?fsmPartsListHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():fsmEngineersListHTML()}
+    ${view==='tickets'?fsmTicketsListHTML():view==='schedule'?fsmScheduleHTML():view==='maintenance'?fsmPmListHTML():view==='contracts'?fsmContractsListHTML():view==='billing'?fsmBillingListHTML():view==='parts'?fsmPartsListHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():fsmEngineersListHTML()}
   </div>`;
 }
 
@@ -6122,6 +6122,36 @@ function fsmSwitchView(view){
   if(view==='maintenance'&&A.fsmPmSchedules==null)loadFSMPmSchedules();
   if(view==='contracts'&&A.fsmContracts==null)loadFSMContracts();
   if(view==='parts'&&A.fsmParts==null)loadFSMParts();
+  if(view==='billing'&&A.fsmBillingTickets==null)loadFSMBilling();
+}
+
+// ── Module 13: Billing overview tab ─────────────────────────────────────
+function fsmBillingListHTML(){
+  const list=A.fsmBillingTickets;
+  if(list==null)return `<div style="padding:22px;color:var(--gray-500)">Loading…</div>`;
+  const chargeable=list.filter(t=>FSM_CHARGEABLE_TYPES.has(t.billing_type));
+  const totalPending=chargeable.filter(t=>['pending','quoted','invoiced'].includes(t.billing_status)).reduce((s,t)=>s+(Number(t.billing_amount)||0),0);
+  const cols='120px 1fr 150px 130px 110px 110px';
+  const rows=chargeable.map(t=>`<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="A.page='fsmDetail';A.fsmDetailId='${t.id}';A.fsmDetail=null;A.fsmActivity=null;draw();loadFSMDetail('${t.id}')">
+    <div data-label="Ticket #"><strong>${esc(t.ticket_number)}</strong></div>
+    <div data-label="Subject">${esc(t.subject)}</div>
+    <div data-label="Type" style="color:var(--gray-500);font-size:13px">${FSM_BILLING_TYPE_LABEL[t.billing_type]||t.billing_type}</div>
+    <div data-label="Status"><span class="sbadge ${FSM_BILLING_STATUS_CLASS[t.billing_status]||'s-draft'}">${FSM_BILLING_STATUS_LABEL[t.billing_status]||t.billing_status}</span></div>
+    <div data-label="Amount">${t.billing_amount!=null?Number(t.billing_amount).toLocaleString(undefined,{minimumFractionDigits:2}):'—'}</div>
+    <div data-label="Ticket Status">${fsmBadge(t.status,FSM_STATUS_CLASS)}</div>
+  </div>`).join('');
+  return `<div>
+    <div style="font-size:13px;color:var(--gray-500);margin-bottom:12px">${chargeable.length} chargeable ticket${chargeable.length===1?'':'s'} · <strong style="color:var(--gray-700)">${totalPending.toLocaleString(undefined,{minimumFractionDigits:2})}</strong> pending/quoted/invoiced</div>
+    ${!chargeable.length?`<div style="padding:28px;text-align:center;color:var(--gray-500)">No chargeable tickets yet.</div>`
+    :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Ticket #</div><div>Subject</div><div>Billing Type</div><div>Status</div><div>Amount</div><div>Ticket Status</div></div>${rows}`}
+  </div>`;
+}
+
+async function loadFSMBilling(){
+  const r=await api('GET','/api/fsm_tickets?resource=ticket&action=list');
+  if(r.error){A.fsmBillingTickets=[];alert(r.error);draw();return;}
+  A.fsmBillingTickets=Array.isArray(r)?r:[];
+  draw();
 }
 
 // ── Module 12: Spare Parts ────────────────────────────────────────────────
@@ -6865,6 +6895,10 @@ function fsmDetailHTML(){
       <div class="card-title">Corrective Maintenance Details</div>
       ${fsmCmDetailsHTML(t)}
     </div>`:''}
+    <div class="card" style="margin-top:20px">
+      <div class="card-title">Billing</div>
+      ${fsmBillingHTML(t)}
+    </div>
   </div>`;
 }
 
@@ -6903,6 +6937,53 @@ async function saveFsmCmDetails(ticketId){
     permanent_fix:document.getElementById('fsmCmPermFix')?.value||'',
   };
   const r=await api('PATCH','/api/fsm_tickets?resource=ticket&action=update_cm&id='+ticketId,body);
+  if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
+  A.fsmDetail=null;loadFSMDetail(ticketId);
+}
+
+// ── Module 13: Billing ───────────────────────────────────────────────────
+const FSM_BILLING_TYPE_LABEL={warranty:'Warranty (No Charge)',amc_included:'AMC Included (No Charge)',chargeable_visit:'Chargeable Visit',time_material:'Time & Material',fixed_price:'Fixed Price'};
+const FSM_BILLING_STATUS_LABEL={not_billable:'Not Billable',pending:'Pending',quoted:'Quoted',invoiced:'Invoiced',paid:'Paid'};
+const FSM_BILLING_STATUS_CLASS={not_billable:'s-draft',pending:'s-waiting',quoted:'s-sent',invoiced:'s-sent',paid:'s-resolved'};
+const FSM_CHARGEABLE_TYPES=new Set(['chargeable_visit','time_material','fixed_price']);
+
+function fsmBillingHTML(t){
+  const chargeable=FSM_CHARGEABLE_TYPES.has(t.billing_type);
+  return `<div class="field-grid g2">
+    <div class="fld"><label>Billing Type</label>
+      <select id="fsmBillingType" class="iinput" onchange="fsmBillingTypeChanged()">
+        ${Object.keys(FSM_BILLING_TYPE_LABEL).map(k=>`<option value="${k}" ${t.billing_type===k?'selected':''}>${FSM_BILLING_TYPE_LABEL[k]}</option>`).join('')}
+      </select>
+    </div>
+    <div class="fld"><label>Status</label>
+      <select id="fsmBillingStatus" class="iinput">
+        ${Object.keys(FSM_BILLING_STATUS_LABEL).map(k=>`<option value="${k}" ${t.billing_status===k?'selected':''}>${FSM_BILLING_STATUS_LABEL[k]}</option>`).join('')}
+      </select>
+    </div>
+  </div>
+  <div class="fld" id="fsmBillingAmountFld" style="${chargeable?'':'display:none'}"><label>Amount</label><input id="fsmBillingAmount" type="number" class="iinput" value="${t.billing_amount??''}"></div>
+  <div class="fld"><label>Notes</label><textarea id="fsmBillingNotes" class="iinput" rows="2">${esc(t.billing_notes||'')}</textarea></div>
+  <button class="btn btn-navy" onclick="saveFsmBilling('${t.id}')">Save Billing</button>
+  ${chargeable?`<button class="btn" onclick="alert('Use the Quotes module to create a formal quotation for this visit — Billing here just tracks status, it doesn\\'t generate documents.')">How do I invoice this?</button>`:''}
+  <div id="fsmBillingError" class="auth-err" style="display:none;margin-top:8px"></div>`;
+}
+
+function fsmBillingTypeChanged(){
+  const type=document.getElementById('fsmBillingType')?.value;
+  const fld=document.getElementById('fsmBillingAmountFld');
+  if(fld)fld.style.display=FSM_CHARGEABLE_TYPES.has(type)?'':'none';
+}
+
+async function saveFsmBilling(ticketId){
+  const errEl=document.getElementById('fsmBillingError');
+  const amountVal=document.getElementById('fsmBillingAmount')?.value;
+  const body={
+    billing_type:document.getElementById('fsmBillingType')?.value,
+    billing_status:document.getElementById('fsmBillingStatus')?.value,
+    billing_amount:amountVal?Number(amountVal):null,
+    billing_notes:document.getElementById('fsmBillingNotes')?.value||'',
+  };
+  const r=await api('PATCH','/api/fsm_tickets?resource=ticket&action=update_billing&id='+ticketId,body);
   if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
   A.fsmDetail=null;loadFSMDetail(ticketId);
 }
