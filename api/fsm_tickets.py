@@ -103,6 +103,8 @@ def fsm_tickets_router():
             return complete_work_order()
         if action == "reschedule":
             return reschedule_work_order()
+        if action == "asset_statuses":
+            return get_work_order_asset_statuses()
 
     return jsonify({"error": "unknown resource/action"}), 400
 
@@ -591,14 +593,56 @@ def complete_work_order():
     payload = request.get_json(force=True) or {}
     sb = get_sb()
 
+    # PM report fields — health rating, key observations, customer sign-off
+    # name/date, revision, functional test results. All optional; kept as a
+    # single jsonb blob since the shape mirrors what only the report PDF
+    # renders, not anything else queried/filtered on.
+    ALLOWED_REPORT_META_KEYS = {
+        "health_rating", "key_observations", "customer_signature_name",
+        "customer_signature_date", "revision", "functional_tests",
+    }
+    report_meta_in = payload.get("report_meta") or {}
+    report_meta = {k: v for k, v in report_meta_in.items() if k in ALLOWED_REPORT_META_KEYS}
+
     update = {
         "completion_notes": payload.get("completion_notes"),
         "signature_url": payload.get("signature_url"),
         "updated_at": datetime.utcnow().isoformat(),
     }
+    if "checklist" in payload:
+        update["checklist"] = payload["checklist"]
+    if report_meta:
+        update["report_meta"] = report_meta
+
     result = sb.table("fsm_work_orders").update(update).eq("id", wo_id).eq("company_id", company_id).execute()
     if not result.data:
         return jsonify({"error": "not found"}), 404
+
+    # Per-asset (per-room) status for this visit — upsert one row per asset,
+    # scoped to this company so a cross-tenant asset_id can't be smuggled in.
+    asset_statuses = payload.get("asset_statuses") or []
+    if asset_statuses:
+        valid_asset_ids = set()
+        if asset_statuses:
+            ids = [a.get("asset_id") for a in asset_statuses if a.get("asset_id")]
+            if ids:
+                owned = sb.table("fsm_assets").select("id").eq("company_id", company_id).in_("id", ids).execute().data or []
+                valid_asset_ids = {r["id"] for r in owned}
+        rows = []
+        for a in asset_statuses:
+            aid = a.get("asset_id")
+            if not aid or aid not in valid_asset_ids:
+                continue
+            rows.append({
+                "company_id": company_id,
+                "work_order_id": wo_id,
+                "asset_id": aid,
+                "status": a.get("status") or "completed",
+                "remarks": a.get("remarks"),
+                "updated_at": datetime.utcnow().isoformat(),
+            })
+        if rows:
+            sb.table("fsm_work_order_assets").upsert(rows, on_conflict="work_order_id,asset_id").execute()
 
     ticket_id = result.data[0]["ticket_id"]
     _log_activity(sb, ticket_id, company_id, "completed", note="Work order completed")
@@ -615,6 +659,47 @@ def complete_work_order():
     _notify_wrapper(_send)
 
     return jsonify(result.data[0])
+
+
+def get_work_order_asset_statuses():
+    """Returns every asset at the work order's site, merged with any
+    per-asset status/remarks already saved for this specific visit (via
+    complete_work_order). Used to build the per-room checklist in the
+    Complete Work Order modal and the PM report — always returns the full
+    site asset list (not just ones already marked) so a new/incomplete visit
+    still shows every room to check off, defaulting to 'completed'."""
+    company_id = g.claims['company_id']
+    wo_id = request.args.get("id")
+    if not wo_id:
+        return jsonify({"error": "id required"}), 400
+
+    sb = get_sb()
+    wo = sb.table("fsm_work_orders").select("ticket_id").eq("id", wo_id).eq("company_id", company_id).execute().data
+    if not wo:
+        return jsonify({"error": "not found"}), 404
+
+    ticket = sb.table("fsm_tickets").select("site_id").eq("id", wo[0]["ticket_id"]).eq("company_id", company_id).execute().data
+    site_id = ticket[0]["site_id"] if ticket else None
+    if not site_id:
+        return jsonify([])
+
+    assets = sb.table("fsm_assets").select("id,asset_code,category,manufacturer,model").eq("company_id", company_id).eq("site_id", site_id).eq("is_deleted", False).order("asset_code").execute().data or []
+    saved = sb.table("fsm_work_order_assets").select("asset_id,status,remarks").eq("company_id", company_id).eq("work_order_id", wo_id).execute().data or []
+    saved_by_id = {s["asset_id"]: s for s in saved}
+
+    out = []
+    for a in assets:
+        s = saved_by_id.get(a["id"], {})
+        out.append({
+            "asset_id": a["id"],
+            "asset_code": a["asset_code"],
+            "category": a.get("category"),
+            "manufacturer": a.get("manufacturer"),
+            "model": a.get("model"),
+            "status": s.get("status", "completed"),
+            "remarks": s.get("remarks", ""),
+        })
+    return jsonify(out)
 
 
 def reschedule_work_order():

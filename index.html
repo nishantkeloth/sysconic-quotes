@@ -7686,7 +7686,10 @@ function fsmWorkOrdersHTML(){
       ${w.materials_required?`<div style="font-size:12px;color:var(--gray-500);margin-top:4px">Materials: ${esc(w.materials_required)}</div>`:''}
       ${w.tools_required?`<div style="font-size:12px;color:var(--gray-500);margin-top:4px">Tools: ${esc(w.tools_required)}</div>`:''}
       ${(w.checklist||[]).length?`<ul style="margin:8px 0 0 18px;font-size:13px;color:var(--gray-700)">${(w.checklist||[]).map(c=>`<li>${esc(typeof c==='string'?c:c.text||'')}</li>`).join('')}</ul>`:''}
-      ${done?`<div style="font-size:13px;margin-top:10px;padding-top:10px;border-top:1px solid var(--gray-100)"><strong>Completion notes:</strong> ${esc(w.completion_notes)}</div>`
+      ${done?`<div style="font-size:13px;margin-top:10px;padding-top:10px;border-top:1px solid var(--gray-100)">
+          <strong>Completion notes:</strong> ${esc(w.completion_notes)}
+          <div style="margin-top:8px"><button class="btn btn-sm" onclick="downloadFsmPMReport('${w.id}')">📄 Generate PM Report</button></div>
+        </div>`
         :`<button class="btn btn-sm" style="margin-top:10px" onclick="showFsmCompleteWorkOrderModal('${w.id}')">Mark Complete</button>`}
     </div>`;
   }).join('');
@@ -7759,7 +7762,9 @@ function showFsmWorkOrderModal(ticketId){
       <div class="fld"><label>Materials Required</label><input id="fsmWoMaterials" class="iinput" placeholder="e.g. HDMI cable, mounting bracket"></div>
       <div class="fld"><label>Tools Required</label><input id="fsmWoTools" class="iinput" placeholder="e.g. crimping tool, multimeter"></div>
       <div class="fld"><label>Instructions</label><textarea id="fsmWoInstructions" class="iinput" rows="3"></textarea></div>
-      <div class="fld"><label>Checklist</label><textarea id="fsmWoChecklist" class="iinput" rows="3" placeholder="One item per line, e.g.&#10;Verify signal at LED wall input&#10;Check DSP gain staging&#10;Test audio-follow-video sync"></textarea></div>
+      <div class="fld"><label>Checklist</label><textarea id="fsmWoChecklist" class="iinput" rows="3" placeholder="One item per line, e.g.&#10;Verify signal at LED wall input&#10;Poly Studio X: Camera lens cleaned&#10;Barco ClickShare: Firmware updated"></textarea>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:4px">Tip: prefix a line with "Category: " (e.g. "Samsung Display: Screen cleaned") to group it under that device category on the PM report.</div>
+      </div>
       <div class="modal-actions">
         <button class="btn" onclick="closeFsmWorkOrderModal()">Cancel</button>
         <button class="btn btn-navy" onclick="saveFsmWorkOrder('${ticketId}')">Create Work Order</button>
@@ -7771,7 +7776,10 @@ function closeFsmWorkOrderModal(){const el=document.getElementById('fsmWoModalOv
 
 async function saveFsmWorkOrder(ticketId){
   const errEl=document.getElementById('fsmWoError');
-  const checklist=(document.getElementById('fsmWoChecklist')?.value||'').split('\n').map(s=>s.trim()).filter(Boolean).map(text=>({text,done:false}));
+  const checklist=(document.getElementById('fsmWoChecklist')?.value||'').split('\n').map(s=>s.trim()).filter(Boolean).map(line=>{
+    const m=line.match(/^([^:]{2,40}):\s*(.+)$/);
+    return m?{category:m[1].trim(),text:m[2].trim(),done:false}:{category:'General',text:line,done:false};
+  });
   const body={
     ticket_id:ticketId,
     engineer_id:document.getElementById('fsmWoEngineer')?.value||null,
@@ -7788,27 +7796,263 @@ async function saveFsmWorkOrder(ticketId){
   loadFSMDetail(ticketId);
 }
 
-function showFsmCompleteWorkOrderModal(woId){
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmWoCompleteOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmCompleteWorkOrderModal()">
-    <div class="modal" style="max-width:480px">
+const FSM_ASSET_STATUS_LABELS={completed:'✅ Completed',issue_found:'⚠️ Issue found',not_applicable:'— N/A'};
+const FSM_CHECKLIST_STATUS_LABELS={completed:'✅ Completed',scheduled:'⏳ Scheduled for later',not_performed:'❌ Not performed'};
+
+async function showFsmCompleteWorkOrderModal(woId){
+  closeFsmCompleteWorkOrderModal(); // guard against a stale overlay/fetch from a previously-opened work order
+  const wo=(A.fsmWorkOrders||[]).find(w=>w.id===woId);
+  const checklist=(wo?.checklist||[]).map(c=>typeof c==='string'?{text:c,category:'General'}:c);
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmWoCompleteOverlay" data-wo-id="${woId}" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmCompleteWorkOrderModal()">
+    <div class="modal" style="max-width:620px;max-height:88vh;overflow-y:auto">
       <div class="modal-title">Complete Work Order</div>
-      <div class="fld"><label>Completion Notes</label><textarea id="fsmWoCompletionNotes" class="iinput" rows="4" placeholder="What was done, findings, follow-up needed…"></textarea></div>
+
+      ${checklist.length?`<div class="fld"><label>Checklist</label>
+        <div id="fsmWoChecklistStatus" style="border:1px solid var(--gray-200);border-radius:8px;padding:8px">
+          ${checklist.map((c,i)=>`<div style="display:flex;gap:8px;align-items:center;padding:6px 0;${i?'border-top:1px solid var(--gray-100)':''}">
+            <div style="flex:1;font-size:13px">${c.category&&c.category!=='General'?`<span style="color:var(--gray-500)">${esc(c.category)}: </span>`:''}${esc(c.text||'')}</div>
+            <select class="iinput" style="width:auto;font-size:12px" data-idx="${i}" data-role="chk-status">
+              ${Object.entries(FSM_CHECKLIST_STATUS_LABELS).map(([k,l])=>`<option value="${k}" ${k==='completed'?'selected':''}>${l}</option>`).join('')}
+            </select>
+            <input class="iinput" style="width:140px;font-size:12px" placeholder="Remarks" data-idx="${i}" data-role="chk-remarks">
+          </div>`).join('')}
+        </div>
+      </div>`:''}
+
+      <div class="fld"><label>Rooms / Assets Serviced</label>
+        <div id="fsmWoAssetStatus" style="border:1px solid var(--gray-200);border-radius:8px;padding:8px;font-size:13px;color:var(--gray-500)">Loading site assets…</div>
+      </div>
+
+      <div class="field-grid g2">
+        <div class="fld"><label>System Health Rating</label>
+          <select id="fsmWoHealthRating" class="iinput">
+            <option value="Excellent">Excellent</option>
+            <option value="Good" selected>Good</option>
+            <option value="Fair">Fair</option>
+            <option value="Requires Attention">Requires Attention</option>
+          </select>
+        </div>
+        <div class="fld"><label>Customer Sign-off Name (optional)</label><input id="fsmWoCustSignName" class="iinput" placeholder="Left blank if not yet signed"></div>
+      </div>
+      <div class="fld"><label>Key Observations (one per line, optional)</label><textarea id="fsmWoObservations" class="iinput" rows="2" placeholder="e.g. Cable Cubby fuse replaced in L4 Board Room"></textarea></div>
+      <div class="fld"><label>Completion Notes</label><textarea id="fsmWoCompletionNotes" class="iinput" rows="3" placeholder="What was done, findings, follow-up needed…"></textarea></div>
       <div class="modal-actions">
         <button class="btn" onclick="closeFsmCompleteWorkOrderModal()">Cancel</button>
         <button class="btn btn-navy" onclick="completeFsmWorkOrder('${woId}')">Mark Complete</button>
       </div>
     </div>
   </div>`);
+  loadFsmWoAssetStatuses(woId);
 }
-function closeFsmCompleteWorkOrderModal(){const el=document.getElementById('fsmWoCompleteOverlay');if(el)el.remove();}
+function closeFsmCompleteWorkOrderModal(){const el=document.getElementById('fsmWoCompleteOverlay');if(el)el.remove();A._fsmWoAssets=null;A._fsmWoAssetsWoId=null;}
+
+async function loadFsmWoAssetStatuses(woId){
+  const el=document.getElementById('fsmWoAssetStatus');
+  if(!el)return;
+  const r=await api('GET','/api/fsm_tickets?resource=work_order&action=asset_statuses&id='+woId);
+  // Guard against a race where the modal was closed, or a different work
+  // order's modal opened, before this fetch resolved -- data-wo-id on the
+  // overlay identifies which work order is actually still open.
+  const overlay=document.querySelector('#fsmWoCompleteOverlay[data-wo-id="'+woId+'"]');
+  if(!overlay)return;
+  const el2=document.getElementById('fsmWoAssetStatus');
+  if(!el2)return;
+  if(r.error){el2.innerHTML=`<span style="color:var(--red-600)">${esc(r.error)}</span>`;return;}
+  if(!Array.isArray(r)||!r.length){el2.innerHTML='No assets registered at this site yet.';return;}
+  A._fsmWoAssets=r;
+  A._fsmWoAssetsWoId=woId;
+  el2.innerHTML=r.map((a,i)=>`<div style="display:flex;gap:8px;align-items:center;padding:6px 0;${i?'border-top:1px solid var(--gray-100)':''}">
+    <div style="flex:1;font-size:13px"><strong>${esc(a.asset_code)}</strong>${a.category?` <span style="color:var(--gray-500)">(${esc(a.category)})</span>`:''}</div>
+    <select class="iinput" style="width:auto;font-size:12px" data-idx="${i}" data-role="asset-status">
+      ${Object.entries(FSM_ASSET_STATUS_LABELS).map(([k,l])=>`<option value="${k}" ${a.status===k?'selected':''}>${l}</option>`).join('')}
+    </select>
+    <input class="iinput" style="width:140px;font-size:12px" placeholder="Remarks" data-idx="${i}" data-role="asset-remarks" value="${esc(a.remarks||'')}">
+  </div>`).join('');
+}
 
 async function completeFsmWorkOrder(woId){
   const notes=(document.getElementById('fsmWoCompletionNotes')?.value||'').trim();
   if(!notes){alert('Add completion notes first.');return;}
-  const r=await api('PATCH','/api/fsm_tickets?resource=work_order&action=complete&id='+woId,{completion_notes:notes});
+
+  const wo=(A.fsmWorkOrders||[]).find(w=>w.id===woId);
+  const baseChecklist=(wo?.checklist||[]).map(c=>typeof c==='string'?{text:c,category:'General'}:{...c});
+  const chkEl=document.getElementById('fsmWoChecklistStatus');
+  if(chkEl){
+    chkEl.querySelectorAll('[data-role="chk-status"]').forEach(sel=>{
+      const i=Number(sel.dataset.idx);
+      if(baseChecklist[i])baseChecklist[i].status=sel.value;
+    });
+    chkEl.querySelectorAll('[data-role="chk-remarks"]').forEach(inp=>{
+      const i=Number(inp.dataset.idx);
+      if(baseChecklist[i])baseChecklist[i].remarks=inp.value;
+    });
+  }
+
+  const assetEl=document.getElementById('fsmWoAssetStatus');
+  const assetStatuses=[];
+  if(assetEl&&Array.isArray(A._fsmWoAssets)&&A._fsmWoAssetsWoId===woId){
+    const statusSels=assetEl.querySelectorAll('[data-role="asset-status"]');
+    const remarkInps=assetEl.querySelectorAll('[data-role="asset-remarks"]');
+    A._fsmWoAssets.forEach((a,i)=>{
+      assetStatuses.push({asset_id:a.asset_id,status:statusSels[i]?.value||'completed',remarks:remarkInps[i]?.value||''});
+    });
+  }
+
+  const observations=(document.getElementById('fsmWoObservations')?.value||'').split('\n').map(s=>s.trim()).filter(Boolean);
+  const report_meta={
+    health_rating:document.getElementById('fsmWoHealthRating')?.value||'',
+    key_observations:observations,
+    customer_signature_name:(document.getElementById('fsmWoCustSignName')?.value||'').trim(),
+  };
+
+  const r=await api('PATCH','/api/fsm_tickets?resource=work_order&action=complete&id='+woId,{
+    completion_notes:notes,
+    checklist:baseChecklist,
+    asset_statuses:assetStatuses,
+    report_meta,
+  });
   if(r.error){alert(r.error);return;}
   closeFsmCompleteWorkOrderModal();
+  A._fsmWoAssets=null;
   loadFSMDetail(A.fsmDetailId);
+}
+
+// ── PM Report PDF — branded service-documentation report generated from a
+// completed work order's checklist + per-asset statuses, in the same style
+// as a vendor's own PM report (cover page, checklist, room/asset table,
+// health rating, sign-off). Reuses the existing self-hosted /api/pdf/render2
+// route (same one downloadPDF() uses for quotes) — no new PDF backend needed.
+function fsmPmReportHTML(d){
+  const {company,ticket,wo,site,customerName,engineerName,assets}=d;
+  const rm=wo.report_meta||{};
+  const checklist=(wo.checklist||[]).map(c=>typeof c==='string'?{text:c,category:'General'}:c);
+  const byCategory={};
+  checklist.forEach(c=>{const cat=c.category||'General';(byCategory[cat]=byCategory[cat]||[]).push(c);});
+  const statusIcon=s=>s==='completed'?'✅ Completed':s==='scheduled'?'⏳ Scheduled':s==='not_performed'?'❌ Not performed':s==='issue_found'?'⚠️ Issue found':s==='not_applicable'?'— N/A':'✅ Completed';
+  const period=wo.visit_date||'';
+  const roomsServiced=assets.length;
+  const okCount=assets.filter(a=>a.status==='completed').length;
+  const passRate=roomsServiced?Math.round(okCount/roomsServiced*100):0;
+
+  const checklistHTML=Object.entries(byCategory).map(([cat,items])=>`
+    <h3>${esc(cat)}</h3>
+    <table class="rt"><thead><tr><th>Action</th><th>Status</th><th>Remarks</th></tr></thead><tbody>
+      ${items.map(it=>`<tr><td>${esc(it.text||'')}</td><td>${statusIcon(it.status)}</td><td>${esc(it.remarks||'—')}</td></tr>`).join('')}
+    </tbody></table>`).join('') || '<p style="color:#888">No checklist recorded for this visit.</p>';
+
+  const assetsHTML=assets.length?`<table class="rt"><thead><tr><th>#</th><th>Room / Asset</th><th>Category</th><th>Status</th><th>Remarks</th></tr></thead><tbody>
+      ${assets.map((a,i)=>`<tr><td>${i+1}</td><td>${esc(a.asset_code)}${a.manufacturer||a.model?`<br><span style="color:#888;font-size:11px">${esc([a.manufacturer,a.model].filter(Boolean).join(' '))}</span>`:''}</td><td>${esc(a.category||'—')}</td><td>${statusIcon(a.status)}</td><td>${esc(a.remarks||'—')}</td></tr>`).join('')}
+    </tbody></table>` : '<p style="color:#888">No assets registered at this site.</p>';
+
+  const observationsHTML=(rm.key_observations||[]).length?`<ul>${rm.key_observations.map(o=>`<li>${esc(o)}</li>`).join('')}</ul>`:'<p style="color:#888">None recorded.</p>';
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+    @page{size:A4;margin:12mm 10mm 15mm 10mm}
+    body{font-family:Arial,Helvetica,sans-serif;color:#1a1f2b;margin:0;padding:32px 40px}
+    h1{font-size:22px;margin:0 0 4px}
+    h2{font-size:16px;color:#1e3a5f;border-bottom:2px solid #1e3a5f;padding-bottom:6px;margin-top:28px}
+    h3{font-size:13px;color:#1e3a5f;margin:16px 0 6px}
+    .sub{color:#667085;font-size:13px;margin-bottom:18px}
+    table.rt{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:6px}
+    table.rt th{background:#1e3a5f;color:#fff;text-align:left;padding:6px 8px}
+    table.rt td{border:1px solid #d8dce3;padding:6px 8px;vertical-align:top}
+    .meta{display:flex;gap:24px;margin:14px 0;font-size:13px}
+    .meta div{flex:1}
+    .meta label{display:block;color:#667085;font-size:11px;text-transform:uppercase;letter-spacing:.03em}
+    .health{display:inline-block;padding:6px 14px;border-radius:6px;background:#eef4ff;color:#1e3a5f;font-weight:700;font-size:13px}
+    .sign{display:flex;gap:40px;margin-top:24px}
+    .sign div{flex:1;border-top:1px solid #333;padding-top:6px;font-size:12px}
+    .stats{display:flex;gap:16px;margin:14px 0}
+    .stat{flex:1;border:1px solid #d8dce3;border-radius:8px;padding:12px;text-align:center}
+    .stat b{display:block;font-size:20px;color:#1e3a5f}
+    .stat span{font-size:11px;color:#667085}
+    footer{margin-top:30px;font-size:11px;color:#888;border-top:1px solid #d8dce3;padding-top:10px}
+  </style></head><body>
+    <h1>${esc(company?.legal_name||company?.name||'Preventive Maintenance Report')}</h1>
+    <div class="sub">Preventive Maintenance Report — ${esc(site?.name||'')}${period?` · ${esc(period)}`:''}</div>
+
+    <h2>Customer Information</h2>
+    <div class="meta">
+      <div><label>Customer</label>${esc(customerName||'—')}</div>
+      <div><label>Site</label>${esc(site?.name||'—')}</div>
+      <div><label>PM Date</label>${esc(period||'—')}</div>
+      <div><label>Engineer</label>${esc(engineerName||'Unassigned')}</div>
+    </div>
+
+    <h2>System Inventory &amp; Preventive Checklist</h2>
+    ${checklistHTML}
+
+    <h2>Rooms / Assets Serviced</h2>
+    ${assetsHTML}
+
+    <h2>Functional Summary</h2>
+    <div class="stats">
+      <div class="stat"><b>${okCount}/${roomsServiced}</b><span>Rooms Passed</span></div>
+      <div class="stat"><b>${roomsServiced}</b><span>Rooms Serviced</span></div>
+      <div class="stat"><b>${passRate}%</b><span>Pass Rate</span></div>
+    </div>
+
+    <h2>Overall System Health &amp; Sign-Off</h2>
+    <p><strong>Key Observations</strong></p>
+    ${observationsHTML}
+    <p style="margin-top:14px"><strong>System Health Rating:</strong> <span class="health">${esc(rm.health_rating||'Not rated')}</span></p>
+
+    <div class="sign">
+      <div>Engineer Signature<br>Name: ${esc(engineerName||'___________________________')}<br>Date: ${esc(period||'___________________________')}</div>
+      <div>Customer Signature<br>Name: ${esc(rm.customer_signature_name||'___________________________')}<br>Date: ${esc(rm.customer_signature_date||'___________________________')}</div>
+    </div>
+
+    <footer>This report documents the completion of preventive maintenance for ${esc(customerName||'the customer')} at ${esc(site?.name||'the site')}, generated from Field Service ticket ${esc(ticket?.ticket_number||'')}.</footer>
+  </body></html>`;
+}
+
+async function downloadFsmPMReport(woId){
+  const wo=(A.fsmWorkOrders||[]).find(w=>w.id===woId);
+  const t=A.fsmDetail;
+  if(!wo||!t){alert('Could not find this work order.');return;}
+
+  const btn=event?.target;
+  if(btn){btn.disabled=true;btn.textContent='⏳ Generating…';}
+  try{
+    await ensurePrintCompany();
+    if(A.fsmCustomersCache==null){const cr=await api('GET','/api/customers?limit=500');A.fsmCustomersCache=cr.customers||[];}
+    const customer=(A.fsmCustomersCache||[]).find(c=>c.id===t.customer_id);
+    const [site,assets]=await Promise.all([
+      t.site_id?api('GET','/api/fsm_assets?resource=site&action=get&id='+t.site_id):Promise.resolve(null),
+      api('GET','/api/fsm_tickets?resource=work_order&action=asset_statuses&id='+woId),
+    ]);
+    const engineer=(A.fsmEngineers||[]).find(e=>e.id===wo.engineer_id);
+
+    const html=fsmPmReportHTML({
+      company:PRINTCO, ticket:t, wo, site,
+      customerName:customer?.company_name||customer?.name||'',
+      engineerName:engineer?.name||'',
+      assets:Array.isArray(assets)?assets:[],
+    });
+
+    const r=await api2Blob('/api/pdf/render2',{html,filename:`PM-Report-${t.ticket_number||woId.slice(0,8)}.pdf`});
+    if(!r){return;}
+    const {blob,filename}=r;
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);a.download=filename;
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+  }catch(e){alert('Could not generate the report.');}
+  finally{if(btn){btn.disabled=false;btn.textContent='📄 Generate PM Report';}}
+}
+
+// Small shared helper — POST JSON, get a PDF blob back, matching the
+// Authorization/error-handling pattern of downloadPDF() above but reusable
+// for any {html,filename} PDF (quotes call PDFShift's /render directly since
+// that route predates this helper; PM reports and any future document type
+// use this instead of duplicating the fetch/blob/error dance again).
+async function api2Blob(path,body){
+  const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+A.token},body:JSON.stringify(body)});
+  if(!r.ok){const e=await r.json().catch(()=>({}));alert(e.error||'PDF generation failed');return null;}
+  const blob=await r.blob();
+  const cd=r.headers.get('Content-Disposition')||'';
+  const m=cd.match(/filename="?([^";]+)"?/);
+  return {blob,filename:m?m[1]:(body.filename||'document.pdf')};
 }
 
 async function updateFSMStatus(id){
