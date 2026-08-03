@@ -2703,7 +2703,7 @@ function appHTML(){
       ${hasPageAccess('customers')?`<div class="sb-item ${A.page==='customers'?'active':''}" onclick="${nav('customers')}"><span class="sb-icon">👤</span>Customers</div>`:''}
       ${hasPageAccess('vendors')?`<div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="${nav('vendorMaster')}"><span class="sb-icon">🏭</span>Vendors</div>`:''}
       ${hasFeature('projects')&&hasPageAccess('projects')?`<div class="sb-item ${A.page==='projects'?'active':''}" onclick="${nav('projects')}"><span class="sb-icon">📁</span>Projects</div>`:''}
-      ${hasFeature('fsm_module')&&hasPageAccess('fsm')?`<div class="sb-item ${(A.page==='fsm'||A.page==='fsmDetail'||A.page==='fsmCreate')?'active':''}" onclick="${nav('fsm')}"><span class="sb-icon">🔧</span>Field Service</div>`:''}
+      ${hasFeature('fsm_module')&&hasPageAccess('fsm')?`<div class="sb-item ${(A.page==='fsm'||A.page==='fsmDetail')?'active':''}" onclick="${nav('fsm')}"><span class="sb-icon">🔧</span>Field Service</div>`:''}
       ${hasFeature('project_performance')&&hasPageAccess('projectPerformance')?`<div class="sb-item ${(A.page==='projectPerformance'||A.page==='projectPerformanceDetail')?'active':''}" onclick="${nav('projectPerformance')}"><span class="sb-icon">📊</span>Project Performance</div>`:''}
       ${hasPageAccess('reviewQueue')?`<div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>`:''}       ${hasFeature('testimonials')&&hasPageAccess('testimonials')?`<div class="sb-item ${A.page==='testimonials'?'active':''}" onclick="${nav('testimonials')}"><span class="sb-icon">⭐</span>Testimonials</div>`:''}       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}`}       ${(A.user?.role==='admin'&&!A.user?.is_platform_admin)?`<div class="sb-sec">Settings</div>
       <div class="sb-item ${A.page==='team'?'active':''}" onclick="${nav('team')}"><span class="sb-icon">👥</span>Team</div>
@@ -2740,7 +2740,6 @@ function appHTML(){
   else if(A.page==='customers')pageContent=customersHTML();
   else if(A.page==='projects')pageContent=projectsHTML();
   else if(A.page==='fsm')pageContent=fsmHTML();
-  else if(A.page==='fsmCreate')pageContent=fsmCreateHTML();
   else if(A.page==='fsmDetail')pageContent=fsmDetailHTML();
   else if(A.page==='projectPerformance')pageContent=portfolioHTML();
   else if(A.page==='projectPerformanceDetail')pageContent=projectPerformanceDetailHTML();
@@ -5864,7 +5863,7 @@ function fsmHTML(){
   return `<div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
       <div class="card-title" style="margin-bottom:0">Field Service Tickets</div>
-      <button class="btn btn-navy" onclick="A.page='fsmCreate';draw()">+ New Ticket</button>
+      <button class="btn btn-navy" onclick="showFsmTicketModal()">+ New Ticket</button>
     </div>
     ${list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
     :!list.length?`<div style="padding:28px;text-align:center;color:var(--gray-500)">No tickets yet — create the first one.</div>`
@@ -5878,38 +5877,41 @@ async function loadFSMPage(){
   draw();
 }
 
-function fsmCreateHTML(){
-  return `<div style="max-width:520px">
-    <button class="btn-link" onclick="A.page='fsm';draw()">&larr; Back to tickets</button>
-    <div class="card" style="margin-top:12px">
-    <div class="card-title">New Service Ticket</div>
-    <div class="fld"><label>Customer ID</label><input id="fsmNewCustomer" class="iinput" placeholder="customer UUID"></div>
-    <div class="fld"><label>Ticket Type</label>
-      <select id="fsmNewType" class="iinput">
-        <option value="incident">Incident</option>
-        <option value="service_request" selected>Service Request</option>
-        <option value="preventive_maintenance">Preventive Maintenance</option>
-        <option value="corrective_maintenance">Corrective Maintenance</option>
-        <option value="inspection">Inspection</option>
-        <option value="warranty">Warranty</option>
-        <option value="installation_support">Installation Support</option>
-        <option value="change_request">Change Request</option>
-        <option value="consultation">Consultation</option>
-      </select>
+function showFsmTicketModal(){
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmModalOverlay" onclick="if(event.target===this)closeFsmTicketModal()">
+    <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
+      <div class="modal-title">New Service Ticket</div>
+      <div id="fsmCreateError" class="auth-err" style="display:none"></div>
+      <div class="fld"><label>Customer ID</label><input id="fsmNewCustomer" class="iinput" placeholder="customer UUID"></div>
+      <div class="fld"><label>Ticket Type</label>
+        <select id="fsmNewType" class="iinput">
+          <option value="incident">Incident</option>
+          <option value="service_request" selected>Service Request</option>
+          <option value="preventive_maintenance">Preventive Maintenance</option>
+          <option value="corrective_maintenance">Corrective Maintenance</option>
+          <option value="inspection">Inspection</option>
+          <option value="warranty">Warranty</option>
+          <option value="installation_support">Installation Support</option>
+          <option value="change_request">Change Request</option>
+          <option value="consultation">Consultation</option>
+        </select>
+      </div>
+      <div class="fld"><label>Priority</label>
+        <select id="fsmNewPriority" class="iinput">
+          <option value="low">Low</option><option value="medium" selected>Medium</option>
+          <option value="high">High</option><option value="critical">Critical</option>
+        </select>
+      </div>
+      <div class="fld"><label>Subject</label><input id="fsmNewSubject" class="iinput" placeholder="Short summary"></div>
+      <div class="fld"><label>Description</label><textarea id="fsmNewDescription" class="iinput" rows="4"></textarea></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeFsmTicketModal()">Cancel</button>
+        <button class="btn btn-navy" onclick="createFSMTicket()">Create Ticket</button>
+      </div>
     </div>
-    <div class="fld"><label>Priority</label>
-      <select id="fsmNewPriority" class="iinput">
-        <option value="low">Low</option><option value="medium" selected>Medium</option>
-        <option value="high">High</option><option value="critical">Critical</option>
-      </select>
-    </div>
-    <div class="fld"><label>Subject</label><input id="fsmNewSubject" class="iinput" placeholder="Short summary"></div>
-    <div class="fld"><label>Description</label><textarea id="fsmNewDescription" class="iinput" rows="4"></textarea></div>
-    <button class="btn btn-navy" onclick="createFSMTicket()">Create Ticket</button>
-    <div id="fsmCreateError" class="auth-err" style="display:none;margin-top:8px"></div>
-    </div>
-  </div>`;
+  </div>`);
 }
+function closeFsmTicketModal(){const el=document.getElementById('fsmModalOverlay');if(el)el.remove();}
 
 async function createFSMTicket(){
   const customer_id=(document.getElementById('fsmNewCustomer')?.value||'').trim();
@@ -5921,6 +5923,7 @@ async function createFSMTicket(){
   if(!customer_id||!subject){if(errEl){errEl.textContent='Customer ID and Subject are required.';errEl.style.display='block';}return;}
   const r=await api('POST','/api/fsm_tickets?resource=ticket&action=create',{customer_id,ticket_type,priority,subject,description});
   if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
+  closeFsmTicketModal();
   A.fsmTickets=null;A.page='fsm';draw();loadFSMPage();
 }
 
