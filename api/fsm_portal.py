@@ -105,7 +105,7 @@ def verify_portal_token(req):
 # which previously bubbled up as a 401 that logged the staff member out of
 # the whole app just for opening the Customer Portal Access panel.
 PUBLIC_ACTIONS = {'login', 'accept_invite', 'invite_details'}
-STAFF_AUTHENTICATED_ACTIONS = {'invite', 'list_portal_users'}
+STAFF_AUTHENTICATED_ACTIONS = {'invite', 'list_portal_users', 'list_portal_status', 'set_active'}
 
 
 @app.before_request
@@ -128,6 +128,15 @@ def portal_gate():
     if not (co.get('features') or {}).get('fsm_module'):
         return jsonify({'error': 'The customer portal is not enabled for this account.'}), 403
 
+    # Checked on every request, not just at login, so a staff member locking
+    # a portal login (set_active) takes effect immediately — the token
+    # itself has no server-side revocation (see make_portal_token's comment),
+    # so without this check a locked account would stay usable for up to
+    # 24h until its JWT naturally expired.
+    user = sb.table('fsm_portal_users').select('is_active').eq('id', claims['portal_user_id']).execute().data
+    if not user or not user[0].get('is_active'):
+        return jsonify({'error': 'This account has been deactivated. Contact your service provider.'}), 403
+
     g.claims = claims
     return None
 
@@ -147,6 +156,8 @@ def fsm_portal_router():
             return create_ticket(body)
         if action == "self_help":
             return self_help(body)
+        if action == "set_active":
+            return set_active(body)
         return jsonify({"error": "unknown action"}), 400
 
     action = request.args.get("action")
@@ -164,6 +175,8 @@ def fsm_portal_router():
         return get_ticket()
     if action == "list_portal_users":
         return list_portal_users()
+    if action == "list_portal_status":
+        return list_portal_status()
     return jsonify({"error": "unknown action"}), 400
 
 
@@ -371,6 +384,51 @@ def list_portal_users():
     users = sb.table("fsm_portal_users").select("id,email,name,is_active,last_login_at,created_at").eq("company_id", claims['company_id']).eq("customer_id", customer_id).execute().data or []
     pending = sb.table("fsm_portal_invites").select("email,name,expires_at,created_at").eq("company_id", claims['company_id']).eq("customer_id", customer_id).eq("accepted", False).execute().data or []
     return jsonify({"users": users, "pending_invites": pending})
+
+
+# Company-wide, one query — lets the Customers list show a portal-status
+# badge per row without an N+1 query per customer.
+def list_portal_status():
+    from api.auth import verify_token as verify_staff_token
+    claims = verify_staff_token(request)
+    if not claims:
+        return jsonify({"error": "unauthorized"}), 401
+    sb = get_sb()
+    rows = sb.table("fsm_portal_users").select("customer_id,is_active").eq("company_id", claims['company_id']).execute().data or []
+    status = {}
+    for r in rows:
+        cid = r["customer_id"]
+        entry = status.setdefault(cid, {"active_count": 0, "total": 0})
+        entry["total"] += 1
+        if r.get("is_active"):
+            entry["active_count"] += 1
+    return jsonify({"status": status})
+
+
+# Lock/unlock (deactivate/reactivate) an existing portal login. Deactivating
+# doesn't delete the row or revoke an already-issued token early (the
+# portal's stateless 24h JWT has no server-side revocation — see the file
+# header for why that's an accepted tradeoff) but it does block every
+# subsequent login attempt and every gated action once that token expires,
+# which is at most 24 hours.
+def set_active(body):
+    from api.auth import verify_token as verify_staff_token
+    claims = verify_staff_token(request)
+    if not claims:
+        return jsonify({"error": "unauthorized"}), 401
+
+    portal_user_id = body.get("portal_user_id")
+    is_active = bool(body.get("is_active"))
+    if not portal_user_id:
+        return jsonify({"error": "portal_user_id required"}), 400
+
+    sb = get_sb()
+    existing = sb.table("fsm_portal_users").select("id").eq("id", portal_user_id).eq("company_id", claims['company_id']).execute().data
+    if not existing:
+        return jsonify({"error": "not found"}), 404
+
+    row = sb.table("fsm_portal_users").update({"is_active": is_active}).eq("id", portal_user_id).execute().data
+    return jsonify({"user": row[0] if row else None})
 
 
 # ── Portal-authenticated actions ────────────────────────────────────────

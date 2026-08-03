@@ -6391,7 +6391,7 @@ function fsmSwitchView(view){
   if(view==='billing'&&A.fsmBillingTickets==null)loadFSMBilling();
   if(view==='reports'&&A.fsmReport==null)loadFSMReport();
   if(view==='kb'&&A.fsmKb==null)loadFSMKb();
-  if(view==='customers'&&A.fsmCustomersCache==null)loadFSMCustomersOnboard();
+  if(view==='customers'&&A.fsmPortalStatus==null)loadFSMCustomersOnboard();
 }
 
 // ── Module 14: Customer Portal — standalone onboarding view ───────────────
@@ -6399,27 +6399,39 @@ function fsmSwitchView(view){
 // context, so staff can grant portal access at the moment that actually
 // matters (project handover, new AMC) rather than only reactively from
 // inside an existing ticket.
+function fsmPortalStatusBadge(customerId){
+  const s=(A.fsmPortalStatus||{})[customerId];
+  if(!s||!s.total)return `<span style="color:var(--gray-400);font-size:12px">No portal access</span>`;
+  if(s.active_count>0)return `<span class="sbadge s-resolved">Portal Active${s.active_count>1?` (${s.active_count})`:''}</span>`;
+  return `<span class="sbadge s-cancelled">Portal Locked</span>`;
+}
+
 function fsmCustomersOnboardHTML(){
   const list=A.fsmCustomersCache;
   if(list==null)return `<div style="padding:22px;color:var(--gray-500)">Loading…</div>`;
   const search=(A.fsmCustSearch||'').toLowerCase();
   const filtered=search?list.filter(c=>(c.name||'').toLowerCase().includes(search)||(c.email||'').toLowerCase().includes(search)):list;
-  const cols='1fr 1fr 140px';
+  const cols='1fr 1fr 150px 140px';
   const rows=filtered.map(c=>`<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="showFsmCustomerPortalModal('${c.id}')">
     <div data-label="Customer"><strong>${esc(c.name)}</strong></div>
     <div data-label="Email" style="color:var(--gray-500);font-size:13px">${esc(c.email||'')}</div>
-    <div data-label="Portal"><button class="btn btn-sm" onclick="event.stopPropagation();showFsmCustomerPortalModal('${c.id}')">Manage Access</button></div>
+    <div data-label="Portal Status">${fsmPortalStatusBadge(c.id)}</div>
+    <div data-label="Manage"><button class="btn btn-sm" onclick="event.stopPropagation();showFsmCustomerPortalModal('${c.id}')">Manage Access</button></div>
   </div>`).join('');
   return `<div style="margin-bottom:14px">
     <input class="iinput" style="max-width:280px" placeholder="Search customers…" value="${esc(A.fsmCustSearch||'')}" oninput="A.fsmCustSearch=this.value;draw()">
   </div>
   ${!filtered.length?`<div style="padding:28px;text-align:center;color:var(--gray-500)">${list.length?'No customers match your search.':'No customers yet.'}</div>`
-    :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Customer</div><div>Email</div><div></div></div>${rows}`}`;
+    :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Customer</div><div>Email</div><div>Portal Status</div><div></div></div>${rows}`}`;
 }
 
 async function loadFSMCustomersOnboard(){
-  const r=await api('GET','/api/customers?limit=500');
-  A.fsmCustomersCache=r.customers||[];
+  const [cr,sr]=await Promise.all([
+    api('GET','/api/customers?limit=500'),
+    api('GET','/api/fsm_portal?action=list_portal_status'),
+  ]);
+  A.fsmCustomersCache=cr.customers||[];
+  A.fsmPortalStatus=sr.status||{};
   draw();
 }
 
@@ -6435,7 +6447,7 @@ function showFsmCustomerPortalModal(customerId){
     </div>
   </div>`);
 }
-function closeFsmCustomerPortalModal(){const el=document.getElementById('fsmCustPortalOverlay');if(el)el.remove();}
+function closeFsmCustomerPortalModal(){const el=document.getElementById('fsmCustPortalOverlay');if(el)el.remove();draw();}
 
 // ── Module 17: Reports & Dashboards ─────────────────────────────────────
 function fsmMcard(label,val,sub){
@@ -7401,9 +7413,12 @@ function fsmPortalAccessHTML(customerId){
   if(p===undefined||A.fsmPortalAccessFor!==customerId){setTimeout(()=>loadFSMPortalAccess(customerId),0);}
   if(p==null||A.fsmPortalAccessFor!==customerId)return `<div style="color:var(--gray-500);font-size:13px">Loading…</div>`;
   const users=p.users||[],pending=p.pending_invites||[];
-  return `${users.length?users.map(u=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--gray-100);font-size:13px">
-      <div>${esc(u.name||u.email)} <span style="color:var(--gray-500)">${esc(u.email)}</span></div>
-      <span class="sbadge ${u.is_active?'s-resolved':'s-cancelled'}">${u.is_active?'Active':'Deactivated'}</span>
+  return `${users.length?users.map(u=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--gray-100);font-size:13px">
+      <div>${esc(u.name||u.email)} <span style="color:var(--gray-500)">${esc(u.email)}</span>${u.last_login_at?`<div style="font-size:11px;color:var(--gray-400)">Last login ${new Date(u.last_login_at).toLocaleDateString()}</div>`:''}</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="sbadge ${u.is_active?'s-resolved':'s-cancelled'}">${u.is_active?'Active':'Locked'}</span>
+        <button class="btn btn-sm" onclick="toggleFSMPortalUser('${u.id}',${u.is_active?'false':'true'},'${customerId}')">${u.is_active?'Lock':'Unlock'}</button>
+      </div>
     </div>`).join(''):''}
     ${pending.length?pending.map(inv=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--gray-100);font-size:13px">
       <div>${esc(inv.email)}</div><span class="sbadge s-waiting">Invite Pending</span>
@@ -7427,6 +7442,17 @@ async function loadFSMPortalAccess(customerId){
   const modalBody=document.getElementById('fsmCustPortalBody');
   if(modalBody)modalBody.innerHTML=fsmPortalAccessHTML(customerId);
   else draw();
+}
+
+async function toggleFSMPortalUser(portalUserId,makeActive,customerId){
+  const r=await api('POST','/api/fsm_portal',{action:'set_active',portal_user_id:portalUserId,is_active:makeActive});
+  if(r.error){alert(r.error);return;}
+  A.fsmPortalAccess=undefined;loadFSMPortalAccess(customerId);
+  // Keep the Customers-tab status badges in sync too, if that list is loaded.
+  if(A.fsmPortalStatus){
+    const r2=await api('GET','/api/fsm_portal?action=list_portal_status');
+    if(!r2.error)A.fsmPortalStatus=r2.status||{};
+  }
 }
 
 async function sendFSMPortalInvite(customerId){
