@@ -1033,6 +1033,7 @@ function mkOption(label='Option 1'){
     date:new Date().toISOString().slice(0,10),
     by:(A.user?.name||''),title:'Sales Team',
     vatEnabled:true,vatRate:5,
+    catalogOn:true, // Images & catalog-assist on by default -- see imgOn()/captureProduct()
     sections:[{id:uid(),name:'New Section',items:[mkItem()]}]
   };
 }
@@ -3819,7 +3820,12 @@ function thumbCell(si,ii,it){
 function updThumb(si,ii){const el=document.getElementById(`pthumb-${si}-${ii}`);const it=sec(si)?.items?.[ii];if(el&&it)el.outerHTML=thumbCell(si,ii,it);}
 
 async function captureProduct(si,ii){
-  if(!imgOn())return;
+  // Catalog capture always runs, independent of the Images toggle -- that
+  // toggle now only controls image search/thumbnail assist (see imgOn()),
+  // matching the "new models are added to the catalog automatically"
+  // promise shown on the empty Product Catalog page. Previously this
+  // function no-opped entirely whenever Images was off (default state),
+  // so quote line items silently never reached the catalog.
   const it=sec(si)?.items?.[ii];if(!it)return;
   const brand=(it.brand||'').trim(),model=(it.model||'').trim();
   if(!brand&&!model)return;
