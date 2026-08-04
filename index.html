@@ -3310,7 +3310,7 @@ function editorHTML(){
             <button type="button" class="pm-search-btn" title="${imgOn()?'Search Product Master':'Turn on 🖼 Images (top toolbar) to search the Product Master'}" onmousedown="event.preventDefault();pmSearchIconClick(${si},${ii})">🔍</button>
           </div>
           <textarea class="iinput" oninput="sec(${si}).items[${ii}].brand=this.value;schedSave()" onblur="captureProduct(${si},${ii})" placeholder="Brand">${esc(it.brand)}</textarea>
-          <textarea class="iinput" oninput="sec(${si}).items[${ii}].desc=this.value;schedSave()" placeholder="Description">${esc(it.desc)}</textarea>
+          <textarea class="iinput" oninput="sec(${si}).items[${ii}].desc=this.value;schedSave()" onblur="syncProductDescription(${si},${ii})" placeholder="Description">${esc(it.desc)}</textarea>
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="costusd" value="${it.costUsd||0}" oninput="liveCalc(this)" onblur="syncProductCost(${si},${ii})" title="Cost in USD — auto-converts to Cost using Rate to AED" placeholder="0">
           <input class="iinput" type="number" id="cost-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="cost" value="${it.cost}" oninput="liveCalc(this)" onblur="syncProductCost(${si},${ii})" placeholder="0">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="disc" value="${it.disc||0}" oninput="liveCalc(this)" placeholder="0">
@@ -3854,6 +3854,20 @@ async function syncProductCost(si,ii){
   const it=sec(si)?.items?.[ii];
   if(!it||!it.product_id||!(+it.cost>0))return;
   try{ await api('POST',`/api/products/${it.product_id}/sync-cost`,{cost:+it.cost}); }catch(e){}
+}
+
+// Pushes a quote line's description back to the product it's linked to, if
+// that product's catalog description is still blank. Needed for the same
+// reason as syncProductCost() above: captureProduct() links/creates the
+// product the moment Brand or Model is blurred -- almost always before the
+// user has typed a description yet -- so without this, a product created
+// from a quote line permanently keeps a blank catalog description even after
+// the real description is typed in on that line.
+async function syncProductDescription(si,ii){
+  const it=sec(si)?.items?.[ii];
+  const desc=(it?.desc||'').trim();
+  if(!it||!it.product_id||!desc)return;
+  try{ await api('POST',`/api/products/${it.product_id}/sync-description`,{description:desc}); }catch(e){}
 }
 
 // ── Vendor-field live search (Vendor Master autocomplete; manual values allowed) ──

@@ -277,6 +277,32 @@ def sync_product_cost(pid):
     sb.table('products').update({'default_cost': cost, 'cost_updated_at': 'now()'}).eq('id', pid).execute()
     return jsonify({'ok': True, 'updated': True})
 
+# ── Sync a quote line's description back to the product it's linked to ────────
+# Same gap as sync-cost above, but for description: captureProduct() in
+# index.html links/creates the catalog product the moment Brand or Model is
+# blurred -- almost always before the user has typed a description yet -- so
+# without this, a product auto-created from a quote line permanently keeps a
+# blank description even after the real description is typed in on that line.
+# Only fills in a description that's currently missing -- never overwrites one
+# the catalog already has, since that may have been deliberately curated.
+@app.route('/api/products/<pid>/sync-description', methods=['POST'])
+def sync_product_description(pid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+
+    desc = str((request.json or {}).get('description') or '').strip()[:500]
+    if not desc:
+        return jsonify({'ok': True, 'updated': False})
+
+    existing = sb.table('products').select('id,description').eq('id', pid).eq('company_id', claims['company_id']).execute()
+    if not existing.data:
+        return jsonify({'error': 'Not found'}), 404
+    if (existing.data[0].get('description') or '').strip():
+        return jsonify({'ok': True, 'updated': False})
+
+    sb.table('products').update({'description': desc, 'updated_at': 'now()'}).eq('id', pid).execute()
+    return jsonify({'ok': True, 'updated': True})
+
 # ── Delete product ─────────────────────────────────────────────────────────────
 @app.route('/api/products/<pid>', methods=['DELETE'])
 def delete_product(pid):
