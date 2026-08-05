@@ -1111,13 +1111,6 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
         _ov_start = len(E)
         E += [section_badge('OVERVIEW', TH)] + heading('Executive Summary', S, TH)
         E.append(Paragraph(content.get('executive_summary') or '', S['body']))
-        cred_bits = []
-        if company.get('founded_year'): cred_bits.append(f"Founded {company['founded_year']}")
-        if company.get('certifications'): cred_bits.append(company['certifications'])
-        if company.get('notable_clients'): cred_bits.append(f"Trusted by {company['notable_clients']}")
-        if cred_bits:
-            E.append(Spacer(1, 2*mm))
-            E.append(Paragraph(' &nbsp;|&nbsp; '.join(esc_p(b) for b in cred_bits), ParagraphStyle('cred', fontName='Helvetica-Oblique', fontSize=8, textColor=TH['gray'])))
         E.append(Spacer(1, 4*mm))
         stats2 = content.get('stats') or []
         if stats2:
@@ -1247,6 +1240,17 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
         footer_bits = [b for b in footer_bits if b]
         if footer_bits:
             E.append(Paragraph(' · '.join(footer_bits), S['small']))
+
+        # Credentials/certifications line -- moved here from right under the
+        # Executive Summary (top of the document) to a closing credibility
+        # statement at the end, just before the Acceptance page.
+        cred_bits = []
+        if company.get('founded_year'): cred_bits.append(f"Founded {company['founded_year']}")
+        if company.get('certifications'): cred_bits.append(company['certifications'])
+        if company.get('notable_clients'): cred_bits.append(f"Trusted by {company['notable_clients']}")
+        if cred_bits:
+            E.append(Spacer(1, 2*mm))
+            E.append(Paragraph(' &nbsp;|&nbsp; '.join(esc_p(b) for b in cred_bits), ParagraphStyle('cred', fontName='Helvetica-Oblique', fontSize=8, textColor=TH['gray'])))
 
     if not _section_on(content, 'warranty'): del E[_wr_start:]
 
