@@ -266,10 +266,11 @@ Return ONLY valid JSON matching exactly this shape (no markdown fences, no comme
   "control_testing": [{{"title":"...","bullets":["...","..."]}} ...exactly {targets['control_testing']} items — distinct control/testing/assurance topics (e.g. Control & Automation, Testing & Commissioning, and for larger scopes also Redundancy & Failover, Cybersecurity & Network Hardening, Documentation & As-Builts)...],
   "architecture_items": [{{"label":"Category e.g. Display","value":"brands/models e.g. Samsung QM43C"}} ...exactly {targets['architecture_items']} items, one per distinct subsystem/category actually present in the equipment summary — for larger scopes, break categories out more granularly (e.g. separate Displays / Video Processing / Audio DSP / Amplification / Control / Network / Cabling Infrastructure / Power & Racks) rather than lumping them together...],
   "architecture_note": "{note_len}",
-  "mobilization_phases": [{{"title":"Project Initiation","bullets":["...","...","..."]}} ...exactly {targets['mobilization_phases']} phases, standard AV project rollout phases scaled to project complexity...],
+  "mobilization_phases": [{{"title":"Project Initiation","duration":"e.g. 3-5 business days, scaled to this project's real scope","bullets":["...","...","..."]}} ...exactly {targets['mobilization_phases']} phases, standard AV project rollout phases scaled to project complexity...],
   "warranty_years": "e.g. 1 Year or 3 Years, infer from context or default to 1 Year",
   "support_bullets": ["...", "...", "... 4-6 short bullet points of what's covered during warranty (more for larger scopes)"],
   "exclusions": [{{"title":"Mishandling / misuse","text":"..."}} ...exactly {targets['exclusions']} items...],
+  "payment_terms": ["...", "... 3-5 short standard payment milestone bullets (e.g. advance on order confirmation, on delivery, on completion/handover), proportioned sensibly for this project's scale"],
   "general_notes": ["...", "... 4-6 short standard proposal disclaimer bullet points"]
 }}
 
@@ -512,7 +513,10 @@ def numbered_phases(phases, CW, TH=None):
                     colWidths=[9*mm], rowHeights=[9*mm])
         num.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),TH['navy']),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(0,0),(-1,-1),'CENTER')]))
         bullets = '<br/>'.join(f"•  {esc_p(b)}" for b in (ph.get('bullets') or []))
-        body = [Paragraph(esc_p(ph.get('title','')), S_title), Paragraph(bullets, S_bul)]
+        title_html = esc_p(ph.get('title',''))
+        if ph.get('duration'):
+            title_html += f"  <font color='#{_hex(TH['gray'])}' size='8'>· {esc_p(ph['duration'])}</font>"
+        body = [Paragraph(title_html, S_title), Paragraph(bullets, S_bul)]
         rows.append([num, body])
     t = Table(rows, colWidths=[12*mm, CW-12*mm])
     t.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),4),
@@ -712,6 +716,16 @@ def _draw_cover_modern(canvas, doc, cover_img, TH=None):
         except Exception:
             pass
 
+    # Prominent client name, top-right, vertically aligned with the logo box --
+    # previously "Prepared for" only appeared in small print at the very
+    # bottom of the cover, easy to miss on first glance.
+    client_name = (data.get('customer_name') or '').strip()
+    if client_name:
+        canvas.setFont('Helvetica', 8); canvas.setFillColor(TH['lightblu'])
+        canvas.drawRightString(w-15*mm, h-24*mm, 'PREPARED FOR')
+        canvas.setFont('Helvetica-Bold', 14); canvas.setFillColor(white)
+        canvas.drawRightString(w-15*mm, h-31*mm, client_name[:45])
+
     badge = (data.get('doc_label') or 'TECHNICAL PROPOSAL').upper()
     canvas.setFont('Helvetica-Bold', 9)
     bw = canvas.stringWidth(badge, 'Helvetica-Bold', 9) + 16
@@ -778,6 +792,13 @@ def _draw_cover_corporate(canvas, doc, cover_img, TH=None):
             canvas.drawImage(img, 15*mm, h-20*mm-dh-6*mm, dw, dh, mask='auto')
         except Exception:
             pass
+
+    client_name = (data.get('customer_name') or '').strip()
+    if client_name:
+        canvas.setFont('Helvetica', 8); canvas.setFillColor(TH['gray'])
+        canvas.drawRightString(w-15*mm, h-24*mm, 'PREPARED FOR')
+        canvas.setFont('Helvetica-Bold', 14); canvas.setFillColor(TH['navy'])
+        canvas.drawRightString(w-15*mm, h-31*mm, client_name[:45])
 
     badge = (data.get('doc_label') or 'TECHNICAL PROPOSAL').upper()
     canvas.setFont('Helvetica-Bold', 8.5)
@@ -865,6 +886,13 @@ def _draw_cover_technical(canvas, doc, cover_img, TH=None):
     MX = SB + 15*mm
     CWd = w - MX - 15*mm
 
+    client_name = (data.get('customer_name') or '').strip()
+    if client_name:
+        canvas.setFont('Helvetica', 8); canvas.setFillColor(TH['gray'])
+        canvas.drawRightString(w-15*mm, h-16*mm, 'PREPARED FOR')
+        canvas.setFont('Helvetica-Bold', 13); canvas.setFillColor(TH['navy'])
+        canvas.drawRightString(w-15*mm, h-22*mm, client_name[:40])
+
     canvas.setFillColor(TH['navy']); canvas.setFont('Helvetica-Bold', 20)
     ty = h - 40*mm
     for ln in textwrap.wrap(data.get('title') or 'Technical Proposal', width=32)[:3]:
@@ -929,6 +957,13 @@ def _draw_cover_executive(canvas, doc, cover_img, TH=None):
             canvas.drawImage(img, (w-dw)/2, h-45*mm, dw, dh, mask='auto')
         except Exception:
             pass
+
+    client_name = (data.get('customer_name') or '').strip()
+    if client_name:
+        canvas.setFont('Helvetica', 8); canvas.setFillColor(TH['gray'])
+        canvas.drawCentredString(w/2, h-50*mm, 'PREPARED FOR')
+        canvas.setFont('Helvetica-Bold', 13); canvas.setFillColor(TH['navy'])
+        canvas.drawCentredString(w/2, h-56*mm, client_name[:45])
 
     badge = (data.get('doc_label') or 'TECHNICAL PROPOSAL').upper()
     canvas.setFont('Helvetica-Bold', 8); canvas.setFillColor(TH['gray'])
@@ -1150,6 +1185,12 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
                                          ('BOTTOMPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(0,0),(-1,-1),10)]))
                 E.append(KeepTogether(tot)); E.append(Spacer(1, 5*mm))
 
+        if _section_on(content, 'payment_terms') and content.get('payment_terms'):
+            E += [section_badge('COMMERCIAL', TH)] + heading('Payment Terms', S, TH)
+            for pt_bit in content['payment_terms']:
+                E.append(Paragraph(f"•  {esc_p(pt_bit)}", S['body']))
+            E.append(Spacer(1, 4*mm))
+
         if _section_on(content, 'rollout') and content.get('mobilization_phases'):
             E.append(PageBreak())
             E += [section_badge('ROLLOUT PLAN', TH)] + heading('Mobilization Plan', S, TH)
@@ -1215,6 +1256,40 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
                                      ('BOTTOMPADDING',(0,0),(-1,-1),6),('RIGHTPADDING',(0,0),(-1,-1),10)]))
             E.append(KeepTogether(tot)); E.append(Spacer(1, 6*mm))
         E.append(Paragraph('Pricing valid for 30 days from the date of this proposal, subject to the Terms & Conditions of the associated quotation.', S['small']))
+
+    # Signature & Acceptance -- appended to every generated document
+    # (technical, commercial, combined) regardless of which narrative
+    # sections were toggled off above, so there's always somewhere for the
+    # client to formally accept against or reference a PO number.
+    def _sig_column(title, sub_lines=None):
+        rows = [[Paragraph(f"<b>{esc_p(title)}</b>", ParagraphStyle('sigh', fontName='Helvetica-Bold', fontSize=10, textColor=TH['navy']))]]
+        if sub_lines:
+            rows.append([Paragraph('<br/>'.join(esc_p(s) for s in sub_lines), ParagraphStyle('sigsub', fontName='Helvetica', fontSize=8, textColor=TH['gray'], leading=11))])
+        rows.append([Spacer(1, 4*mm)])
+        line_rows = []  # row indices (within this column's table) that get an underline
+        for label in ('Name', 'Signature', 'Date'):
+            rows.append([Paragraph(label, ParagraphStyle('sigl', fontName='Helvetica', fontSize=8.5, textColor=TH['gray']))])
+            rows.append([Spacer(1, 8*mm)])
+            line_rows.append(len(rows) - 1)
+        t = Table(rows, colWidths=[CW*0.46])
+        style = [('TOPPADDING',(0,0),(-1,-1),0), ('BOTTOMPADDING',(0,0),(-1,-1),1), ('LEFTPADDING',(0,0),(-1,-1),0)]
+        for r in line_rows:
+            style.append(('LINEBELOW', (0,r), (0,r), 0.6, TH['grayb']))
+        t.setStyle(TableStyle(style))
+        return t
+
+    E.append(PageBreak())
+    E += [section_badge('ACCEPTANCE', TH)] + heading('Authorization & Sign-Off', S, TH)
+    E.append(Paragraph('This proposal is accepted subject to the terms, pricing, and exclusions outlined above. Please sign and return, or issue a Purchase Order referencing this document, to proceed.', S['body']))
+    E.append(Spacer(1, 6*mm))
+    left_bits = [b for b in [content.get('prepared_by'), content.get('prepared_by_email'), content.get('prepared_by_phone')] if b]
+    right_bits = [b for b in [content.get('client_contact_email'), content.get('client_contact_phone')] if b]
+    right_bits.append('Purchase Order / Reference No.: _______________')
+    left_sig = _sig_column(company.get('name') or 'Sysconic Technologies LLC', sub_lines=left_bits)
+    right_sig = _sig_column(content.get('client_contact_name') or content.get('customer_name') or 'Client', sub_lines=right_bits)
+    sig_row = Table([[left_sig, right_sig]], colWidths=[CW*0.5, CW*0.5])
+    sig_row.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'), ('LEFTPADDING',(1,0),(1,0),8)]))
+    E.append(KeepTogether(sig_row))
 
     doc.build(E)
     return buf.getvalue()
@@ -1284,9 +1359,49 @@ def draft_proposal():
         return jsonify({'error': str(e)}), 502
 
     content.setdefault('title', quote.get('title') or 'Technical Proposal')
+    content.setdefault('payment_terms', [
+        '50% advance payment on order confirmation',
+        '40% on delivery of equipment to site',
+        '10% on completion, testing and handover',
+    ])
     content['customer_name'] = quote.get('customer') or ''
     content['date'] = (opts[0].get('date') if opts else '') or time.strftime('%d %B %Y')
     content['prepared_by'] = (opts[0].get('by') if opts else '') or ''
+
+    # Best-effort client contact lookup -- quotes only store the customer's
+    # name as free text (no customer_id FK on this table), so this is a
+    # case-insensitive exact-name match against the Customer Master. Left
+    # blank on no match or an ambiguous multi-match rather than guessing --
+    # every one of these fields is editable in the proposal customizer
+    # before the PDF is actually generated.
+    content.setdefault('client_contact_name', '')
+    content.setdefault('client_contact_email', '')
+    content.setdefault('client_contact_phone', '')
+    cust_name = (quote.get('customer') or '').strip()
+    if cust_name:
+        try:
+            cm = sb.table('customers').select('name,email,phone') \
+                .eq('company_id', claims['company_id']).ilike('name', cust_name).execute()
+            if cm.data and len(cm.data) == 1:
+                content['client_contact_email'] = cm.data[0].get('email') or ''
+                content['client_contact_phone'] = cm.data[0].get('phone') or ''
+        except Exception:
+            pass
+
+    # Preparer contact -- pulled from the logged-in user's account and the
+    # company profile so it doesn't have to be typed in on every proposal.
+    content.setdefault('prepared_by_email', '')
+    content.setdefault('prepared_by_phone', '')
+    try:
+        ur = sb.table('users').select('email').eq('id', claims['user_id']).execute()
+        if ur.data: content['prepared_by_email'] = ur.data[0].get('email') or ''
+    except Exception:
+        pass
+    try:
+        cor = sb.table('companies').select('phone').eq('id', claims['company_id']).execute()
+        if cor.data: content['prepared_by_phone'] = cor.data[0].get('phone') or ''
+    except Exception:
+        pass
 
     return jsonify({'content': content})
 

@@ -4874,9 +4874,19 @@ function proposalReviewHTML(){
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Sections to include</label>
     <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">
-      ${[['overview','Overview'],['scope','Scope of Work'],['quality','Quality/Testing'],['system_design','System Design'],...(hasFeature('diagrams')?[['schematic','System Schematic']]:[]),['rollout','Rollout Plan'],['warranty','Warranty']].map(([key,lbl])=>`<label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;cursor:pointer"><input type="checkbox" ${(c.sections_enabled||(c.sections_enabled={}))[key]!==false?'checked':''} onchange="PROP.content.sections_enabled=PROP.content.sections_enabled||{};PROP.content.sections_enabled['${key}']=this.checked">${lbl}</label>`).join('')}
+      ${[['overview','Overview'],['scope','Scope of Work'],['quality','Quality/Testing'],['system_design','System Design'],...(hasFeature('diagrams')?[['schematic','System Schematic']]:[]),['rollout','Rollout Plan'],['payment_terms','Payment Terms'],['warranty','Warranty']].map(([key,lbl])=>`<label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;cursor:pointer"><input type="checkbox" ${(c.sections_enabled||(c.sections_enabled={}))[key]!==false?'checked':''} onchange="PROP.content.sections_enabled=PROP.content.sections_enabled||{};PROP.content.sections_enabled['${key}']=this.checked">${lbl}</label>`).join('')}
     </div>
     ${hasFeature('diagrams')&&!opts().some(o=>o.diagram&&o.diagram.code)?`<div style="font-size:12px;color:var(--amber);margin:-8px 0 12px">System Schematic: no diagram is saved on this quote yet — generate one via 🗺 AI Diagram in the editor toolbar, or that section will be skipped.</div>`:''}
+
+    <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Contact details — shown on the cover &amp; sign-off page</label>
+    <div class="field-grid g4" style="margin:0 0 12px;grid-template-columns:1fr 1fr 1fr">
+      <input placeholder="Client contact name" value="${esc(c.client_contact_name||'')}" oninput="PROP.content.client_contact_name=this.value">
+      <input placeholder="Client email" value="${esc(c.client_contact_email||'')}" oninput="PROP.content.client_contact_email=this.value">
+      <input placeholder="Client phone" value="${esc(c.client_contact_phone||'')}" oninput="PROP.content.client_contact_phone=this.value">
+      <input placeholder="Prepared by" value="${esc(c.prepared_by||'')}" oninput="PROP.content.prepared_by=this.value">
+      <input placeholder="Preparer email" value="${esc(c.prepared_by_email||'')}" oninput="PROP.content.prepared_by_email=this.value">
+      <input placeholder="Preparer phone" value="${esc(c.prepared_by_phone||'')}" oninput="PROP.content.prepared_by_phone=this.value">
+    </div>
     <label style="font-size:12px;font-weight:700;color:var(--gray-500)">Stat highlights</label>
     <div class="field-grid g4" style="margin:6px 0 12px;grid-template-columns:1fr 1fr">
       ${c.stats.map((s,i)=>`<div><input placeholder="Value" value="${esc(s.value)}" oninput="PROP.content.stats[${i}].value=this.value" style="margin-bottom:4px;text-align:center;font-weight:700;width:100%"><input placeholder="Label" value="${esc(s.label)}" oninput="PROP.content.stats[${i}].label=this.value" style="font-size:11px;text-align:center;width:100%"></div>`).join('')}
@@ -4903,12 +4913,15 @@ function proposalReviewHTML(){
     <textarea rows="2" style="width:100%;margin:6px 0;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" placeholder="Architecture note" oninput="PROP.content.architecture_note=this.value">${esc(c.architecture_note||'')}</textarea>
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Mobilization phases</label>
-    ${c.mobilization_phases.map((p,i)=>`<div style="display:flex;gap:8px;margin:6px 0;align-items:flex-start"><div style="flex:1"><input style="width:100%;margin-bottom:4px" placeholder="Phase title" value="${esc(p.title)}" oninput="PROP.content.mobilization_phases[${i}].title=this.value"><textarea rows="2" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" placeholder="One bullet per line" oninput="PROP.content.mobilization_phases[${i}].bullets=propTextToBullets(this.value)">${esc(propBulletsToText(p.bullets))}</textarea></div>${propRemoveBtn('mobilization_phases',i)}</div>`).join('')}
-    ${propAddBtn('Add phase', `propAddListItem('mobilization_phases',{title:'',bullets:[]})`)}
+    ${c.mobilization_phases.map((p,i)=>`<div style="display:flex;gap:8px;margin:6px 0;align-items:flex-start"><div style="flex:1"><div style="display:flex;gap:6px;margin-bottom:4px"><input style="flex:2" placeholder="Phase title" value="${esc(p.title)}" oninput="PROP.content.mobilization_phases[${i}].title=this.value"><input style="flex:1" placeholder="Duration e.g. 3-5 days" value="${esc(p.duration||'')}" oninput="PROP.content.mobilization_phases[${i}].duration=this.value"></div><textarea rows="2" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" placeholder="One bullet per line" oninput="PROP.content.mobilization_phases[${i}].bullets=propTextToBullets(this.value)">${esc(propBulletsToText(p.bullets))}</textarea></div>${propRemoveBtn('mobilization_phases',i)}</div>`).join('')}
+    ${propAddBtn('Add phase', `propAddListItem('mobilization_phases',{title:'',duration:'',bullets:[]})`)}
 
     <div class="fld2" style="margin-top:10px"><label>Warranty period</label><input value="${esc(c.warranty_years||'')}" oninput="PROP.content.warranty_years=this.value"></div>
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Support coverage (one per line)</label>
     <textarea rows="3" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" oninput="PROP.content.support_bullets=propTextToBullets(this.value)">${esc(propBulletsToText(c.support_bullets))}</textarea>
+
+    <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Payment terms (one per line)</label>
+    <textarea rows="3" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" oninput="PROP.content.payment_terms=propTextToBullets(this.value)">${esc(propBulletsToText(c.payment_terms))}</textarea>
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Exclusions</label>
     ${c.exclusions.map((e,i)=>`<div style="display:flex;gap:8px;margin:6px 0;align-items:center"><input style="flex:1" placeholder="Title" value="${esc(e.title)}" oninput="PROP.content.exclusions[${i}].title=this.value"><input style="flex:2" placeholder="Text" value="${esc(e.text)}" oninput="PROP.content.exclusions[${i}].text=this.value">${propRemoveBtn('exclusions',i)}</div>`).join('')}
