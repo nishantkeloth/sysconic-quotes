@@ -695,12 +695,10 @@ def _draw_cover_modern(canvas, doc, cover_img, TH=None):
     else:
         canvas.setFillColor(TH['navy']); canvas.rect(0, 0, w, h, fill=1, stroke=0)
     canvas.restoreState()
-    if not cover_img:
-        canvas.saveState()
-        canvas.setFillAlpha(0.10); canvas.setFillColor(white)
-        canvas.circle(w-10*mm, h-30*mm, 95*mm, fill=1, stroke=0)
-        canvas.circle(-10*mm, 25*mm, 70*mm, fill=1, stroke=0)
-        canvas.restoreState()
+    # Decorative circles removed -- they clipped/washed out the "Prepared
+    # for" client-name card that used to float in this same top-right area,
+    # producing an unreadable half-navy/half-white collision. Flat navy
+    # background now, so nothing behind the header row can fight with it.
 
     if logo_bytes:
         try:
@@ -716,15 +714,19 @@ def _draw_cover_modern(canvas, doc, cover_img, TH=None):
         except Exception:
             pass
 
-    # Prominent client name, top-right, vertically aligned with the logo box --
-    # previously "Prepared for" only appeared in small print at the very
-    # bottom of the cover, easy to miss on first glance.
+    # Prominent client name -- solid white card mirroring the logo box on
+    # the opposite side of the same header row. Guarantees contrast no
+    # matter what's behind it (navy fill, a cover photo, anything), unlike
+    # the previous floating text which had no such guarantee.
     client_name = (data.get('customer_name') or '').strip()
     if client_name:
-        canvas.setFont('Helvetica', 8); canvas.setFillColor(TH['lightblu'])
-        canvas.drawRightString(w-15*mm, h-24*mm, 'PREPARED FOR')
-        canvas.setFont('Helvetica-Bold', 14); canvas.setFillColor(white)
-        canvas.drawRightString(w-15*mm, h-31*mm, client_name[:45])
+        card_w, card_h = 60*mm, 18*mm
+        card_x, card_y = w-15*mm-card_w, h-38*mm
+        canvas.setFillColor(white); canvas.roundRect(card_x, card_y, card_w, card_h, 3*mm, fill=1, stroke=0)
+        canvas.setFont('Helvetica', 7); canvas.setFillColor(TH['gray'])
+        canvas.drawString(card_x+8, card_y+card_h-6.5*mm, 'PREPARED FOR')
+        canvas.setFont('Helvetica-Bold', 11); canvas.setFillColor(TH['navy'])
+        canvas.drawString(card_x+8, card_y+4.5*mm, client_name[:38])
 
     badge = (data.get('doc_label') or 'TECHNICAL PROPOSAL').upper()
     canvas.setFont('Helvetica-Bold', 9)
