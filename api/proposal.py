@@ -225,7 +225,7 @@ SCOPE_TIERS = [  # (min_line_items, tier) — checked in order, first match wins
     (0,  'small'),
 ]
 SCOPE_TARGETS = {
-    'small':      {'feature_cards': 3, 'scope_cards': 3, 'control_testing': 2, 'architecture_items': 4,  'mobilization_phases': 3, 'exclusions': 3},
+    'small':      {'feature_cards': 4, 'scope_cards': 4, 'control_testing': 2, 'architecture_items': 6,  'mobilization_phases': 3, 'exclusions': 3},
     'medium':     {'feature_cards': 4, 'scope_cards': 4, 'control_testing': 2, 'architecture_items': 6,  'mobilization_phases': 4, 'exclusions': 3},
     'large':      {'feature_cards': 6, 'scope_cards': 6, 'control_testing': 3, 'architecture_items': 9,  'mobilization_phases': 5, 'exclusions': 4},
     'enterprise': {'feature_cards': 8, 'scope_cards': 8, 'control_testing': 4, 'architecture_items': 12, 'mobilization_phases': 6, 'exclusions': 5},
@@ -720,13 +720,28 @@ def _draw_cover_modern(canvas, doc, cover_img, TH=None):
     # the previous floating text which had no such guarantee.
     client_name = (data.get('customer_name') or '').strip()
     if client_name:
-        card_w, card_h = 60*mm, 18*mm
+        # Card width follows the actual text instead of a fixed guess --
+        # shrink the font first (down to 8pt) if the name is long, and only
+        # truncate with an ellipsis as a last resort once it still can't fit
+        # in the space available to the right of the logo box.
+        max_card_w = w - 15*mm - (15*mm + 46*mm + 8*mm)
+        pad_x = 8
+        name_txt = client_name
+        fs = 11
+        while fs > 8 and canvas.stringWidth(name_txt, 'Helvetica-Bold', fs) + pad_x*2 > max_card_w:
+            fs -= 1
+        while canvas.stringWidth(name_txt, 'Helvetica-Bold', fs) + pad_x*2 > max_card_w and len(name_txt) > 4:
+            name_txt = name_txt[:-1]
+        if name_txt != client_name:
+            name_txt = name_txt.rstrip() + '…'
+        card_w = min(max_card_w, max(60*mm, canvas.stringWidth(name_txt, 'Helvetica-Bold', fs) + pad_x*2))
+        card_h = 18*mm
         card_x, card_y = w-15*mm-card_w, h-38*mm
         canvas.setFillColor(white); canvas.roundRect(card_x, card_y, card_w, card_h, 3*mm, fill=1, stroke=0)
         canvas.setFont('Helvetica', 7); canvas.setFillColor(TH['gray'])
-        canvas.drawString(card_x+8, card_y+card_h-6.5*mm, 'PREPARED FOR')
-        canvas.setFont('Helvetica-Bold', 11); canvas.setFillColor(TH['navy'])
-        canvas.drawString(card_x+8, card_y+4.5*mm, client_name[:38])
+        canvas.drawString(card_x+pad_x, card_y+card_h-6.5*mm, 'PREPARED FOR')
+        canvas.setFont('Helvetica-Bold', fs); canvas.setFillColor(TH['navy'])
+        canvas.drawString(card_x+pad_x, card_y+4.5*mm, name_txt)
 
     badge = (data.get('doc_label') or 'TECHNICAL PROPOSAL').upper()
     canvas.setFont('Helvetica-Bold', 9)
