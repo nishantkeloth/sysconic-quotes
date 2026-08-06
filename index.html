@@ -470,7 +470,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 // ── Config ──────────────────────────────────────────────────────────────────
 const API='';
 const STATUS_LABELS={draft:'Draft',sent:'Sent',awarded:'Awarded',lost:'Lost'};
-const RATES={AED:1,USD:3.68,EUR:4.02,GBP:4.65,SAR:0.981,QAR:1.011};
+const RATES={AED:1,USD:3.6725,EUR:4.02,GBP:4.65,SAR:0.981,QAR:1.011};
 const DEFAULT_TERMS=[
   'The items and quantities are as per the clients requirement',
   'Civil works, digging, tile removal etc. if needed will be Clients Scope',
@@ -1461,7 +1461,7 @@ async function newQuote(){
   A.reviewMode=null;
   const title=prompt('Quote name:','New Quote');if(!title)return;
   const customer='';
-  const r=await api('POST','/api/quotes',{title,customer,quote_data:[mkOption('Option 1')],terms_data:[...DEFAULT_TERMS],vendor_data:[],currency:'AED',exchange_rate:1});
+  const r=await api('POST','/api/quotes',{title,customer,quote_data:[mkOption('Option 1')],terms_data:[...DEFAULT_TERMS],vendor_data:[],currency:'AED',exchange_rate:3.6725});
   if(r.quote){A.quotes.unshift(r.quote);openQuote(r.quote);}
 }
 async function openQuote(q){
@@ -5302,7 +5302,7 @@ async function deleteDeal(dealId){
 async function convertDealToQuote(dealId){
   const deal=DEALS.list.find(d=>d.id===dealId) || (await api('GET','/api/deals/'+dealId)).deal;
   if(!deal)return;
-  const r=await api('POST','/api/quotes',{title:deal.title,customer:deal.customer_name||'',quote_data:[mkOption('Option 1')],terms_data:[...DEFAULT_TERMS],vendor_data:[],currency:deal.currency||'AED',exchange_rate:1});
+  const r=await api('POST','/api/quotes',{title:deal.title,customer:deal.customer_name||'',quote_data:[mkOption('Option 1')],terms_data:[...DEFAULT_TERMS],vendor_data:[],currency:deal.currency||'AED',exchange_rate:3.6725});
   if(r.error){alert(r.error);return;}
   await api('PUT','/api/deals/'+dealId,{converted_quote_id:r.quote.id});
   closeDealModal();
