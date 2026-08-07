@@ -12,9 +12,6 @@ from reportlab.lib.enums import TA_RIGHT, TA_CENTER, TA_LEFT
 from reportlab.platypus import (BaseDocTemplate, PageTemplate, Frame, Paragraph, Spacer,
                                 Table, TableStyle, Image, KeepTogether, NextPageTemplate, PageBreak)
 from reportlab.lib.utils import ImageReader
-from reportlab.graphics.shapes import Drawing, Rect, String
-from reportlab.graphics.charts.piecharts import Pie
-from reportlab.graphics.charts.legends import Legend
 
 app = Flask(__name__)
 CORS(app)
@@ -620,94 +617,6 @@ def bom_table(sections, CW, cur, with_price, pricing_type='markup', TH=None, img
         flow.append(tbl); flow.append(Spacer(1, 5*mm))
     return flow
 
-# ── Native infographics (vector, built at render time — no external service,
-# no extra cost/latency, always in sync with the real BOM numbers) ──────────
-_CHART_PALETTE_KEYS = ['navy', 'gold', 'navy2', 'lightblu', 'gray', 'grayb']
-
-def _bom_cost_pie(secs, CW, cur, pricing_type, TH):
-    """Cost breakdown by BOM section (e.g. Displays / Audio / Control) for one
-    quote option, as a pie chart + legend. Returns None (renders nothing) when
-    there's only one category or no priced items -- a pie chart adds no
-    information over the totals table in that case."""
-    cat_totals = []
-    for s in secs:
-        total = sum(calc_item(it, pricing_type)[1] for it in (s.get('items') or []))
-        if total > 0:
-            cat_totals.append((s.get('name') or 'Other', total))
-    if len(cat_totals) < 2:
-        return None
-    cat_totals.sort(key=lambda x: -x[1])
-    if len(cat_totals) > 6:
-        head, tail = cat_totals[:5], cat_totals[5:]
-        head.append(('Other', sum(v for _, v in tail)))
-        cat_totals = head
-    grand = sum(v for _, v in cat_totals) or 1
-    palette = [TH[k] for k in _CHART_PALETTE_KEYS]
-
-    d = Drawing(CW, 42*mm)
-    pie = Pie()
-    pie.x, pie.y = 4*mm, 1*mm
-    pie.width = pie.height = 40*mm
-    pie.data = [v for _, v in cat_totals]
-    pie.labels = None
-    pie.slices.strokeWidth = 0.75
-    pie.slices.strokeColor = white
-    for i in range(len(cat_totals)):
-        pie.slices[i].fillColor = palette[i % len(palette)]
-    d.add(pie)
-
-    legend = Legend()
-    legend.x, legend.y = 52*mm, 38*mm
-    legend.dx, legend.dy = 7, 7
-    legend.fontName, legend.fontSize = 'Helvetica', 8
-    legend.deltay = 12
-    legend.alignment = 'left'
-    legend.columnMaximum = max(len(cat_totals), 1)  # force a single column — a
-    # second column defaults to a fixed offset that can overshoot the page
-    # width once category names get long, so keep everything in one column
-    # and let the page's normal flow wrap width instead.
-    legend.colorNamePairs = [
-        (palette[i % len(palette)], f"{name}  —  {cur} {fmt(val)}  ({val/grand*100:.0f}%)")
-        for i, (name, val) in enumerate(cat_totals)
-    ]
-    d.add(legend)
-    return d
-
-def _timeline_strip(phases, CW, TH):
-    """Proportional horizontal roadmap strip above the detailed mobilization
-    phase list -- gives a client an at-a-glance sense of the rollout, with the
-    numbered_phases() list underneath still carrying the actual detail/bullets.
-    Segment widths are loosely proportional to each phase's stated duration
-    (averaging any digits found in e.g. '3-5 business days'); falls back to
-    equal-width segments if no phase has a parseable duration."""
-    import re
-    def _avg_days(txt):
-        nums = [float(n) for n in re.findall(r'\d+(?:\.\d+)?', txt or '')]
-        return (sum(nums) / len(nums)) if nums else None
-
-    parsed = [_avg_days(ph.get('duration')) for ph in phases]
-    durations = parsed if any(parsed) else [1] * len(phases)
-    durations = [d if d else 1 for d in durations]
-    total = sum(durations) or 1
-
-    h = 18*mm
-    d = Drawing(CW, h)
-    x = 0.0
-    colors_cycle = [TH['navy'], TH['navy2']]
-    gap = 1.2
-    for i, (ph, dur) in enumerate(zip(phases, durations)):
-        w = CW * (dur / total)
-        seg_w = max(w - gap, 3)
-        d.add(Rect(x, 7*mm, seg_w, 8*mm, fillColor=colors_cycle[i % 2], strokeColor=white, strokeWidth=1))
-        d.add(String(x + seg_w/2, 10.2*mm, str(i+1), fontName='Helvetica-Bold', fontSize=9,
-                      fillColor=white, textAnchor='middle'))
-        label = ph.get('title') or ''
-        if len(label) > 18: label = label[:17] + '…'
-        d.add(String(x + seg_w/2, 1.5*mm, label, fontName='Helvetica', fontSize=6.3,
-                      fillColor=TH['txt'], textAnchor='middle'))
-        x += w
-    return d
-
 # ── Cover page (drawn directly on the canvas — content is fixed, not flowing) ───
 MAX_COVER_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB decoded
 
@@ -1275,12 +1184,6 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
         if kind == 'combined':
             for o in opts:
                 ts, vat_on, rate, vat, grand = calc_opt(o, pt)
-                pie_flow = _bom_cost_pie(o.get('sections') or [], CW, cur, pt, TH)
-                if pie_flow:
-                    E.append(Paragraph('Cost Breakdown by Category', ParagraphStyle('cbc', fontName='Helvetica-Bold', fontSize=9.5, textColor=TH['navy'])))
-                    E.append(Spacer(1, 2*mm))
-                    E.append(KeepTogether(pie_flow))
-                    E.append(Spacer(1, 3*mm))
                 trows = [[Paragraph('Subtotal', S['body']), Paragraph(f"{cur} {fmt(ts)}", S['body_r'])],
                          [Paragraph(f"VAT {rate:g}%" if vat_on else "VAT", S['body']),
                           Paragraph(f"{cur} {fmt(vat)}" if vat_on else "Not applied", S['body_r'])],
@@ -1301,9 +1204,6 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
         if _section_on(content, 'rollout') and content.get('mobilization_phases'):
             E.append(PageBreak())
             E += [section_badge('ROLLOUT PLAN', TH)] + heading('Mobilization Plan', S, TH)
-            if len(content['mobilization_phases']) > 1:
-                E.append(_timeline_strip(content['mobilization_phases'], CW, TH))
-                E.append(Spacer(1, 5*mm))
             E.append(numbered_phases(content['mobilization_phases'], CW, TH))
 
         E.append(PageBreak())
@@ -1366,12 +1266,6 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
                 E.append(Spacer(1, 2*mm))
             E += bom_table(secs, CW, cur, with_price=True, pricing_type=pt, TH=TH, img_cache=bom_img_cache)
             ts, vat_on, rate, vat, grand = calc_opt(o, pt)
-            pie_flow2 = _bom_cost_pie(secs, CW, cur, pt, TH)
-            if pie_flow2:
-                E.append(Paragraph('Cost Breakdown by Category', ParagraphStyle('cbc2', fontName='Helvetica-Bold', fontSize=9.5, textColor=TH['navy'])))
-                E.append(Spacer(1, 2*mm))
-                E.append(KeepTogether(pie_flow2))
-                E.append(Spacer(1, 3*mm))
             trows = [[Paragraph('Subtotal', S['body']), Paragraph(f"{cur} {fmt(ts)}", S['body_r'])],
                      [Paragraph(f"VAT {rate:g}%" if vat_on else "VAT", S['body']),
                       Paragraph(f"{cur} {fmt(vat)}" if vat_on else "Not applied", S['body_r'])],
