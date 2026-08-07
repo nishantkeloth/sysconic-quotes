@@ -4381,7 +4381,7 @@ function applyBom(){
 //               BOM at once. Still useful for a single-room quote, or when
 //               someone genuinely wants everything on one sheet. Saved to
 //               o.diagram on the option, same shape as before this change.
-let DIAG={busy:false,mode:'section',rooms:[],active:0,code:'',showCode:false,photos:true};
+let DIAG={busy:false,mode:'section',rooms:[],active:0,code:'',showCode:false,photos:false};
 function diagIsSection(){return DIAG.mode==='section';}
 function diagActiveCode(){return diagIsSection() ? ((DIAG.rooms[DIAG.active]||{}).code||'') : (DIAG.code||'');}
 function diagActiveShowCode(){return diagIsSection() ? !!(DIAG.rooms[DIAG.active]||{}).showCode : !!DIAG.showCode;}
@@ -4411,7 +4411,7 @@ function openDiagramModal(){
   // respect that; otherwise default to section mode (the fix), which is
   // also the only sensible default when there's just one room anyway.
   const mode=anySectionDiagram ? 'section' : ((o.diagram&&o.diagram.code) ? 'combined' : 'section');
-  DIAG={busy:false,mode,active:0,showCode:false,photos:true,
+  DIAG={busy:false,mode,active:0,showCode:false,photos:false,
         code:(o.diagram&&o.diagram.code)||'',
         rooms:secs.map(s=>({code:(s.diagram&&s.diagram.code)||'',showCode:false,updated_at:s.diagram&&s.diagram.updated_at}))};
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="diagOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeDiagramModal()">
