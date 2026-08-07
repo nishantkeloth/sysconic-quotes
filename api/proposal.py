@@ -411,6 +411,35 @@ def _stat_val_size(v):
     if L <= 14: return 11
     return 9
 
+def _fit_cover_stat_value(canvas, text, max_w, base_size, min_size=8, font='Helvetica-Bold'):
+    """Cover-page stat card value: shrink the font to fit the card width
+    instead of hard-truncating at a fixed character count (which silently cut
+    real values like 'Full Turnkey' -> 'Full Tur' with no ellipsis, and made
+    same-length-in-characters-but-different-width values like 'Maxhub' vs
+    '3 Endpoints' render at visibly different effective sizes). Only falls
+    back to a truncated value (with an ellipsis, so it's visibly incomplete
+    rather than silently wrong) if it still doesn't fit at the minimum size."""
+    text = str(text or '')
+    size = base_size
+    while size > min_size and canvas.stringWidth(text, font, size) > max_w:
+        size -= 1
+    if canvas.stringWidth(text, font, size) > max_w:
+        while len(text) > 3 and canvas.stringWidth(text + '…', font, size) > max_w:
+            text = text[:-1]
+        text = text.rstrip() + '…'
+    return text, size
+
+def _fit_cover_stat_label(canvas, text, max_w, size, font='Helvetica-Bold'):
+    """Cover-page stat card label: same truncate-with-ellipsis safety net as
+    the value above, but labels stay at a fixed small size rather than
+    shrinking further (they're already near the readability floor)."""
+    text = str(text or '').upper()
+    if canvas.stringWidth(text, font, size) <= max_w:
+        return text
+    while len(text) > 3 and canvas.stringWidth(text + '…', font, size) > max_w:
+        text = text[:-1]
+    return text.rstrip() + '…'
+
 def stat_row(stats, CW, TH=None):
     TH = TH or _theme_for('modern')
     gold_hex = _hex(TH['gold']); light_hex = _hex(TH['lightblu'])
@@ -773,10 +802,13 @@ def _draw_cover_modern(canvas, doc, cover_img, TH=None):
         canvas.restoreState()
         cx = 15*mm
         for s in stats:
-            canvas.setFillColor(TH['gold']); canvas.setFont('Helvetica-Bold', 16)
-            canvas.drawCentredString(cx+cw/2, cy+14*mm, str(s.get('value',''))[:8])
+            max_w = cw - 6*mm
+            vtxt, vsize = _fit_cover_stat_value(canvas, s.get('value',''), max_w, 16)
+            canvas.setFillColor(TH['gold']); canvas.setFont('Helvetica-Bold', vsize)
+            canvas.drawCentredString(cx+cw/2, cy+14*mm, vtxt)
+            ltxt = _fit_cover_stat_label(canvas, s.get('label',''), max_w, 6.3)
             canvas.setFillColor(TH['lightblu']); canvas.setFont('Helvetica-Bold', 6.3)
-            canvas.drawCentredString(cx+cw/2, cy+6.5*mm, str(s.get('label',''))[:22].upper())
+            canvas.drawCentredString(cx+cw/2, cy+6.5*mm, ltxt)
             cx += cw + gap
 
     canvas.setStrokeColor(TH['navy2']); canvas.setLineWidth(0.6)
@@ -855,10 +887,13 @@ def _draw_cover_corporate(canvas, doc, cover_img, TH=None):
         for s in stats:
             canvas.setFillColor(TH['tint'])
             canvas.roundRect(cx, cy, cw, 24*mm, 2*mm, fill=1, stroke=0)
-            canvas.setFillColor(TH['navy']); canvas.setFont('Helvetica-Bold', 15)
-            canvas.drawCentredString(cx+cw/2, cy+14*mm, str(s.get('value',''))[:8])
+            max_w = cw - 6*mm
+            vtxt, vsize = _fit_cover_stat_value(canvas, s.get('value',''), max_w, 15)
+            canvas.setFillColor(TH['navy']); canvas.setFont('Helvetica-Bold', vsize)
+            canvas.drawCentredString(cx+cw/2, cy+14*mm, vtxt)
+            ltxt = _fit_cover_stat_label(canvas, s.get('label',''), max_w, 6.2)
             canvas.setFillColor(TH['gray']); canvas.setFont('Helvetica-Bold', 6.2)
-            canvas.drawCentredString(cx+cw/2, cy+6.5*mm, str(s.get('label',''))[:22].upper())
+            canvas.drawCentredString(cx+cw/2, cy+6.5*mm, ltxt)
             cx += cw + gap
 
     canvas.setStrokeColor(TH['grayb']); canvas.setLineWidth(0.6)
@@ -947,10 +982,13 @@ def _draw_cover_technical(canvas, doc, cover_img, TH=None):
         cx = MX; cy = 30*mm
         for s in stats:
             canvas.setFillColor(TH['cardbg']); canvas.rect(cx, cy, cw, 20*mm, fill=1, stroke=0)
-            canvas.setFillColor(TH['navy']); canvas.setFont('Helvetica-Bold', 13)
-            canvas.drawCentredString(cx+cw/2, cy+12*mm, str(s.get('value',''))[:8])
+            max_w = cw - 6*mm
+            vtxt, vsize = _fit_cover_stat_value(canvas, s.get('value',''), max_w, 13)
+            canvas.setFillColor(TH['navy']); canvas.setFont('Helvetica-Bold', vsize)
+            canvas.drawCentredString(cx+cw/2, cy+12*mm, vtxt)
+            ltxt = _fit_cover_stat_label(canvas, s.get('label',''), max_w, 5.8)
             canvas.setFillColor(TH['gray']); canvas.setFont('Helvetica-Bold', 5.8)
-            canvas.drawCentredString(cx+cw/2, cy+5.5*mm, str(s.get('label',''))[:22].upper())
+            canvas.drawCentredString(cx+cw/2, cy+5.5*mm, ltxt)
             cx += cw + gap
 
     canvas.setFont('Helvetica', 7.5); canvas.setFillColor(TH['gray'])
@@ -1005,10 +1043,13 @@ def _draw_cover_executive(canvas, doc, cover_img, TH=None):
         total_w = cw*n + gap*(n-1)
         cx = (w-total_w)/2; cy = ty - 34*mm
         for s in stats:
-            canvas.setFillColor(TH['navy']); canvas.setFont('Helvetica-Bold', 17)
-            canvas.drawCentredString(cx+cw/2, cy+7*mm, str(s.get('value',''))[:8])
+            max_w = cw - 6*mm
+            vtxt, vsize = _fit_cover_stat_value(canvas, s.get('value',''), max_w, 17)
+            canvas.setFillColor(TH['navy']); canvas.setFont('Helvetica-Bold', vsize)
+            canvas.drawCentredString(cx+cw/2, cy+7*mm, vtxt)
+            ltxt = _fit_cover_stat_label(canvas, s.get('label',''), max_w, 6.5)
             canvas.setFillColor(TH['gray']); canvas.setFont('Helvetica-Bold', 6.5)
-            canvas.drawCentredString(cx+cw/2, cy, str(s.get('label',''))[:22].upper())
+            canvas.drawCentredString(cx+cw/2, cy, ltxt)
             cx += cw + gap
 
     if cover_img:
