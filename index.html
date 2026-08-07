@@ -4363,11 +4363,30 @@ function applyBom(){
 }
 
 // ── AI System Diagram ──────────────────────────────────────────────────────────
-// Generates a Mermaid system schematic from the active option's BOM via Gemini.
-// The code is stored on the option object itself (opt().diagram) so it rides
-// along inside quote_data — saved, snapshotted and available to the proposal
-// generator with no schema change.
-let DIAG={busy:false,code:'',showCode:false,photos:true};
+// Generates Mermaid system schematic(s) from the active option's BOM via
+// Gemini — one per room (section) by default, or one combined diagram for
+// the whole option. Section-mode diagrams are stored per-section
+// (s.diagram); combined-mode is stored on the option itself (opt().diagram)
+// as before. Either way it rides along inside quote_data — saved,
+// snapshotted and available to the proposal generator with no schema change.
+// DIAG supports two modes:
+//  'section'  — one Mermaid diagram PER ROOM (section) of the active option.
+//               Default, and the fix for multi-room quotes: feeding every
+//               room's equipment into a single AI call made it group nodes
+//               by function (all displays together, all audio together)
+//               with no regard for which room they belonged to, interleaving
+//               rooms into one unreadable diagram. rooms[i] lines up 1:1
+//               with opt().sections[i]; saved to s.diagram on each section.
+//  'combined' — the original behavior: one diagram for the whole option's
+//               BOM at once. Still useful for a single-room quote, or when
+//               someone genuinely wants everything on one sheet. Saved to
+//               o.diagram on the option, same shape as before this change.
+let DIAG={busy:false,mode:'section',rooms:[],active:0,code:'',showCode:false,photos:true};
+function diagIsSection(){return DIAG.mode==='section';}
+function diagActiveCode(){return diagIsSection() ? ((DIAG.rooms[DIAG.active]||{}).code||'') : (DIAG.code||'');}
+function diagActiveShowCode(){return diagIsSection() ? !!(DIAG.rooms[DIAG.active]||{}).showCode : !!DIAG.showCode;}
+function diagSetActiveCode(c){if(diagIsSection()){if(DIAG.rooms[DIAG.active])DIAG.rooms[DIAG.active].code=c;}else{DIAG.code=c;}}
+function diagToggleActiveShowCode(){if(diagIsSection()){if(DIAG.rooms[DIAG.active])DIAG.rooms[DIAG.active].showCode=!DIAG.rooms[DIAG.active].showCode;}else{DIAG.showCode=!DIAG.showCode;}}
 
 function diagMermaidReady(){return typeof window.mermaid!=='undefined';}
 let _diagInit=false;
@@ -4385,53 +4404,112 @@ function diagInitMermaid(){
 function openDiagramModal(){
   if(!A.activeQuote)return;
   const o=opt();if(!o)return;
-  DIAG={busy:false,code:(o.diagram&&o.diagram.code)||'',showCode:false,photos:true};
+  const secs=o.sections||[];
+  const anySectionDiagram=secs.some(s=>s.diagram&&s.diagram.code);
+  // Default mode: if this option already has per-room diagrams saved, stay
+  // in section mode; if it only ever had the old single combined diagram,
+  // respect that; otherwise default to section mode (the fix), which is
+  // also the only sensible default when there's just one room anyway.
+  const mode=anySectionDiagram ? 'section' : ((o.diagram&&o.diagram.code) ? 'combined' : 'section');
+  DIAG={busy:false,mode,active:0,showCode:false,photos:true,
+        code:(o.diagram&&o.diagram.code)||'',
+        rooms:secs.map(s=>({code:(s.diagram&&s.diagram.code)||'',showCode:false,updated_at:s.diagram&&s.diagram.updated_at}))};
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="diagOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeDiagramModal()">
     <div class="modal" style="max-width:900px;max-height:90vh;overflow-y:auto" id="diagModalBox"></div></div>`);
   renderDiagramModal();
-  if(DIAG.code)renderDiagPreview();
+  if(diagActiveCode())renderDiagPreview();
 }
-function closeDiagramModal(){const el=document.getElementById('diagOverlay');if(el)el.remove();DIAG={busy:false,code:'',showCode:false};}
+function closeDiagramModal(){const el=document.getElementById('diagOverlay');if(el)el.remove();DIAG={busy:false,mode:'section',rooms:[],active:0,code:'',showCode:false};}
+
+// Switching modes doesn't discard whatever's already saved in the other
+// mode — o.diagram and each s.diagram are independent, so flipping the
+// checkbox back and forth is non-destructive until you hit Save.
+function diagSetMode(mode){
+  if(DIAG.mode===mode)return;
+  DIAG.mode=mode; DIAG.active=0;
+  renderDiagramModal();
+  if(diagActiveCode())renderDiagPreview();
+}
 
 function renderDiagramModal(){
   const box=document.getElementById('diagModalBox');if(!box)return;
   const o=opt()||{};
-  const saved=o.diagram&&o.diagram.code;
+  const secs=o.sections||[];
   let missingImgs=0;
-  (o.sections||[]).forEach(s=>(s.items||[]).forEach(it=>{if(!it.img&&((it.brand||'').trim()||(it.model||'').trim()))missingImgs++;}));
+  secs.forEach(s=>(s.items||[]).forEach(it=>{if(!it.img&&((it.brand||'').trim()||(it.model||'').trim()))missingImgs++;}));
+  const code=diagActiveCode();
+  const showCode=diagActiveShowCode();
+
+  let statusHtml='';
+  if(diagIsSection()){
+    const savedCount=secs.filter(s=>s.diagram&&s.diagram.code).length;
+    statusHtml=savedCount?` <span style="color:var(--green)">${savedCount} of ${secs.length} room(s) have a saved diagram.</span>`:'';
+  }else{
+    const saved=o.diagram&&o.diagram.code;
+    statusHtml=saved?` <span style="color:var(--green)">A combined diagram is saved on ${esc(o.label||'this option')}${o.diagram.updated_at?' ('+esc(o.diagram.updated_at.slice(0,10))+')':''}.</span>`:'';
+  }
+
+  const modeToggle=secs.length>1?`
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;cursor:pointer;margin:8px 0" title="Per-room: one clean schematic per room, matching the BOM's section headers. Combined: one diagram covering every room's equipment at once.">
+      <input type="checkbox" ${diagIsSection()?'checked':''} onchange="diagSetMode(this.checked?'section':'combined')"> Generate per room/section (uncheck for one combined diagram)
+    </label>`:'';
+
+  const roomTabs=(diagIsSection()&&secs.length>1)?`
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;align-items:center">
+      ${secs.map((s,i)=>`<button class="btn ${i===DIAG.active?'btn-navy':''}" style="padding:5px 10px;font-size:12px" onclick="DIAG.active=${i};renderDiagramModal();if(diagActiveCode())renderDiagPreview();else document.getElementById('diagPreview').innerHTML='<div style=\\'color:var(--gray-500);font-size:14px\\'>No diagram yet for this room — click Generate.</div>'">${esc(s.name||('Room '+(i+1)))}${s.diagram&&s.diagram.code?' ✓':''}</button>`).join('')}
+      <button class="btn" id="diagGenAllBtn" style="padding:5px 10px;font-size:12px" onclick="generateAllRoomDiagrams()" title="Generate a diagram for every room in this option, one after another">✨ Generate all rooms</button>
+    </div>`:'';
+
   box.innerHTML=`
     <div class="modal-title">🗺 AI System Diagram <span style="font-size:12px;font-weight:600;color:var(--amber)">AI</span></div>
-    <div class="modal-sub">Generates a system schematic (signal flow) from this option's bill of materials. Review it — AI can misread a BOM line — then save it to the quote or download it.${saved?` <span style="color:var(--green)">A diagram is saved on ${esc(o.label||'this option')}${o.diagram.updated_at?' ('+esc(o.diagram.updated_at.slice(0,10))+')':''}.</span>`:''}</div>
+    <div class="modal-sub">${diagIsSection()?'Generates a separate system schematic (signal flow) for each room, so multi-room quotes do not get their equipment mixed together.':'Generates one combined system schematic (signal flow) from this option\'s whole bill of materials.'} Review it — AI can misread a BOM line — then save it to the quote or download it.${statusHtml}</div>
+    ${modeToggle}
+    ${roomTabs}
     <div id="diagPreview" style="border:1.5px solid var(--gray-200);border-radius:8px;min-height:220px;margin:10px 0;padding:12px;overflow:auto;background:#fff;display:flex;align-items:center;justify-content:center">
-      <div style="color:var(--gray-500);font-size:14px">${DIAG.code?'Rendering…':'No diagram yet — click Generate to draw one from the BOM.'}</div>
+      <div style="color:var(--gray-500);font-size:14px">${code?'Rendering…':'No diagram yet — click Generate to draw one from the BOM.'}</div>
     </div>
-    ${DIAG.showCode?`<textarea id="diagCode" rows="10" spellcheck="false" style="width:100%;padding:10px;font-family:monospace;font-size:12px;border:1.5px solid var(--gray-200);border-radius:8px;margin-bottom:10px" oninput="DIAG.code=this.value" onchange="renderDiagPreview()">${esc(DIAG.code)}</textarea>
+    ${showCode?`<textarea id="diagCode" rows="10" spellcheck="false" style="width:100%;padding:10px;font-family:monospace;font-size:12px;border:1.5px solid var(--gray-200);border-radius:8px;margin-bottom:10px" oninput="diagSetActiveCode(this.value)" onchange="renderDiagPreview()">${esc(code)}</textarea>
     <div style="font-size:12px;color:var(--gray-500);margin:-6px 0 10px">Edit the Mermaid code above, then click outside the box to re-render.</div>`:''}
     <div class="modal-actions" style="flex-wrap:wrap;gap:8px">
       <button class="btn" onclick="closeDiagramModal()">Close</button>
-      <button class="btn" onclick="DIAG.showCode=!DIAG.showCode;renderDiagramModal();if(DIAG.code)renderDiagPreview()">${DIAG.showCode?'Hide':'✎ Edit'} code</button>
-      ${DIAG.code?`<button class="btn" onclick="diagToggleDirection()" title="Flip the layout between Left-to-Right and Top-to-Bottom">${/^(flowchart|graph)\s+(TB|TD)/.test(DIAG.code)?'↔ Horizontal':'↕ Vertical'}</button>
+      <button class="btn" onclick="diagToggleActiveShowCode();renderDiagramModal();if(diagActiveCode())renderDiagPreview()">${showCode?'Hide':'✎ Edit'} code</button>
+      ${code?`<button class="btn" onclick="diagToggleDirection()" title="Flip the layout between Left-to-Right and Top-to-Bottom">${/^(flowchart|graph)\s+(TB|TD)/.test(code)?'↔ Horizontal':'↕ Vertical'}</button>
       <button class="btn" onclick="openDiagLiveEditor()" title="Open this diagram in the free Mermaid Live Editor for full editing — paste the refined code back via ✎ Edit code">🔗 Mermaid Live</button>
       <button class="btn" onclick="downloadDiagram('svg')">⬇ SVG</button>
       <button class="btn" onclick="downloadDiagram('png')">⬇ PNG</button>`:''}
-      ${DIAG.code&&!isQuoteLocked()?`<button class="btn" onclick="saveDiagramToQuote()">💾 Save to quote</button>`:''}
+      ${code&&!isQuoteLocked()?`<button class="btn" onclick="saveDiagramToQuote()">💾 Save to quote</button>`:''}
       <label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600;cursor:pointer;color:var(--gray-500)" title="Render items that have a catalog image as product-photo nodes (XTEN-AV style). Applies on the next Generate."><input type="checkbox" ${DIAG.photos?'checked':''} onchange="DIAG.photos=this.checked">🖼 Product photos</label>
       ${missingImgs&&!isQuoteLocked()?`<button class="btn" id="diagImgFillBtn" onclick="diagAutoFillImages()" title="Web-search a product photo for each item that has a brand/model but no image (first result is used; saved to your catalog — fix any wrong pick via the 📷 icon on the item row)">🖼 Auto-fill images (${missingImgs})</button>`:''}
-      <button class="btn btn-navy" id="diagGenBtn" onclick="generateDiagram()">${DIAG.code?'🔄 Regenerate':'✨ Generate'} with AI</button>
+      <button class="btn btn-navy" id="diagGenBtn" onclick="generateDiagram()">${code?'🔄 Regenerate':'✨ Generate'} with AI</button>
     </div>`;
 }
 
+function _diagItemRow(it){
+  const row={brand:it.brand||'',model:it.model||'',desc:it.desc||'',qty:it.qty||1};
+  // Product photo (Supabase product-images) → image node in the schematic,
+  // XTEN-AV style. Only sent when the toggle is on and the item has one.
+  if(DIAG.photos&&it.img)row.img=it.img;
+  return row;
+}
+
+// Combined mode: every section's items in one payload (the original
+// behavior) — the AI groups nodes by function across the whole option.
 function diagBomPayload(){
   const o=opt();if(!o)return null;
   return{
     title:A.activeQuote?.title||'',
-    sections:(o.sections||[]).map(s=>({name:s.name||'',items:(s.items||[]).map(it=>{
-      const row={brand:it.brand||'',model:it.model||'',desc:it.desc||'',qty:it.qty||1};
-      // Product photo (Supabase product-images) → image node in the schematic,
-      // XTEN-AV style. Only sent when the toggle is on and the item has one.
-      if(DIAG.photos&&it.img)row.img=it.img;
-      return row;
-    })})),
+    sections:(o.sections||[]).map(s=>({name:s.name||'',items:(s.items||[]).map(_diagItemRow)})),
+  };
+}
+
+// Section mode: exactly one room's items per call, so the AI only ever
+// sees equipment that actually belongs together and can't interleave rooms.
+function diagBomPayloadForSection(si){
+  const o=opt();if(!o)return null;
+  const s=(o.sections||[])[si];if(!s)return null;
+  return{
+    title:(A.activeQuote?.title||'')+(s.name?' — '+s.name:''),
+    sections:[{name:s.name||'',items:(s.items||[]).map(_diagItemRow)}],
   };
 }
 
@@ -4475,14 +4553,14 @@ async function diagAutoFillImages(){
   const skipped=targets.length>CAP?` ${targets.length-CAP} item(s) skipped (rate-limit cap) — run Auto-fill again for the rest.`:'';
   alert(`Product images: ${ok} found and saved${fail?`, ${fail} not found or failed`:''}.${skipped}${ok?' The first search result was used — fix any wrong picture via the 📷 icon on the item row, then Regenerate the diagram.':''}`);
   renderDiagramModal();
-  if(DIAG.code)renderDiagPreview();
+  if(diagActiveCode())renderDiagPreview();
   if(A.page==='editor')draw();
 }
 
 async function generateDiagram(){
   if(DIAG.busy)return;
-  const payload=diagBomPayload();
-  if(!payload||!payload.sections.some(s=>s.items.length)){alert('This option has no line items yet — add the BOM first.');return;}
+  const payload=diagIsSection()?diagBomPayloadForSection(DIAG.active):diagBomPayload();
+  if(!payload||!payload.sections.some(s=>s.items.length)){alert((diagIsSection()?'This room':'This option')+' has no line items yet — add the BOM first.');return;}
   const btn=document.getElementById('diagGenBtn');
   if(btn){btn.disabled=true;btn.textContent='Generating…';}
   DIAG.busy=true;
@@ -4494,23 +4572,48 @@ async function generateDiagram(){
   DIAG.busy=false;
   if(r.error){
     if(prev)prev.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;
-    if(btn){btn.disabled=false;btn.textContent=(DIAG.code?'🔄 Regenerate':'✨ Generate')+' with AI';}
+    if(btn){btn.disabled=false;btn.textContent=(diagActiveCode()?'🔄 Regenerate':'✨ Generate')+' with AI';}
     return;
   }
-  DIAG.code=r.mermaid||'';
+  diagSetActiveCode(r.mermaid||'');
   renderDiagramModal();
   renderDiagPreview();
+}
+
+// Convenience: generate every room's diagram in one go (section mode only).
+// Sequential, same pattern as diagAutoFillImages, so it doesn't hammer the
+// AI endpoint with parallel calls.
+async function generateAllRoomDiagrams(){
+  if(DIAG.busy||!diagIsSection())return;
+  const o=opt();if(!o)return;
+  const secs=o.sections||[];
+  DIAG.busy=true;
+  const btn=document.getElementById('diagGenAllBtn');
+  for(let i=0;i<secs.length;i++){
+    if(!(secs[i].items||[]).length)continue;
+    if(btn)btn.textContent=`Generating ${i+1}/${secs.length}…`;
+    DIAG.active=i;
+    const payload=diagBomPayloadForSection(i);
+    try{
+      const r=await api('POST','/api/diagram/generate',{quote:payload});
+      if(!r.error)DIAG.rooms[i].code=r.mermaid||'';
+    }catch(e){}
+  }
+  DIAG.busy=false;
+  renderDiagramModal();
+  if(diagActiveCode())renderDiagPreview();
 }
 
 let _diagSeq=0;
 async function renderDiagPreview(){
   const prev=document.getElementById('diagPreview');if(!prev)return;
   if(DIAG._pz){try{DIAG._pz.destroy();}catch(e){}DIAG._pz=null;}
-  if(!DIAG.code){prev.innerHTML='<div style="color:var(--gray-500);font-size:14px">No diagram yet.</div>';return;}
+  const code=diagActiveCode();
+  if(!code){prev.innerHTML='<div style="color:var(--gray-500);font-size:14px">No diagram yet.</div>';return;}
   if(!diagMermaidReady()){prev.innerHTML='<div class="auth-err">Diagram renderer failed to load — check your internet connection and reload the page.</div>';return;}
   diagInitMermaid();
   try{
-    const {svg}=await window.mermaid.render('diagSvg'+(++_diagSeq),DIAG.code);
+    const {svg}=await window.mermaid.render('diagSvg'+(++_diagSeq),code);
     prev.style.display='block';
     prev.innerHTML=svg;
     const el=prev.querySelector('svg');
@@ -4527,14 +4630,14 @@ async function renderDiagPreview(){
     }
   }catch(e){
     prev.innerHTML=`<div class="auth-err">The diagram code has a syntax error and can't be rendered.<br><span style="font-size:12px">${esc(String(e.message||e).slice(0,300))}</span></div>`;
-    if(!DIAG.showCode){DIAG.showCode=true;renderDiagramModal();}
+    if(!diagActiveShowCode()){diagToggleActiveShowCode();renderDiagramModal();}
   }
 }
 
 // Quick-win: flip flowchart orientation. TD is mermaid's legacy alias for TB.
 function diagToggleDirection(){
-  if(!DIAG.code)return;
-  DIAG.code=DIAG.code.replace(/^((?:flowchart|graph)\s+)(LR|RL|TB|TD|BT)/,(m,p,d)=>p+((d==='TB'||d==='TD')?'LR':'TB'));
+  const code=diagActiveCode();if(!code)return;
+  diagSetActiveCode(code.replace(/^((?:flowchart|graph)\s+)(LR|RL|TB|TD|BT)/,(m,p,d)=>p+((d==='TB'||d==='TD')?'LR':'TB')));
   renderDiagramModal();
   renderDiagPreview();
 }
@@ -4550,8 +4653,8 @@ function diagLiveEditorUrl(code){
   return 'https://mermaid.live/edit#base64:'+btoa(bin);
 }
 function openDiagLiveEditor(){
-  if(!DIAG.code)return;
-  try{window.open(diagLiveEditorUrl(DIAG.code),'_blank');}
+  const code=diagActiveCode();if(!code)return;
+  try{window.open(diagLiveEditorUrl(code),'_blank');}
   catch(e){alert('Could not open the Mermaid Live Editor.');}
 }
 
@@ -4606,16 +4709,18 @@ async function diagCodeToPng(code,scale=2){
 }
 
 async function downloadDiagram(kind){
-  if(!DIAG.code)return;
-  const name=((A.activeQuote?.title||'diagram').replace(/[^\w\- ]+/g,'').trim().replace(/ +/g,'-')||'diagram')+'-schematic';
+  const code=diagActiveCode();if(!code)return;
+  const o=opt();
+  const roomBit=diagIsSection()&&o&&(o.sections||[])[DIAG.active]?.name ? '-'+(o.sections[DIAG.active].name) : '';
+  const name=((A.activeQuote?.title||'diagram')+roomBit).replace(/[^\w\- ]+/g,'').trim().replace(/ +/g,'-')+'-schematic';
   try{
     if(kind==='svg'){
       diagInitMermaid();
-      const {svg}=await window.mermaid.render('diagDlSvg'+(++_diagSeq),DIAG.code);
+      const {svg}=await window.mermaid.render('diagDlSvg'+(++_diagSeq),code);
       const blob=new Blob([svg],{type:'image/svg+xml;charset=utf-8'});
       const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name+'.svg';a.click();URL.revokeObjectURL(a.href);
     }else{
-      const png=await diagCodeToPng(DIAG.code);
+      const png=await diagCodeToPng(code);
       if(!png){alert('Could not render the diagram to PNG.');return;}
       const a=document.createElement('a');a.href=png;a.download=name+'.png';a.click();
     }
@@ -4623,9 +4728,16 @@ async function downloadDiagram(kind){
 }
 
 function saveDiagramToQuote(){
-  const o=opt();if(!o||!DIAG.code)return;
+  const o=opt();const code=diagActiveCode();
+  if(!o||!code)return;
   if(isQuoteLocked()){alert('This quote is locked — unlock it to save the diagram.');return;}
-  o.diagram={code:DIAG.code,updated_at:new Date().toISOString()};
+  if(diagIsSection()){
+    const s=(o.sections||[])[DIAG.active];if(!s)return;
+    s.diagram={code,updated_at:new Date().toISOString()};
+    DIAG.rooms[DIAG.active].updated_at=s.diagram.updated_at;
+  }else{
+    o.diagram={code,updated_at:new Date().toISOString()};
+  }
   schedSave();
   renderDiagramModal();
   renderDiagPreview();
@@ -4876,7 +4988,7 @@ function proposalReviewHTML(){
     <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">
       ${[['overview','Overview'],['scope','Scope of Work'],['quality','Quality/Testing'],['system_design','System Design'],...(hasFeature('diagrams')?[['schematic','System Schematic']]:[]),['rollout','Rollout Plan'],['payment_terms','Payment Terms'],['warranty','Warranty']].map(([key,lbl])=>`<label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;cursor:pointer"><input type="checkbox" ${(c.sections_enabled||(c.sections_enabled={}))[key]!==false?'checked':''} onchange="PROP.content.sections_enabled=PROP.content.sections_enabled||{};PROP.content.sections_enabled['${key}']=this.checked">${lbl}</label>`).join('')}
     </div>
-    ${hasFeature('diagrams')&&!opts().some(o=>o.diagram&&o.diagram.code)?`<div style="font-size:12px;color:var(--amber);margin:-8px 0 12px">System Schematic: no diagram is saved on this quote yet — generate one via 🗺 AI Diagram in the editor toolbar, or that section will be skipped.</div>`:''}
+    ${hasFeature('diagrams')&&!opts().some(o=>(o.diagram&&o.diagram.code)||(o.sections||[]).some(s=>s.diagram&&s.diagram.code))?`<div style="font-size:12px;color:var(--amber);margin:-8px 0 12px">System Schematic: no diagram is saved on this quote yet — generate one via 🗺 AI Diagram in the editor toolbar, or that section will be skipped.</div>`:''}
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Contact details — shown on the cover &amp; sign-off page</label>
     <div class="field-grid g4" style="margin:0 0 12px;grid-template-columns:1fr 1fr 1fr">
@@ -4969,18 +5081,35 @@ async function renderProposalKind(kind){
   const labelMap={technical:'📘 Technical (no pricing)',commercial:'💰 Commercial (priced)',combined:'📗 Combined (priced)'};
   PROP.busy=true;
   const btn=document.getElementById(idMap[kind]);if(btn){btn.disabled=true;btn.textContent='Generating…';}
-  // System Schematic section: render the saved Mermaid diagram to PNG client-side
-  // (ReportLab can't run Mermaid) and ship it inside the content payload.
+  // System Schematic section: render the saved Mermaid diagram(s) to PNG
+  // client-side (ReportLab can't run Mermaid) and ship them inside the
+  // content payload as schematic_pngs — a list of {name, png}, so a
+  // multi-room option contributes one image per room instead of one
+  // diagram with every room's equipment interleaved together. Falls back
+  // to that option's old-style combined diagram if it has no per-room
+  // diagrams saved.
   if(kind!=='commercial'&&hasFeature('diagrams')&&(PROP.content.sections_enabled||{}).schematic!==false){
     try{
       const os_=opts();
-      let dcode=null;
-      if(PROP.which!=='all'&&os_[+PROP.which]?.diagram?.code)dcode=os_[+PROP.which].diagram.code;
-      else dcode=(os_.find(o=>o.diagram&&o.diagram.code)||{}).diagram?.code||null;
-      PROP.content.schematic_png=dcode?await diagCodeToPng(dcode):null;
-    }catch(e){PROP.content.schematic_png=null;}
+      const targetOpts=PROP.which!=='all'?[os_[+PROP.which]].filter(Boolean):os_;
+      const pngs=[];
+      for(const o_ of targetOpts){
+        const roomDiagrams=(o_.sections||[]).filter(s=>s.diagram&&s.diagram.code);
+        if(roomDiagrams.length){
+          for(const s_ of roomDiagrams){
+            const png=await diagCodeToPng(s_.diagram.code);
+            if(png)pngs.push({name:s_.name||'',png});
+          }
+        }else if(o_.diagram&&o_.diagram.code){
+          const png=await diagCodeToPng(o_.diagram.code);
+          if(png)pngs.push({name:targetOpts.length>1?(o_.label||''):'',png});
+        }
+      }
+      PROP.content.schematic_pngs=pngs;
+      PROP.content.schematic_png=null;
+    }catch(e){PROP.content.schematic_pngs=[];}
   }else{
-    PROP.content.schematic_png=null;
+    PROP.content.schematic_pngs=[];
   }
   let r;
   try{

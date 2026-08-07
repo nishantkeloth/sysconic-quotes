@@ -1201,14 +1201,27 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
             if content.get('architecture_note'):
                 E.append(Spacer(1, 2*mm)); E.append(Paragraph(content['architecture_note'], S['body']))
 
-        # System Schematic: a Mermaid diagram rendered to PNG in the browser
-        # (see index.html's diagCodeToPng) and shipped inside content — the
-        # server only places the image; it never generates it.
-        if _section_on(content, 'schematic') and content.get('schematic_png'):
-            img_flow = _schematic_image(content['schematic_png'], CW)
-            if img_flow:
+        # System Schematic: one or more Mermaid diagrams rendered to PNG in the
+        # browser (see index.html's diagCodeToPng) and shipped inside content —
+        # the server only places the image(s); it never generates them.
+        # schematic_pngs is a list of {name, png} — one entry per room/section,
+        # so a multi-room quote gets a separate schematic per room instead of
+        # one diagram with every room's equipment interleaved together.
+        # schematic_png (singular) is kept as a fallback for older saved drafts
+        # that predate the per-room split.
+        schem_pngs = content.get('schematic_pngs') or []
+        if not schem_pngs and content.get('schematic_png'):
+            schem_pngs = [{'name': '', 'png': content['schematic_png']}]
+        if _section_on(content, 'schematic') and schem_pngs:
+            for sp in schem_pngs:
+                img_flow = _schematic_image(sp.get('png'), CW)
+                if not img_flow:
+                    continue
                 E.append(PageBreak())
-                E += [section_badge('SYSTEM DESIGN', TH)] + heading('System Schematic', S, TH)
+                title = 'System Schematic'
+                if sp.get('name'):
+                    title += f" — {sp['name']}"
+                E += [section_badge('SYSTEM DESIGN', TH)] + heading(esc_p(title), S, TH)
                 E.append(Paragraph('Signal flow of the proposed system. Solid lines carry AV signal, heavy lines carry audio/video over the network, dotted lines are control.', S['small']))
                 E.append(Spacer(1, 3*mm))
                 E.append(img_flow)
