@@ -1488,13 +1488,19 @@ def insights_summary():
     }
 
     # ── Deals ────────────────────────────────────────────────────────────
+    # is_won/is_lost live on deal_stages, not deals itself — a deal's
+    # outcome is derived from which stage it's currently sitting in.
     if has_page_access(claims, 'deals'):
-        dq = sb.table('deals').select('value,is_won,is_lost').eq('company_id', company_id)
+        dq = sb.table('deals').select('value,stage_id').eq('company_id', company_id)
         if not _can_view_all_deals(claims):
             dq = dq.eq('owner_id', claims['user_id'])
         deals = dq.execute().data or []
-        open_deals = [d for d in deals if not d.get('is_won') and not d.get('is_lost')]
-        won_deals = [d for d in deals if d.get('is_won')]
+        stage_rows = sb.table('deal_stages').select('id,is_won,is_lost').eq('company_id', company_id).execute().data or []
+        stage_by_id = {s['id']: s for s in stage_rows}
+        def _stage(d):
+            return stage_by_id.get(d.get('stage_id')) or {}
+        open_deals = [d for d in deals if not _stage(d).get('is_won') and not _stage(d).get('is_lost')]
+        won_deals = [d for d in deals if _stage(d).get('is_won')]
         out['deals'] = {
             'open_count': len(open_deals),
             'open_value': sum(_numf(d.get('value')) for d in open_deals),
