@@ -3193,7 +3193,7 @@ function buildCstrip(){
 // boot via loadQuotes()), so the page makes one request instead of a fan-out.
 // Cached in memory for the session — revisiting the page reuses the last
 // load instead of refetching; use Refresh for current numbers.
-let INSIGHTS={loading:true,error:null,data:null,loadedAt:null};
+let INSIGHTS={loading:false,error:null,data:null,loadedAt:null};
 
 async function loadInsightsPage(force){
   if(!force&&INSIGHTS.data&&!INSIGHTS.loading)return; // already cached this session — page is already rendered
