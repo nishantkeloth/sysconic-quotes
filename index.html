@@ -2542,7 +2542,7 @@ function draw(){
   }
   document.getElementById('app').innerHTML=appHTML();
   setTimeout(initTA,30);
-  if(A.page==='insights')setTimeout(loadInsightsPage,50);
+  if(A.page==='insights'&&!INSIGHTS.data&&!INSIGHTS.loading)setTimeout(loadInsightsPage,50);
   if(A.page==='team'){setTimeout(loadTeam,50);}
   if(A.page==='integrations'){setTimeout(loadIntegrations,50);setTimeout(loadSyncConfig,50);}
   if(A.page==='platform'){setTimeout(loadPlatformCompanies,50);}
@@ -3017,7 +3017,6 @@ function appHTML(){
     <nav class="sb-nav">
       ${A.user?.is_platform_admin?'':`
       <div class="sb-sec">Workspace</div>
-      ${hasPageAccess('quotes')?`<div class="sb-item ${A.page==='insights'?'active':''}" onclick="${nav('insights')}"><span class="sb-icon">📈</span>Insights</div>`:''}
       ${hasPageAccess('quotes')?`<div class="sb-item ${A.page==='dashboard'?'active':''}" onclick="${nav('dashboard')}"><span class="sb-icon">🏠</span>Quotes</div>`:''}
       ${hasPageAccess('deals')?`<div class="sb-item ${A.page==='deals'?'active':''}" onclick="${nav('deals')}"><span class="sb-icon">🤝</span>Deals</div>`:''}
       ${hasPageAccess('products')?`<div class="sb-item ${A.page==='products'?'active':''}" onclick="${nav('products')}"><span class="sb-icon">📦</span>Products</div>`:''}
@@ -3026,7 +3025,7 @@ function appHTML(){
       ${hasFeature('projects')&&hasPageAccess('projects')?`<div class="sb-item ${A.page==='projects'?'active':''}" onclick="${nav('projects')}"><span class="sb-icon">📁</span>Projects</div>`:''}
       ${hasFeature('fsm_module')&&hasPageAccess('fsm')?`<div class="sb-item ${(A.page==='fsm'||A.page==='fsmDetail')?'active':''}" onclick="${nav('fsm')}"><span class="sb-icon">🔧</span>Field Service</div>`:''}
       ${hasFeature('project_performance')&&hasPageAccess('projectPerformance')?`<div class="sb-item ${(A.page==='projectPerformance'||A.page==='projectPerformanceDetail')?'active':''}" onclick="${nav('projectPerformance')}"><span class="sb-icon">📊</span>Project Performance</div>`:''}
-      ${hasPageAccess('reviewQueue')?`<div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>`:''}       ${hasFeature('testimonials')&&hasPageAccess('testimonials')?`<div class="sb-item ${A.page==='testimonials'?'active':''}" onclick="${nav('testimonials')}"><span class="sb-icon">⭐</span>Testimonials</div>`:''}       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}`}       ${(A.user?.role==='admin'&&!A.user?.is_platform_admin)?`<div class="sb-sec">Settings</div>
+      ${hasPageAccess('reviewQueue')?`<div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>`:''}       ${hasFeature('testimonials')&&hasPageAccess('testimonials')?`<div class="sb-item ${A.page==='testimonials'?'active':''}" onclick="${nav('testimonials')}"><span class="sb-icon">⭐</span>Testimonials</div>`:''}       ${hasPageAccess('quotes')?`<div class="sb-item ${A.page==='insights'?'active':''}" onclick="${nav('insights')}"><span class="sb-icon">📈</span>Insights</div>`:''}       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}`}       ${(A.user?.role==='admin'&&!A.user?.is_platform_admin)?`<div class="sb-sec">Settings</div>
       <div class="sb-item ${A.page==='team'?'active':''}" onclick="${nav('team')}"><span class="sb-icon">👥</span>Team</div>
       <div class="sb-item ${A.page==='integrations'?'active':''}" onclick="${nav('integrations')}"><span class="sb-icon">🔌</span>Integrations</div>
       <div class="sb-item ${A.page==='companyProfile'?'active':''}" onclick="${nav('companyProfile')}"><span class="sb-icon">🏢</span>Company Profile</div>
@@ -3197,7 +3196,7 @@ function buildCstrip(){
 let INSIGHTS={loading:true,error:null,data:null,loadedAt:null};
 
 async function loadInsightsPage(force){
-  if(!force&&INSIGHTS.data&&!INSIGHTS.loading){draw();return;} // already cached this session
+  if(!force&&INSIGHTS.data&&!INSIGHTS.loading)return; // already cached this session — page is already rendered
   INSIGHTS={loading:true,error:null,data:INSIGHTS.data,loadedAt:INSIGHTS.loadedAt};
   draw();
   const r=await api('GET','/api/insights/summary');
