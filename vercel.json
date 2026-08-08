@@ -34,6 +34,7 @@
     { "src": "/api/quotes",      "dest": "api/quotes.py" },
     { "src": "/api/deals/(.*)", "dest": "api/quotes.py" },
     { "src": "/api/deals",      "dest": "api/quotes.py" },
+    { "src": "/api/insights/(.*)", "dest": "api/quotes.py" },
     { "src": "/api/ai/(.*)",     "dest": "api/ai.py" },
     { "src": "/api/pdf/(.*)", "dest": "api/pdf.py" },
     { "src": "/api/products/(.*)", "dest": "api/products.py" },

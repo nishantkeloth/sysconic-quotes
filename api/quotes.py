@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
 import os, jwt, traceback, base64, requests, re
-from datetime import datetime
+from datetime import datetime, timedelta
 from supabase import create_client
 
 app = Flask(__name__)
@@ -1442,6 +1442,135 @@ def delete_deal_stage(sid):
         return jsonify({'error': f'{in_use.count} deal(s) are still in this stage — move them first.'}), 400
     sb.table('deal_stages').delete().eq('id', sid).execute()
     return jsonify({'ok': True})
+
+# ── Insights: single-call dashboard summary ─────────────────────────────────
+# Originally the Insights page fired 5-6 parallel calls to 5 different Vercel
+# Python functions (quotes.py, deals via quotes.py, projects.py, fsm_contracts.py,
+# fsm_tickets.py, fsm_pm.py). Each is an independent serverless function with
+# its own cold start — several cold at once (rather than one, shared) is what
+# made the page "take ages". This single endpoint does the same aggregation
+# server-side, inside one already-warm function (quotes.py gets hit on every
+# app boot via loadQuotes()), with lean column selects instead of `select("*")`
+# on tables that aren't needed in full for a dashboard summary.
+def _insights_parse_dt(s):
+    if not s: return None
+    try:
+        return datetime.fromisoformat(str(s).replace('Z', '+00:00')).replace(tzinfo=None)
+    except (ValueError, TypeError):
+        return None
+
+@app.route('/api/insights/summary', methods=['GET'])
+def insights_summary():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    company_id = claims['company_id']
+    out = {}
+
+    # ── Sales & Pipeline (Quotes) ────────────────────────────────────────
+    qq = sb.table('quotes').select('status,total_sell,total_gp').eq('company_id', company_id)
+    if not _can_view_all_quotes(claims):
+        qq = qq.eq('created_by', claims['user_id'])
+    quotes = qq.execute().data or []
+    awarded = [q for q in quotes if q.get('status') == 'awarded']
+    lost = [q for q in quotes if q.get('status') == 'lost']
+    open_q = [q for q in quotes if q.get('status') in ('draft', 'sent')]
+    closed_count = len(awarded) + len(lost)
+    awarded_value = sum(_numf(q.get('total_sell')) for q in awarded)
+    awarded_gp = sum(_numf(q.get('total_gp')) for q in awarded)
+    out['sales'] = {
+        'total_quotes': len(quotes),
+        'awarded_count': len(awarded),
+        'open_pipeline_value': sum(_numf(q.get('total_sell')) for q in open_q),
+        'open_quote_count': len(open_q),
+        'win_rate_pct': round(len(awarded) / closed_count * 100) if closed_count else 0,
+        'closed_count': closed_count,
+        'avg_margin_pct': round(awarded_gp / awarded_value * 1000) / 10 if awarded_value else 0,
+    }
+
+    # ── Deals ────────────────────────────────────────────────────────────
+    if has_page_access(claims, 'deals'):
+        dq = sb.table('deals').select('value,is_won,is_lost').eq('company_id', company_id)
+        if not _can_view_all_deals(claims):
+            dq = dq.eq('owner_id', claims['user_id'])
+        deals = dq.execute().data or []
+        open_deals = [d for d in deals if not d.get('is_won') and not d.get('is_lost')]
+        won_deals = [d for d in deals if d.get('is_won')]
+        out['deals'] = {
+            'open_count': len(open_deals),
+            'open_value': sum(_numf(d.get('value')) for d in open_deals),
+            'won_count': len(won_deals),
+        }
+
+    # ── Financial Health (Project Performance, synced from Zoho Books) ────
+    if _has_feature(claims, 'project_performance'):
+        pq = sb.table('projects').select(
+            'name,customer,status,revenue_forecast,forecast_gp_pct,invoiced_value,'
+            'collected_value,net_cash_position,health_status,project_manager_id,salesperson_id'
+        ).eq('company_id', company_id)
+        if not (claims.get('role') == 'admin' or claims.get('can_manage_project_performance')):
+            uid = claims.get('user_id')
+            pq = pq.or_(f'project_manager_id.eq.{uid},salesperson_id.eq.{uid}')
+        rows = pq.execute().data or []
+        active = [r for r in rows if r.get('status') == 'active']
+        total_value = sum(_numf(r.get('revenue_forecast')) for r in active)
+        weighted_gp = (sum(_numf(r.get('forecast_gp_pct')) * _numf(r.get('revenue_forecast')) for r in active) / total_value) if total_value else 0.0
+        at_risk = [r for r in rows if r.get('health_status') in ('at_risk', 'critical')]
+        out['financial'] = {
+            'active_projects': len(active),
+            'total_active_value': total_value,
+            'portfolio_gp_pct': round(weighted_gp * 10) / 10,
+            'projects_at_risk': len([r for r in rows if r.get('health_status') == 'at_risk']),
+            'critical_projects': len([r for r in rows if r.get('health_status') == 'critical']),
+            'unbilled_value': sum(_numf(r.get('revenue_forecast')) - _numf(r.get('invoiced_value')) for r in rows),
+            'outstanding_receivables': sum(_numf(r.get('invoiced_value')) - _numf(r.get('collected_value')) for r in rows),
+            'cash_exposure': sum(min(0.0, _numf(r.get('net_cash_position'))) for r in rows),
+            'at_risk_projects': [{'name': r.get('name'), 'customer': r.get('customer'), 'health_status': r.get('health_status')} for r in at_risk[:6]],
+        }
+
+    # ── AMC & Field Service ─────────────────────────────────────────────
+    if _has_feature(claims, 'fsm_module') and has_page_access(claims, 'fsm'):
+        contracts = sb.table('fsm_contracts').select('contract_number,contract_type,end_date').eq('company_id', company_id).execute().data or []
+        now = datetime.utcnow()
+        in30, in60, in90 = now + timedelta(days=30), now + timedelta(days=60), now + timedelta(days=90)
+        expiring = []
+        for c in contracts:
+            ed = _insights_parse_dt(c.get('end_date'))
+            if ed and now <= ed <= in90:
+                expiring.append((ed, c))
+        expiring.sort(key=lambda t: t[0])
+        exp30 = len([1 for ed, c in expiring if ed <= in30])
+        exp60 = len([1 for ed, c in expiring if in30 < ed <= in60])
+        exp90 = len(expiring) - exp30 - exp60
+
+        tickets = (sb.table('fsm_tickets').select('status,priority,sla_resolution_due_at')
+                   .eq('company_id', company_id).eq('is_deleted', False).execute().data or [])
+        open_statuses = {'new', 'acknowledged', 'assigned', 'accepted', 'travelling', 'on_site',
+                          'diagnosis', 'waiting_customer', 'waiting_parts', 'waiting_approval'}
+        open_tickets = [t for t in tickets if t.get('status') in open_statuses]
+        by_priority = {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
+        for t in open_tickets:
+            if t.get('priority') in by_priority:
+                by_priority[t['priority']] += 1
+        now_iso = now.isoformat()
+        sla_breaches = [t for t in open_tickets if t.get('sla_resolution_due_at') and str(t['sla_resolution_due_at']) < now_iso]
+
+        pm = sb.table('fsm_pm_schedules').select('is_active,next_due_date').eq('company_id', company_id).execute().data or []
+        in7 = now + timedelta(days=7)
+        pm_due = [s for s in pm if s.get('is_active', True) and (d := _insights_parse_dt(s.get('next_due_date'))) and d <= in7]
+
+        out['fsm'] = {
+            'contracts_expiring_90d': len(expiring),
+            'expiring_30d': exp30, 'expiring_60d': exp60, 'expiring_90d': exp90,
+            'upcoming_renewals': [{'contract_number': c.get('contract_number'), 'contract_type': c.get('contract_type'),
+                                    'end_date': c.get('end_date')} for ed, c in expiring[:6]],
+            'open_tickets': len(open_tickets),
+            'by_priority': by_priority,
+            'sla_breaches': len(sla_breaches),
+            'pm_due_7d': len(pm_due),
+        }
+
+    return jsonify(out)
+
 
 # ── Deals ────────────────────────────────────────────────────────────────────
 @app.route('/api/deals', methods=['GET'])
