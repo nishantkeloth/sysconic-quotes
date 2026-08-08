@@ -2535,9 +2535,9 @@ function draw(){
   if(A.screen==='feedbackForm'){document.getElementById('app').innerHTML=feedbackFormHTML();return;}if(A.screen==='acceptInvite'){document.getElementById('app').innerHTML=acceptInviteHTML();return;}
   if(A.screen==='forgotPassword'){document.getElementById('app').innerHTML=forgotPasswordHTML();return;}
   if(A.screen==='resetPassword'){document.getElementById('app').innerHTML=resetPasswordHTML();return;}
-  const PAGE_KEY_MAP={dashboard:'quotes',deals:'deals',products:'products',customers:'customers',vendorMaster:'vendors',projects:'projects',projectPerformance:'projectPerformance',projectPerformanceDetail:'projectPerformance',reviewQueue:'reviewQueue',testimonials:'testimonials'};
+  const PAGE_KEY_MAP={insights:'insights',dashboard:'quotes',deals:'deals',products:'products',customers:'customers',vendorMaster:'vendors',projects:'projects',projectPerformance:'projectPerformance',projectPerformanceDetail:'projectPerformance',reviewQueue:'reviewQueue',testimonials:'testimonials'};
   if(PAGE_KEY_MAP[A.page]&&!hasPageAccess(PAGE_KEY_MAP[A.page])){
-    const fallbackOrder=['dashboard','deals','products','customers','vendorMaster','projects','projectPerformance','reviewQueue','testimonials'];
+    const fallbackOrder=['insights','dashboard','deals','products','customers','vendorMaster','projects','projectPerformance','reviewQueue','testimonials'];
     A.page=fallbackOrder.find(p=>hasPageAccess(PAGE_KEY_MAP[p]))||'dashboard';
   }
   document.getElementById('app').innerHTML=appHTML();
@@ -3025,7 +3025,7 @@ function appHTML(){
       ${hasFeature('projects')&&hasPageAccess('projects')?`<div class="sb-item ${A.page==='projects'?'active':''}" onclick="${nav('projects')}"><span class="sb-icon">📁</span>Projects</div>`:''}
       ${hasFeature('fsm_module')&&hasPageAccess('fsm')?`<div class="sb-item ${(A.page==='fsm'||A.page==='fsmDetail')?'active':''}" onclick="${nav('fsm')}"><span class="sb-icon">🔧</span>Field Service</div>`:''}
       ${hasFeature('project_performance')&&hasPageAccess('projectPerformance')?`<div class="sb-item ${(A.page==='projectPerformance'||A.page==='projectPerformanceDetail')?'active':''}" onclick="${nav('projectPerformance')}"><span class="sb-icon">📊</span>Project Performance</div>`:''}
-      ${hasPageAccess('reviewQueue')?`<div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>`:''}       ${hasFeature('testimonials')&&hasPageAccess('testimonials')?`<div class="sb-item ${A.page==='testimonials'?'active':''}" onclick="${nav('testimonials')}"><span class="sb-icon">⭐</span>Testimonials</div>`:''}       ${hasPageAccess('quotes')?`<div class="sb-item ${A.page==='insights'?'active':''}" onclick="${nav('insights')}"><span class="sb-icon">📈</span>Insights</div>`:''}       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}`}       ${(A.user?.role==='admin'&&!A.user?.is_platform_admin)?`<div class="sb-sec">Settings</div>
+      ${hasPageAccess('reviewQueue')?`<div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>`:''}       ${hasFeature('testimonials')&&hasPageAccess('testimonials')?`<div class="sb-item ${A.page==='testimonials'?'active':''}" onclick="${nav('testimonials')}"><span class="sb-icon">⭐</span>Testimonials</div>`:''}       ${hasPageAccess('insights')?`<div class="sb-item ${A.page==='insights'?'active':''}" onclick="${nav('insights')}"><span class="sb-icon">📈</span>Insights</div>`:''}       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}`}       ${(A.user?.role==='admin'&&!A.user?.is_platform_admin)?`<div class="sb-sec">Settings</div>
       <div class="sb-item ${A.page==='team'?'active':''}" onclick="${nav('team')}"><span class="sb-icon">👥</span>Team</div>
       <div class="sb-item ${A.page==='integrations'?'active':''}" onclick="${nav('integrations')}"><span class="sb-icon">🔌</span>Integrations</div>
       <div class="sb-item ${A.page==='companyProfile'?'active':''}" onclick="${nav('companyProfile')}"><span class="sb-icon">🏢</span>Company Profile</div>
@@ -5738,7 +5738,7 @@ function importVendorsMaster(event){
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────
-const RBAC_PAGE_LABELS = {quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service'};
+const RBAC_PAGE_LABELS = {insights:'Insights',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service'};
 let RBAC_PAGE_KEYS_FE = [];
 let RBAC_ROLES_CACHE = [];
 

@@ -64,6 +64,8 @@ def _rbac_page_gate():
         page_key = 'reviewQueue'
     elif path.startswith('/api/deals'):
         page_key = 'deals'
+    elif path.startswith('/api/insights'):
+        page_key = 'insights'
     else:
         page_key = 'quotes'
     if not has_page_access(claims, page_key):
