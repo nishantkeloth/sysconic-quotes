@@ -110,6 +110,13 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .mcard-val.green{color:var(--green)}
 .mcard-val.amber{color:var(--amber)}
 .mcard-sub{font-size:12px;color:var(--gray-500);margin-top:4px}
+.mcard-val.red{color:var(--red)}
+.insights-sec{margin-bottom:30px}
+.insights-sec-title{font-size:15px;font-weight:800;color:var(--navy);margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.insights-list{background:var(--white);border:1.5px solid var(--gray-200);border-radius:12px;padding:6px 16px;margin-top:2px}
+.insights-list-title{font-size:12px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.04em;padding:10px 0 6px}
+.insights-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 0;border-top:1px solid var(--gray-100);font-size:13px}
+.insights-row:first-of-type{border-top:none}
 .filter-bar{display:flex;gap:10px;margin-bottom:20px}
 .view-toggle{display:flex;border:1px solid var(--gray-200);border-radius:var(--radius);overflow:hidden;flex-shrink:0}
 .tb-sep{width:1px;align-self:stretch;background:var(--gray-200);margin:2px 2px}
@@ -2535,6 +2542,7 @@ function draw(){
   }
   document.getElementById('app').innerHTML=appHTML();
   setTimeout(initTA,30);
+  if(A.page==='insights')setTimeout(loadInsightsPage,50);
   if(A.page==='team'){setTimeout(loadTeam,50);}
   if(A.page==='integrations'){setTimeout(loadIntegrations,50);setTimeout(loadSyncConfig,50);}
   if(A.page==='platform'){setTimeout(loadPlatformCompanies,50);}
@@ -3009,6 +3017,7 @@ function appHTML(){
     <nav class="sb-nav">
       ${A.user?.is_platform_admin?'':`
       <div class="sb-sec">Workspace</div>
+      ${hasPageAccess('quotes')?`<div class="sb-item ${A.page==='insights'?'active':''}" onclick="${nav('insights')}"><span class="sb-icon">📈</span>Insights</div>`:''}
       ${hasPageAccess('quotes')?`<div class="sb-item ${A.page==='dashboard'?'active':''}" onclick="${nav('dashboard')}"><span class="sb-icon">🏠</span>Quotes</div>`:''}
       ${hasPageAccess('deals')?`<div class="sb-item ${A.page==='deals'?'active':''}" onclick="${nav('deals')}"><span class="sb-icon">🤝</span>Deals</div>`:''}
       ${hasPageAccess('products')?`<div class="sb-item ${A.page==='products'?'active':''}" onclick="${nav('products')}"><span class="sb-icon">📦</span>Products</div>`:''}
@@ -3040,7 +3049,8 @@ function appHTML(){
   const cstrip=(inEditor&&!A.reviewMode)?buildCstrip():'';
 
   let pageContent='';
-  if(A.page==='dashboard')pageContent=dashHTML();
+  if(A.page==='insights')pageContent=insightsHTML();
+  else if(A.page==='dashboard')pageContent=dashHTML();
   else if(A.page==='editor')pageContent=editorHTML();
   else if(A.page==='terms')pageContent=termsHTML();
   else if(A.page==='summary')pageContent=summaryHTML();
@@ -3173,6 +3183,150 @@ function buildCstrip(){
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
+// ── Insights: a single cross-module dashboard ────────────────────────────────
+// Pulls together Sales/Pipeline (Quotes + Deals), Financial Health (Project
+// Performance — already synced from Zoho Books by api/pp_sync.py's logic
+// living in api/projects.py), and AMC/Field Service (Contracts, Tickets, PM
+// Schedules). Deliberately reuses existing endpoints only — no new backend
+// route was needed, this page just aggregates data that already exists.
+let INSIGHTS={loading:true,error:null,quotes:null,deals:null,pp:null,contracts:null,tickets:null,pmSchedules:null};
+
+async function loadInsightsPage(){
+  INSIGHTS={loading:true,error:null,quotes:null,deals:null,pp:null,contracts:null,tickets:null,pmSchedules:null};
+  draw();
+  try{
+    const calls={quotes:api('GET','/api/quotes')};
+    if(hasPageAccess('deals'))calls.deals=api('GET','/api/deals');
+    if(hasFeature('project_performance')&&hasPageAccess('projectPerformance'))calls.pp=api('GET','/api/project-performance');
+    if(hasFeature('fsm_module')&&hasPageAccess('fsm')){
+      calls.contracts=api('GET','/api/fsm_contracts?resource=contract&action=list');
+      calls.tickets=api('GET','/api/fsm_tickets?resource=ticket&action=list');
+      calls.pmSchedules=api('GET','/api/fsm_pm?resource=schedule&action=list');
+    }
+    const keys=Object.keys(calls);
+    const results=await Promise.all(keys.map(k=>calls[k]));
+    keys.forEach((k,i)=>{INSIGHTS[k]=results[i];});
+  }catch(e){
+    INSIGHTS.error='Could not load some insights data. Please try again.';
+  }
+  INSIGHTS.loading=false;
+  draw();
+}
+
+function insightsHTML(){
+  if(INSIGHTS.loading){
+    return `<h2 style="margin:4px 0 20px">Insights</h2><div style="color:var(--gray-500);padding:40px;text-align:center">Loading…</div>`;
+  }
+  const sections=[];
+
+  // ── Sales & Pipeline (Quotes + Deals) ──────────────────────────────────
+  const qs=(INSIGHTS.quotes&&INSIGHTS.quotes.quotes)||A.quotes||[];
+  const awarded=qs.filter(q=>q.status==='awarded');
+  const lost=qs.filter(q=>q.status==='lost');
+  const openQ=qs.filter(q=>q.status==='draft'||q.status==='sent');
+  const closedCount=awarded.length+lost.length;
+  const winRate=closedCount?Math.round(awarded.length/closedCount*100):0;
+  const pipelineValue=openQ.reduce((s,q)=>s+(q.total_sell||0),0);
+  const awardedValue=awarded.reduce((s,q)=>s+(q.total_sell||0),0);
+  const awardedGp=awarded.reduce((s,q)=>s+(q.total_gp||0),0);
+  const avgMargin=awardedValue?Math.round(awardedGp/awardedValue*1000)/10:0;
+
+  let dealsCardsHtml='';
+  if(INSIGHTS.deals&&!INSIGHTS.deals.error){
+    const deals=INSIGHTS.deals.deals||[];
+    const openDeals=deals.filter(d=>!d.is_won&&!d.is_lost);
+    const openDealsValue=openDeals.reduce((s,d)=>s+(Number(d.value)||0),0);
+    const wonDeals=deals.filter(d=>d.is_won);
+    dealsCardsHtml=`
+      <div class="mcard"><div class="mcard-label">Open deals</div><div class="mcard-val navy">${openDeals.length}</div><div class="mcard-sub">AED ${fmt(openDealsValue)}</div></div>
+      <div class="mcard"><div class="mcard-label">Deals won</div><div class="mcard-val green">${wonDeals.length}</div></div>`;
+  }
+
+  sections.push(`
+    <div class="insights-sec">
+      <div class="insights-sec-title">📈 Sales &amp; Pipeline</div>
+      <div class="dash-metrics">
+        <div class="mcard"><div class="mcard-label">Total quotes</div><div class="mcard-val navy">${qs.length}</div><div class="mcard-sub">${awarded.length} awarded</div></div>
+        <div class="mcard"><div class="mcard-label">Open pipeline value</div><div class="mcard-val navy">AED ${fmt(pipelineValue)}</div><div class="mcard-sub">${openQ.length} quote(s)</div></div>
+        <div class="mcard"><div class="mcard-label">Win rate</div><div class="mcard-val amber">${winRate}%</div><div class="mcard-sub">of ${closedCount} closed</div></div>
+        <div class="mcard"><div class="mcard-label">Avg margin (awarded)</div><div class="mcard-val green">${avgMargin}%</div></div>
+        ${dealsCardsHtml}
+      </div>
+    </div>`);
+
+  // ── Financial Health (Project Performance, synced from Zoho Books) ─────
+  if(INSIGHTS.pp&&!INSIGHTS.pp.error){
+    const k=INSIGHTS.pp.kpis||{};
+    const gpPct=Math.round((k.portfolio_forecast_gp_pct||0)*10)/10;
+    const cashExp=k.total_project_cash_exposure||0;
+    const atRiskProjects=(INSIGHTS.pp.projects||[]).filter(p=>p.health_status==='at_risk'||p.health_status==='critical').slice(0,6);
+    sections.push(`
+      <div class="insights-sec">
+        <div class="insights-sec-title">💰 Financial Health <span style="font-size:11px;color:var(--gray-500);font-weight:500">(synced from Zoho Books)</span></div>
+        <div class="dash-metrics">
+          <div class="mcard"><div class="mcard-label">Active projects</div><div class="mcard-val navy">${k.active_projects||0}</div><div class="mcard-sub">AED ${fmt(k.total_active_project_value||0)}</div></div>
+          <div class="mcard"><div class="mcard-label">Portfolio GP%</div><div class="mcard-val green">${gpPct}%</div></div>
+          <div class="mcard"><div class="mcard-label">At risk / Critical</div><div class="mcard-val ${(k.critical_projects||0)>0?'red':'amber'}">${k.projects_at_risk||0} / ${k.critical_projects||0}</div></div>
+          <div class="mcard"><div class="mcard-label">Outstanding receivables</div><div class="mcard-val amber">AED ${fmt(k.total_outstanding_receivables||0)}</div></div>
+          <div class="mcard"><div class="mcard-label">Unbilled value</div><div class="mcard-val navy">AED ${fmt(k.total_unbilled_value||0)}</div></div>
+          <div class="mcard"><div class="mcard-label">Cash exposure</div><div class="mcard-val ${cashExp<0?'red':'green'}">AED ${fmt(cashExp)}</div></div>
+        </div>
+        ${atRiskProjects.length?`<div class="insights-list">
+          <div class="insights-list-title">Projects needing attention</div>
+          ${atRiskProjects.map(p=>`<div class="insights-row"><span>${esc(p.name||'')}</span><span style="color:var(--gray-500)">${esc(p.customer||'')}</span>${healthBadge(p.health_status)}</div>`).join('')}
+        </div>`:''}
+      </div>`);
+  }
+
+  // ── AMC & Field Service (Contracts, Tickets, PM Schedules) ─────────────
+  if((INSIGHTS.contracts&&!INSIGHTS.contracts.error)||(INSIGHTS.tickets&&!INSIGHTS.tickets.error)||(INSIGHTS.pmSchedules&&!INSIGHTS.pmSchedules.error)){
+    const contracts=Array.isArray(INSIGHTS.contracts)?INSIGHTS.contracts:[];
+    const now=new Date(); const in30=new Date(now.getTime()+30*864e5); const in60=new Date(now.getTime()+60*864e5); const in90=new Date(now.getTime()+90*864e5);
+    const expiring=contracts.filter(c=>c.end_date&&new Date(c.end_date)>=now&&new Date(c.end_date)<=in90).sort((a,b)=>new Date(a.end_date)-new Date(b.end_date));
+    const exp30=expiring.filter(c=>new Date(c.end_date)<=in30).length;
+    const exp60=expiring.filter(c=>{const d=new Date(c.end_date);return d>in30&&d<=in60;}).length;
+    const exp90=expiring.length-exp30-exp60;
+
+    const tickets=Array.isArray(INSIGHTS.tickets)?INSIGHTS.tickets:[];
+    const openStatuses=['new','acknowledged','assigned','accepted','travelling','on_site','diagnosis','waiting_customer','waiting_parts','waiting_approval'];
+    const openTickets=tickets.filter(t=>openStatuses.includes(t.status));
+    const byPriority={critical:0,high:0,medium:0,low:0};
+    openTickets.forEach(t=>{if(byPriority[t.priority]!=null)byPriority[t.priority]++;});
+    const nowIso=now.toISOString();
+    const slaBreaches=openTickets.filter(t=>t.sla_resolution_due_at&&t.sla_resolution_due_at<nowIso);
+
+    const pmSchedules=Array.isArray(INSIGHTS.pmSchedules)?INSIGHTS.pmSchedules:[];
+    const in7=new Date(now.getTime()+7*864e5);
+    const pmDueSoon=pmSchedules.filter(s=>s.is_active!==false&&s.next_due_date&&new Date(s.next_due_date)<=in7);
+
+    sections.push(`
+      <div class="insights-sec">
+        <div class="insights-sec-title">🔧 AMC &amp; Field Service</div>
+        <div class="dash-metrics">
+          <div class="mcard"><div class="mcard-label">Contracts expiring (90d)</div><div class="mcard-val ${exp30?'red':'navy'}">${expiring.length}</div><div class="mcard-sub">${exp30} in 30d · ${exp60} in 60d · ${exp90} in 90d</div></div>
+          <div class="mcard"><div class="mcard-label">Open tickets</div><div class="mcard-val navy">${openTickets.length}</div><div class="mcard-sub">${byPriority.critical} critical · ${byPriority.high} high</div></div>
+          <div class="mcard"><div class="mcard-label">SLA breaches</div><div class="mcard-val ${slaBreaches.length?'red':'green'}">${slaBreaches.length}</div></div>
+          <div class="mcard"><div class="mcard-label">PM visits due (7d)</div><div class="mcard-val amber">${pmDueSoon.length}</div></div>
+        </div>
+        ${expiring.length?`<div class="insights-list">
+          <div class="insights-list-title">Upcoming contract renewals</div>
+          ${expiring.slice(0,6).map(c=>`<div class="insights-row"><span>${esc(c.contract_number||(c.contract_type||'Contract').toUpperCase())}</span><span style="color:var(--gray-500)">${esc((c.contract_type||'').toUpperCase())}</span><span>${esc((c.end_date||'').slice(0,10))}</span></div>`).join('')}
+        </div>`:''}
+      </div>`);
+  }
+
+  if(!sections.length)sections.push(`<div style="color:var(--gray-500);padding:20px">No data available yet.</div>`);
+
+  return `<div class="insights-page">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <h2 style="margin:0">Insights</h2>
+      <button class="btn" onclick="loadInsightsPage()">🔄 Refresh</button>
+    </div>
+    ${INSIGHTS.error?`<div class="auth-err" style="margin:12px 0">${esc(INSIGHTS.error)}</div>`:''}
+    ${sections.join('')}
+  </div>`;
+}
+
 function dashHTML(){
   const qs=A.quotes;
   const awarded=qs.filter(q=>q.status==='awarded').length;
