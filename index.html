@@ -508,6 +508,18 @@ function toggleSidebarBtn(){
 function parseJwt(t){try{return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));}catch(e){return {};}}
 function hasFeature(f){return !!(A.token&&(parseJwt(A.token).features||{})[f]);}
 function hasPageAccess(pageKey){if(A.user?.role==='admin')return true;if(!A.token)return true;const rp=parseJwt(A.token).role_permissions;if(rp===null||rp===undefined)return true;return !!rp[pageKey];}
+// Picks where to land right after auth resolves. 'dashboard' (Quotes) is the
+// default for most roles, but a restricted role with only 'myJobs' access
+// (a field engineer) has no business on the quotes dashboard -- send them
+// straight to their jobs instead of a page they can't use.
+function defaultLandingPage(){
+  if(hasPageAccess('quotes'))return 'dashboard';
+  if(hasFeature('fsm_module')&&hasPageAccess('myJobs'))return 'myJobs';
+  if(hasFeature('fsm_module')&&hasPageAccess('fsm'))return 'fsm';
+  if(hasPageAccess('deals'))return 'deals';
+  if(hasPageAccess('customers'))return 'customers';
+  return 'dashboard';
+}
 // Zoho's internal project_id isn't the human-readable number staff use --
 // that's the cf_project_no custom field, stored separately as
 // zoho_project_no. Display should always prefer it, falling back to the
@@ -1430,14 +1442,14 @@ async function doLogin(e){
   if(r.error){err.textContent=r.error;err.style.display='block';return;}
   setAuth(r);
   if(r.user&&r.user.is_platform_admin){A.page='platform';draw();return;}
-  await loadQuotes();A.page='dashboard';draw();
+  await loadQuotes();A.page=defaultLandingPage();draw();
 }
 async function doRegister(e){
   e.preventDefault();
   const err=document.getElementById('regErr');err.style.display='none';
   const r=await api('POST','/api/auth/register',{email:document.getElementById('rEmail').value,password:document.getElementById('rPass').value,name:document.getElementById('rName').value,company:document.getElementById('rCo').value});
   if(r.error){err.textContent=r.error;err.style.display='block';return;}
-  setAuth(r);await loadQuotes();A.page='dashboard';draw();
+  setAuth(r);await loadQuotes();A.page=defaultLandingPage();draw();
 }
 // AUTH-002: the access token now lives only in memory (A.token), never in
 // localStorage -- the long-lived side of the session is the httpOnly
@@ -1459,6 +1471,7 @@ async function checkAuth(){
   if(r.error||!r.token){A.screen='login';draw();return;}
   A.token=r.token;A.user=r.user;A.company=r.company;A.screen='app';
   if(A.user&&A.user.is_platform_admin){A.page='platform';draw();return;}
+  A.page=defaultLandingPage();
   await loadQuotes();draw();
 }
 
@@ -2555,6 +2568,8 @@ function draw(){
   if(A.page==='projects'&&A.projects==null)setTimeout(loadProjectsPage,50);
   if(A.page==='fsm'&&A.fsmTickets==null)setTimeout(loadFSMPage,50);
   if(A.page==='fsmDetail'&&A.fsmDetail==null)setTimeout(function(){loadFSMDetail(A.fsmDetailId);},50);
+  if(A.page==='myJobs'&&A.myJobs==null)setTimeout(loadMyJobs,50);
+  if(A.page==='myJobDetail'&&A.myJobDetail==null)setTimeout(function(){loadMyJobDetail(A.myJobDetailId);},50);
   if(A.page==='projectPerformance'&&A.portfolio==null)setTimeout(loadPortfolioPage,50);
   if(A.page==='projectPerformanceDetail'&&A.ppDetail==null)setTimeout(loadProjectPerformanceDetail,50);
   if(A.page==='vendorMaster')setTimeout(loadVendorsMaster,50);
@@ -3024,6 +3039,7 @@ function appHTML(){
       ${hasPageAccess('vendors')?`<div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="${nav('vendorMaster')}"><span class="sb-icon">🏭</span>Vendors</div>`:''}
       ${hasFeature('projects')&&hasPageAccess('projects')?`<div class="sb-item ${A.page==='projects'?'active':''}" onclick="${nav('projects')}"><span class="sb-icon">📁</span>Projects</div>`:''}
       ${hasFeature('fsm_module')&&hasPageAccess('fsm')?`<div class="sb-item ${(A.page==='fsm'||A.page==='fsmDetail')?'active':''}" onclick="${nav('fsm')}"><span class="sb-icon">🔧</span>Field Service</div>`:''}
+      ${hasFeature('fsm_module')&&hasPageAccess('myJobs')?`<div class="sb-item ${(A.page==='myJobs'||A.page==='myJobDetail')?'active':''}" onclick="${nav('myJobs')}"><span class="sb-icon">🧰</span>My Jobs</div>`:''}
       ${hasFeature('project_performance')&&hasPageAccess('projectPerformance')?`<div class="sb-item ${(A.page==='projectPerformance'||A.page==='projectPerformanceDetail')?'active':''}" onclick="${nav('projectPerformance')}"><span class="sb-icon">📊</span>Project Performance</div>`:''}
       ${hasPageAccess('reviewQueue')?`<div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>`:''}       ${hasFeature('testimonials')&&hasPageAccess('testimonials')?`<div class="sb-item ${A.page==='testimonials'?'active':''}" onclick="${nav('testimonials')}"><span class="sb-icon">⭐</span>Testimonials</div>`:''}       ${hasPageAccess('insights')?`<div class="sb-item ${A.page==='insights'?'active':''}" onclick="${nav('insights')}"><span class="sb-icon">📈</span>Insights</div>`:''}       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}`}       ${(A.user?.role==='admin'&&!A.user?.is_platform_admin)?`<div class="sb-sec">Settings</div>
       <div class="sb-item ${A.page==='team'?'active':''}" onclick="${nav('team')}"><span class="sb-icon">👥</span>Team</div>
@@ -3062,6 +3078,8 @@ function appHTML(){
   else if(A.page==='projects')pageContent=projectsHTML();
   else if(A.page==='fsm')pageContent=fsmHTML();
   else if(A.page==='fsmDetail')pageContent=fsmDetailHTML();
+  else if(A.page==='myJobs')pageContent=myJobsHTML();
+  else if(A.page==='myJobDetail')pageContent=myJobDetailHTML();
   else if(A.page==='projectPerformance')pageContent=portfolioHTML();
   else if(A.page==='projectPerformanceDetail')pageContent=projectPerformanceDetailHTML();
   else if(A.page==='vendorMaster')pageContent=vendorsMasterHTML();
@@ -5742,7 +5760,7 @@ function importVendorsMaster(event){
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────
-const RBAC_PAGE_LABELS = {insights:'Insights',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service'};
+const RBAC_PAGE_LABELS = {insights:'Insights',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service',myJobs:'My Jobs (Engineer)'};
 let RBAC_PAGE_KEYS_FE = [];
 let RBAC_ROLES_CACHE = [];
 
@@ -7497,9 +7515,14 @@ async function loadFSMEngineers(){
   draw();
 }
 
-function showFsmEngineerModal(engineerId){
+async function showFsmEngineerModal(engineerId){
   const e=engineerId?(A.fsmEngineers||[]).find(x=>x.id===engineerId):null;
   const isNew=!e;
+  if(A.fsmTeamCache==null){
+    const tr=await api('GET','/api/auth/team');
+    A.fsmTeamCache=tr.error?[]:(tr.members||[]);
+  }
+  const users=A.fsmTeamCache||[];
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmEngModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmEngineerModal()">
     <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
       <div class="modal-title">${isNew?'New Engineer':esc(e.name)}</div>
@@ -7521,6 +7544,13 @@ function showFsmEngineerModal(engineerId){
       <datalist id="fsmSkillsList">${FSM_COMMON_SKILLS.map(s=>`<option value="${esc(s)}">`).join('')}</datalist>
       <div class="fld"><label>Certifications</label><input id="fsmEngCerts" class="iinput" list="fsmCertsList" value="${esc((e?.certifications||[]).join(', '))}" placeholder="Comma-separated, e.g. CTS, Crestron DMC-E"></div>
       <datalist id="fsmCertsList">${FSM_COMMON_CERTS.map(c=>`<option value="${esc(c)}">`).join('')}</datalist>
+      <div class="fld"><label>Linked User Login <span style="color:var(--gray-500);font-weight:400">(optional — lets them use the My Jobs self-service view instead of you updating tickets on their behalf)</span></label>
+        <select id="fsmEngUser" class="iinput">
+          <option value="">— Not linked —</option>
+          ${users.map(u=>`<option value="${u.id}" ${e?.user_id===u.id?'selected':''}>${esc(u.name)} (${esc(u.email)})</option>`).join('')}
+        </select>
+        ${!users.length?`<p style="font-size:12px;color:var(--gray-500);margin-top:6px">No team logins yet — create one under Team first, then come back and link it here.</p>`:''}
+      </div>
       <div class="fld"><label>Notes</label><textarea id="fsmEngNotes" class="iinput" rows="3">${esc(e?.notes||'')}</textarea></div>
       <div class="modal-actions">
         <button class="btn" onclick="closeFsmEngineerModal()">Cancel</button>
@@ -7546,6 +7576,7 @@ async function saveFsmEngineer(engineerId){
     availability:document.getElementById('fsmEngAvailability')?.value||'available',
     skills:fsmSplitTags(document.getElementById('fsmEngSkills')?.value),
     certifications:fsmSplitTags(document.getElementById('fsmEngCerts')?.value),
+    user_id:document.getElementById('fsmEngUser')?.value||null,
     notes:document.getElementById('fsmEngNotes')?.value||'',
   };
   const r=engineerId
@@ -7989,7 +8020,7 @@ function fsmWorkOrdersHTML(){
       ${(w.checklist||[]).length?`<ul style="margin:8px 0 0 18px;font-size:13px;color:var(--gray-700)">${(w.checklist||[]).map(c=>`<li>${esc(typeof c==='string'?c:c.text||'')}</li>`).join('')}</ul>`:''}
       ${done?`<div style="font-size:13px;margin-top:10px;padding-top:10px;border-top:1px solid var(--gray-100)">
           <strong>Completion notes:</strong> ${esc(w.completion_notes)}
-          <div style="margin-top:8px"><button class="btn btn-sm" onclick="downloadFsmPMReport('${w.id}')">📄 Generate PM Report</button></div>
+          ${A.myJobsMode?'':`<div style="margin-top:8px"><button class="btn btn-sm" onclick="downloadFsmPMReport('${w.id}')">📄 Generate PM Report</button></div>`}
         </div>`
         :`<button class="btn btn-sm" style="margin-top:10px" onclick="showFsmCompleteWorkOrderModal('${w.id}')">Mark Complete</button>`}
     </div>`;
@@ -8040,6 +8071,7 @@ async function loadFSMDetail(id){
     api('GET','/api/fsm_tickets?resource=work_order&action=list&ticket_id='+id)
   ]);
   if(t.error){alert(t.error);A.page='fsm';draw();return;}
+  A.myJobsMode=false;
   A.fsmDetail=t;A.fsmActivity=Array.isArray(act)?act:[];A.fsmWorkOrders=Array.isArray(wo)?wo:[];A.fsmPortalAccess=undefined;draw();
   if(A.fsmEngineers==null)loadFSMEngineers();
 }
@@ -8150,7 +8182,7 @@ function closeFsmCompleteWorkOrderModal(){const el=document.getElementById('fsmW
 async function loadFsmWoAssetStatuses(woId){
   const el=document.getElementById('fsmWoAssetStatus');
   if(!el)return;
-  const r=await api('GET','/api/fsm_tickets?resource=work_order&action=asset_statuses&id='+woId);
+  const r=await api('GET','/api/fsm_tickets?resource='+(A.myJobsMode?'my':'work_order')+'&action=asset_statuses&id='+woId);
   // Guard against a race where the modal was closed, or a different work
   // order's modal opened, before this fetch resolved -- data-wo-id on the
   // overlay identifies which work order is actually still open.
@@ -8206,7 +8238,10 @@ async function completeFsmWorkOrder(woId){
     customer_signature_name:(document.getElementById('fsmWoCustSignName')?.value||'').trim(),
   };
 
-  const r=await api('PATCH','/api/fsm_tickets?resource=work_order&action=complete&id='+woId,{
+  const endpoint=A.myJobsMode
+    ?'/api/fsm_tickets?resource=my&action=complete_work_order&id='+woId
+    :'/api/fsm_tickets?resource=work_order&action=complete&id='+woId;
+  const r=await api('PATCH',endpoint,{
     completion_notes:notes,
     checklist:baseChecklist,
     asset_statuses:assetStatuses,
@@ -8215,7 +8250,8 @@ async function completeFsmWorkOrder(woId){
   if(r.error){alert(r.error);return;}
   closeFsmCompleteWorkOrderModal();
   A._fsmWoAssets=null;
-  loadFSMDetail(A.fsmDetailId);
+  if(A.myJobsMode){A.myJobDetail=null;loadMyJobDetail(A.myJobDetailId);}
+  else loadFSMDetail(A.fsmDetailId);
 }
 
 // ── Voice input (dictation) for FSM free-text fields ────────────────────
@@ -8525,6 +8561,119 @@ async function updateFSMStatus(id){
   if(r.error){alert(r.error);return;}
   A.fsmDetail=null;loadFSMDetail(id);
 }
+
+// ── "My Jobs" — field-engineer self-service view (Module 5/6) ──────────────
+// A scoped, mobile-friendly alternative to the full Field Service module for
+// users granted only the 'myJobs' RBAC permission (not full 'fsm' access).
+// Every request goes through resource=my on api/fsm_tickets.py, which
+// resolves the caller's linked fsm_engineers row server-side and only ever
+// returns/accepts tickets assigned to that engineer -- there is no ticket id
+// or filter parameter here that could show someone else's job.
+async function loadMyJobs(){
+  const r=await api('GET','/api/fsm_tickets?resource=my&action=list'+(A.myJobsShowClosed?'&include_closed=1':''));
+  if(r&&r.linked===false){A.myJobsLinked=false;A.myJobs=[];draw();return;}
+  if(r.error){A.myJobsLinked=true;A.myJobs=[];draw();return;}
+  A.myJobsLinked=true;A.myJobs=Array.isArray(r)?r:[];draw();
+}
+
+function myJobsHTML(){
+  if(A.myJobsLinked===false){
+    return `<div class="card"><div style="padding:26px;color:var(--gray-500);text-align:center">
+      Your login isn't linked to an engineer profile yet.<br>Ask your admin to link it under <strong>Field Service → Setup → Engineers</strong>.
+    </div></div>`;
+  }
+  const list=A.myJobs;
+  const rows=(list||[]).map(t=>`<div class="card" style="margin-bottom:10px;cursor:pointer" onclick="A.page='myJobDetail';A.myJobDetailId='${t.id}';A.myJobDetail=null;draw()">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
+      <div>
+        <div style="font-size:12px;color:var(--gray-500)">${esc(t.ticket_number)}</div>
+        <div style="font-weight:700;font-size:15px">${esc(t.subject)}</div>
+      </div>
+      ${fsmBadge(t.status,FSM_STATUS_CLASS)}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px;align-items:center">${fsmBadge(t.priority,FSM_PRIORITY_CLASS)}<span style="font-size:12px;color:var(--gray-500)">${new Date(t.created_at).toLocaleDateString()}</span></div>
+  </div>`).join('');
+  return `<div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+      <div class="card-title" style="margin-bottom:0">My Jobs</div>
+      <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" ${A.myJobsShowClosed?'checked':''} onchange="A.myJobsShowClosed=this.checked;A.myJobs=null;draw()">Show closed/cancelled</label>
+    </div>
+    ${list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
+      :!list.length?`<div style="padding:28px;text-align:center;color:var(--gray-500)">Nothing assigned to you right now.</div>`
+      :rows}
+  </div>`;
+}
+
+// One-tap "next step" per current status, so the common path doesn't require
+// hunting through the full 13-status dropdown on a phone. Anything outside
+// this happy path (cancelled, waiting-for-approval, etc.) is still reachable
+// via the manual dropdown below it.
+const MY_JOB_NEXT={
+  new:{to:'acknowledged',label:'Acknowledge'},
+  acknowledged:{to:'assigned',label:'Confirm Assignment'},
+  assigned:{to:'accepted',label:'Accept Job'},
+  accepted:{to:'travelling',label:'Start Travelling'},
+  travelling:{to:'on_site',label:'Arrived On Site'},
+  on_site:{to:'diagnosis',label:'Start Diagnosis'},
+  diagnosis:{to:'resolved',label:'Mark Resolved'},
+  waiting_customer:{to:'diagnosis',label:'Resume — Back to Diagnosis'},
+  waiting_parts:{to:'diagnosis',label:'Resume — Back to Diagnosis'},
+  waiting_approval:{to:'diagnosis',label:'Resume — Back to Diagnosis'},
+};
+const MY_JOB_ALL_STATUSES=['new','acknowledged','assigned','accepted','travelling','on_site','diagnosis','waiting_customer','waiting_parts','waiting_approval','resolved','closed','cancelled'];
+
+async function loadMyJobDetail(id){
+  const r=await api('GET','/api/fsm_tickets?resource=my&action=get&id='+id);
+  if(r.error){alert(r.error);A.page='myJobs';draw();return;}
+  A.myJobsMode=true;
+  A.myJobDetail=r.ticket;A.myJobActivity=r.activity||[];A.fsmWorkOrders=r.work_orders||[];
+  draw();
+}
+
+function myJobDetailHTML(){
+  const t=A.myJobDetail;
+  if(!t)return `<div style="color:var(--gray-500)">Loading…</div>`;
+  const next=MY_JOB_NEXT[t.status];
+  const canHold=['on_site','diagnosis'].includes(t.status);
+  return `<div>
+    <button class="btn" onclick="A.page='myJobs';draw()">&larr; Back to My Jobs</button>
+    <div class="card" style="margin-top:12px">
+      <div class="card-title" style="margin-bottom:4px">${esc(t.ticket_number)} — ${esc(t.subject)}</div>
+      <div style="display:flex;gap:8px">${fsmBadge(t.priority,FSM_PRIORITY_CLASS)}${fsmBadge(t.status,FSM_STATUS_CLASS)}</div>
+      <p style="color:var(--gray-500);font-size:14px;margin-top:12px">${esc(t.description||'No description provided.')}</p>
+      <div style="margin-top:14px">${fsmSlaCardHTML(t)}</div>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <div class="card-title">Update Status</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        ${next?`<button class="btn btn-navy" onclick="myJobSetStatus('${t.id}','${next.to}')">${esc(next.label)}</button>`:''}
+        ${canHold?`<button class="btn btn-sm" onclick="myJobSetStatus('${t.id}','waiting_customer')">Waiting on Customer</button>
+          <button class="btn btn-sm" onclick="myJobSetStatus('${t.id}','waiting_parts')">Waiting on Parts</button>`:''}
+      </div>
+      <details style="margin-top:10px">
+        <summary style="cursor:pointer;font-size:12px;color:var(--gray-500)">Set status manually</summary>
+        <div style="margin-top:8px;display:flex;gap:8px">
+          <select id="myJobStatusSelect" class="iinput" style="width:auto">
+            ${MY_JOB_ALL_STATUSES.map(s=>`<option value="${s}" ${s===t.status?'selected':''}>${s.replace(/_/g,' ')}</option>`).join('')}
+          </select>
+          <button class="btn" onclick="myJobSetStatus('${t.id}',document.getElementById('myJobStatusSelect').value)">Update</button>
+        </div>
+      </details>
+    </div>
+    <div class="card" style="margin-top:16px">
+      <div class="card-title">Work Order</div>
+      ${fsmWorkOrdersHTML()}
+    </div>
+  </div>`;
+}
+
+async function myJobSetStatus(ticketId,status){
+  const r=await api('PATCH','/api/fsm_tickets?resource=my&action=update_status&id='+ticketId,{status});
+  if(r.error){alert(r.error);return;}
+  A.myJobDetail=null;loadMyJobDetail(ticketId);
+  A.myJobs=null;
+}
+// ── end My Jobs ──────────────────────────────────────────────────────────
 // ── end FSM ───────────────────────────────────────────────────
 (function boot(){
   const params=new URLSearchParams(window.location.search);

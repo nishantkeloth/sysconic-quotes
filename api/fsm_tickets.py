@@ -58,6 +58,19 @@ def rbac_gate():
     if not (claims.get('features') or {}).get('fsm_module'):
         return jsonify({'error': 'FSM module not enabled for this company'}), 403
 
+    # "My Jobs" (resource=my) is the field-engineer self-service surface --
+    # it only needs the narrower 'myJobs' permission (or full 'fsm' access,
+    # so admins/coordinators can preview it too). Every other resource on
+    # this router still requires full 'fsm' page access. Ownership of the
+    # specific ticket/work order is enforced inside each my_* handler, not
+    # here -- this gate only decides whether the endpoint family is reachable
+    # at all.
+    if request.args.get('resource') == 'my':
+        if not (has_page_access(claims, 'myJobs') or has_page_access(claims, 'fsm')):
+            return jsonify({'error': 'You do not have access to this feature.'}), 403
+        g.claims = claims
+        return None
+
     if not has_page_access(claims, 'fsm'):
         return jsonify({'error': 'You do not have access to this feature.'}), 403
 
@@ -106,6 +119,22 @@ def fsm_tickets_router():
             return reschedule_work_order()
         if action == "asset_statuses":
             return get_work_order_asset_statuses()
+
+    # Module 5/6 self-service: a field engineer's own scoped view of exactly
+    # the tickets assigned to them -- see the my_* functions below.
+    if resource == "my":
+        if action == "me":
+            return my_profile()
+        if action == "list":
+            return my_list_tickets()
+        if action == "get":
+            return my_get_ticket()
+        if action == "update_status":
+            return my_update_status()
+        if action == "complete_work_order":
+            return my_complete_work_order()
+        if action == "asset_statuses":
+            return my_asset_statuses()
 
     return jsonify({"error": "unknown resource/action"}), 400
 
@@ -766,3 +795,137 @@ def reschedule_work_order():
         traceback.print_exc()
 
     return jsonify(result.data[0])
+
+
+# ------------------------------------------------------------------
+# "My Jobs" — field-engineer self-service (Module 5/6)
+#
+# A logged-in user's fsm_engineers row is found via user_id (set once, by an
+# admin, when linking their account to an engineer profile under Setup ->
+# Engineers). Every handler here re-derives that engineer id from the JWT and
+# filters/checks against it server-side -- the caller can only ever see or
+# touch tickets assigned to their own linked engineer record, regardless of
+# what ids they pass in the URL. This is what makes 'myJobs' safe to grant
+# without full 'fsm' access: the page-level gate in rbac_gate() only decides
+# whether this resource is reachable, ownership is enforced here.
+# ------------------------------------------------------------------
+def _my_engineer(sb, claims):
+    rows = (
+        sb.table("fsm_engineers")
+        .select("id,name")
+        .eq("company_id", claims["company_id"])
+        .eq("user_id", claims["user_id"])
+        .eq("is_active", True)
+        .execute().data
+    )
+    return rows[0] if rows else None
+
+
+def _ticket_owned_by_engineer(sb, company_id, ticket_id, engineer_id):
+    rows = (
+        sb.table("fsm_tickets")
+        .select("id,assigned_engineer_id")
+        .eq("id", ticket_id).eq("company_id", company_id)
+        .execute().data
+    )
+    return bool(rows) and rows[0].get("assigned_engineer_id") == engineer_id
+
+
+def _work_order_owned_by_engineer(sb, company_id, wo_id, engineer_id):
+    rows = (
+        sb.table("fsm_work_orders")
+        .select("id,ticket_id")
+        .eq("id", wo_id).eq("company_id", company_id)
+        .execute().data
+    )
+    if not rows:
+        return False
+    return _ticket_owned_by_engineer(sb, company_id, rows[0]["ticket_id"], engineer_id)
+
+
+NOT_LINKED_MSG = "Your login isn't linked to an engineer profile yet. Ask your admin to link it under Field Service -> Setup -> Engineers."
+
+
+def my_profile():
+    sb = get_sb()
+    eng = _my_engineer(sb, g.claims)
+    return jsonify({"linked": bool(eng), "engineer": eng})
+
+
+def my_list_tickets():
+    sb = get_sb()
+    eng = _my_engineer(sb, g.claims)
+    if not eng:
+        return jsonify({"error": NOT_LINKED_MSG, "linked": False}), 403
+    company_id = g.claims["company_id"]
+    q = (
+        sb.table("fsm_tickets").select("*")
+        .eq("company_id", company_id).eq("is_deleted", False)
+        .eq("assigned_engineer_id", eng["id"])
+    )
+    if request.args.get("include_closed") != "1":
+        q = q.not_.in_("status", ["closed", "cancelled"])
+    result = q.order("created_at", desc=True).execute()
+    return jsonify(result.data or [])
+
+
+def my_get_ticket():
+    sb = get_sb()
+    eng = _my_engineer(sb, g.claims)
+    if not eng:
+        return jsonify({"error": NOT_LINKED_MSG, "linked": False}), 403
+    company_id = g.claims["company_id"]
+    ticket_id = request.args.get("id")
+    if not ticket_id or not _ticket_owned_by_engineer(sb, company_id, ticket_id, eng["id"]):
+        return jsonify({"error": "not found"}), 404
+    t = sb.table("fsm_tickets").select("*").eq("id", ticket_id).eq("company_id", company_id).single().execute().data
+    wos = (
+        sb.table("fsm_work_orders").select("*")
+        .eq("ticket_id", ticket_id).eq("company_id", company_id).eq("is_deleted", False)
+        .execute().data or []
+    )
+    activity = (
+        sb.table("fsm_ticket_activity").select("*")
+        .eq("ticket_id", ticket_id).eq("company_id", company_id)
+        .order("created_at", desc=True).execute().data or []
+    )
+    return jsonify({"ticket": t, "work_orders": wos, "activity": activity})
+
+
+def my_update_status():
+    """Ownership-checked wrapper around the existing update_ticket_status() --
+    reused as-is so SLA milestone stamping (first_response_at/arrived_at/
+    resolved_at/closed_at) and activity logging stay identical between the
+    staff and engineer views instead of drifting into two implementations."""
+    sb = get_sb()
+    eng = _my_engineer(sb, g.claims)
+    if not eng:
+        return jsonify({"error": NOT_LINKED_MSG, "linked": False}), 403
+    ticket_id = request.args.get("id")
+    if not ticket_id or not _ticket_owned_by_engineer(sb, g.claims["company_id"], ticket_id, eng["id"]):
+        return jsonify({"error": "not found"}), 404
+    return update_ticket_status()
+
+
+def my_complete_work_order():
+    """Ownership-checked wrapper around the existing complete_work_order()."""
+    sb = get_sb()
+    eng = _my_engineer(sb, g.claims)
+    if not eng:
+        return jsonify({"error": NOT_LINKED_MSG, "linked": False}), 403
+    wo_id = request.args.get("id")
+    if not wo_id or not _work_order_owned_by_engineer(sb, g.claims["company_id"], wo_id, eng["id"]):
+        return jsonify({"error": "not found"}), 404
+    return complete_work_order()
+
+
+def my_asset_statuses():
+    """Ownership-checked wrapper around the existing get_work_order_asset_statuses()."""
+    sb = get_sb()
+    eng = _my_engineer(sb, g.claims)
+    if not eng:
+        return jsonify({"error": NOT_LINKED_MSG, "linked": False}), 403
+    wo_id = request.args.get("id")
+    if not wo_id or not _work_order_owned_by_engineer(sb, g.claims["company_id"], wo_id, eng["id"]):
+        return jsonify({"error": "not found"}), 404
+    return get_work_order_asset_statuses()

@@ -138,7 +138,7 @@ def update_engineer():
         return jsonify({"error": f"invalid availability: {payload['availability']}"}), 400
 
     allowed = {"name", "email", "phone", "skills", "certifications", "territory",
-               "availability", "is_active", "notes"}
+               "availability", "is_active", "notes", "user_id"}
     update = {k: v for k, v in payload.items() if k in allowed}
     update["updated_at"] = datetime.utcnow().isoformat()
 
