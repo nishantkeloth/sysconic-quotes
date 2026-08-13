@@ -10,6 +10,7 @@ Add this file to BOTH `builds` and `routes` in vercel.json.
 from flask import Flask, request, jsonify, g
 import uuid
 import requests
+import traceback
 from datetime import datetime, timedelta
 
 from api.auth import verify_token, get_sb, get_ms_token, SENDER_EMAIL
@@ -706,7 +707,13 @@ def reschedule_work_order():
     """Module 6 (Scheduling & Dispatch): drag-and-drop a work order onto a
     different engineer and/or day on the scheduler. Also keeps the parent
     ticket's assigned_engineer_id in sync so the ticket detail picker and
-    the scheduler never disagree about who's assigned."""
+    the scheduler never disagree about who's assigned.
+
+    Wrapped in try/except (matching api/platform.py's pattern) so a DB error
+    (e.g. a stale engineer_id whose row was deleted, tripping the
+    fsm_work_orders -> fsm_engineers foreign key) comes back as a readable
+    JSON error instead of a raw Flask 500 HTML page — the frontend's api()
+    helper already surfaces r.error via alert() once it's actual JSON."""
     company_id = g.claims['company_id']
     actor_id = g.claims['user_id']
     wo_id = request.args.get("id")
@@ -721,7 +728,15 @@ def reschedule_work_order():
         update["visit_date"] = payload["visit_date"]
 
     sb = get_sb()
-    result = sb.table("fsm_work_orders").update(update).eq("id", wo_id).eq("company_id", company_id).execute()
+    try:
+        result = sb.table("fsm_work_orders").update(update).eq("id", wo_id).eq("company_id", company_id).execute()
+    except Exception as e:
+        traceback.print_exc()
+        msg = str(e)
+        if "foreign key" in msg.lower() and "engineer" in msg.lower():
+            msg = "That engineer no longer exists. Refresh the Schedule tab and try again."
+        return jsonify({"error": msg}), 500
+
     if not result.data:
         return jsonify({"error": "not found"}), 404
 
@@ -729,17 +744,25 @@ def reschedule_work_order():
     ticket_id = wo["ticket_id"]
 
     if "engineer_id" in payload and payload["engineer_id"]:
-        sb.table("fsm_tickets").update({
-            "assigned_engineer_id": payload["engineer_id"],
-            "updated_at": datetime.utcnow().isoformat(),
-        }).eq("id", ticket_id).eq("company_id", company_id).execute()
+        try:
+            sb.table("fsm_tickets").update({
+                "assigned_engineer_id": payload["engineer_id"],
+                "updated_at": datetime.utcnow().isoformat(),
+            }).eq("id", ticket_id).eq("company_id", company_id).execute()
+        except Exception as e:
+            # The reschedule itself already succeeded above — don't fail the
+            # whole request over the secondary ticket-sync write.
+            traceback.print_exc()
 
     note_bits = []
     if "engineer_id" in payload:
         note_bits.append(f"engineer -> {payload['engineer_id']}")
     if "visit_date" in payload:
         note_bits.append(f"visit date -> {payload['visit_date']}")
-    _log_activity(sb, ticket_id, company_id, "rescheduled", actor_id=actor_id,
-                  note="Work order rescheduled: " + ", ".join(note_bits) if note_bits else "Work order rescheduled")
+    try:
+        _log_activity(sb, ticket_id, company_id, "rescheduled", actor_id=actor_id,
+                      note="Work order rescheduled: " + ", ".join(note_bits) if note_bits else "Work order rescheduled")
+    except Exception as e:
+        traceback.print_exc()
 
     return jsonify(result.data[0])

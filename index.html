@@ -7363,7 +7363,15 @@ function fsmWeekStart(offsetWeeks){
   d.setDate(d.getDate()-dow+(offsetWeeks||0)*7);
   return d;
 }
-function fsmISODate(d){return d.toISOString().slice(0,10);}
+// Local-calendar-date ISO string. toISOString() converts to UTC first, which
+// shifts the date by a day for anyone at a positive UTC offset (e.g. UAE,
+// UTC+4) — local midnight becomes the previous day once converted. Build the
+// string from local getters instead so the day dragged onto matches the day
+// saved.
+function fsmISODate(d){
+  const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${day}`;
+}
 
 async function loadFSMSchedule(){
   if(A.fsmEngineers==null)await loadFSMEngineers();
