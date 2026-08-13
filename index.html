@@ -6455,13 +6455,31 @@ function fsmBadge(val,map){
 
 const FSM_TAB_LABELS={tickets:'Tickets',schedule:'Schedule',maintenance:'Maintenance',contracts:'Contracts',billing:'Billing',parts:'Parts',sites:'Sites',assets:'Assets',engineers:'Engineers',kb:'Knowledge Base',reports:'Reports'};
 const FSM_NEW_BTN={tickets:['+ New Ticket','showFsmTicketModal()'],maintenance:['+ New PM Schedule','showFsmPmModal()'],contracts:['+ New Contract','showFsmContractModal()'],parts:['+ New Part','showFsmPartModal()'],sites:['+ New Site','showFsmSiteModal()'],assets:['+ New Asset','showFsmAssetModal()'],engineers:['+ New Engineer','showFsmEngineerModal()'],kb:['+ New Article','showFsmKbModal()']};
+// Daily-operations tabs sit on the primary bar; everything else (service-delivery
+// setup and rarely-touched master data) lives behind the Setup dropdown, grouped —
+// keeps transactional and master-data navigation from reading as one flat list.
+const FSM_PRIMARY_TABS=['tickets','schedule','maintenance','reports'];
+const FSM_SETUP_GROUPS=[['Service delivery',['contracts','billing','parts']],['Master data',['sites','assets','engineers']],['Support',['kb']]];
+function toggleFsmSetupMenu(e){e.stopPropagation();document.getElementById('fsmSetupPanel')?.classList.toggle('open');}
+function closeFsmSetupMenu(){document.getElementById('fsmSetupPanel')?.classList.remove('open');}
+document.addEventListener('click',(e)=>{
+  const wrap=document.getElementById('fsmSetupWrap');
+  if(wrap&&!wrap.contains(e.target))closeFsmSetupMenu();
+});
 function fsmHTML(){
   const view=A.fsmView||'tickets';
   const newBtn=FSM_NEW_BTN[view];
+  const inSetup=!FSM_PRIMARY_TABS.includes(view);
   return `<div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
-      <div class="tab-btns">
-        ${Object.keys(FSM_TAB_LABELS).map(k=>`<button class="tab-btn ${view===k?'active':''}" onclick="fsmSwitchView('${k}')">${FSM_TAB_LABELS[k]}</button>`).join('')}
+      <div class="tab-btns" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+        ${FSM_PRIMARY_TABS.map(k=>`<button class="tab-btn ${view===k?'active':''}" onclick="fsmSwitchView('${k}')">${FSM_TAB_LABELS[k]}</button>`).join('')}
+        <div class="more-wrap" id="fsmSetupWrap">
+          <button class="tab-btn ${inSetup?'active':''}" onclick="toggleFsmSetupMenu(event)">⚙ Setup${inSetup?': '+FSM_TAB_LABELS[view]:''}</button>
+          <div class="more-panel" id="fsmSetupPanel">
+            ${FSM_SETUP_GROUPS.map(([label,keys],gi)=>`${gi>0?'<div class="mp-divider"></div>':''}<div style="padding:6px 14px 2px;font-size:11px;color:var(--gray-400);text-transform:uppercase;letter-spacing:.03em">${label}</div>${keys.map(k=>`<button onclick="closeFsmSetupMenu();fsmSwitchView('${k}')" style="${view===k?'font-weight:700':''}">${FSM_TAB_LABELS[k]}</button>`).join('')}`).join('')}
+          </div>
+        </div>
       </div>
       ${newBtn?`<button class="btn btn-navy" onclick="${newBtn[1]}">${newBtn[0]}</button>`:''}
     </div>
