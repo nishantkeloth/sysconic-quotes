@@ -5269,13 +5269,17 @@ async function loadCustomersPage(){
   CUSTS.list=r.customers||[];CUSTS.total=r.total||0;
   const cnt=document.getElementById('custCount');if(cnt)cnt.textContent=`${CUSTS.total} customer${CUSTS.total!==1?'s':''}${CUSTS.total>100?' — showing first 100, use search':''}`;
   if(!CUSTS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No customers yet.<br><br>Add one manually, import from Excel, or ask an admin to connect an integration in Settings → Integrations and click Sync above.</div>`;return;}
-  el.innerHTML=`<div class="prod-hd" style="grid-template-columns:1fr 140px 170px 130px 70px 110px"><div>Name</div><div>Company</div><div>Email</div><div>Phone</div><div>Source</div><div></div></div>`+
-    CUSTS.list.map(c=>`<div class="prod-row" style="grid-template-columns:1fr 140px 170px 130px 70px 110px">
+  const fsm=hasFeature('fsm_module');
+  if(fsm&&A.fsmPortalStatus==null)await loadFSMPortalStatus();
+  const cols=fsm?'1fr 130px 160px 120px 70px 150px 110px':'1fr 140px 170px 130px 70px 110px';
+  el.innerHTML=`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Name</div><div>Company</div><div>Email</div><div>Phone</div><div>Source</div>${fsm?'<div>Portal access</div>':''}<div></div></div>`+
+    CUSTS.list.map(c=>`<div class="prod-row" style="grid-template-columns:${cols}">
       <div data-label="Name">${esc(c.name)}</div>
       <div data-label="Company" style="color:var(--gray-500);font-size:13px">${esc(c.company_name||'')}</div>
       <div data-label="Email" style="color:var(--gray-500);font-size:13px">${esc(c.email||'')}</div>
       <div data-label="Phone" style="color:var(--gray-500);font-size:13px">${esc(c.phone||'')}</div>
       <div data-label="Source" style="font-size:12px;color:${c.source&&c.source!=='manual'?'var(--green)':'var(--gray-500)'}">${c.source&&c.source!=='manual'?esc(c.source.charAt(0).toUpperCase()+c.source.slice(1)):'Manual'}</div>
+      ${fsm?`<div data-label="Portal access" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">${fsmPortalStatusBadge(c.id)}<button class="btn btn-sm" onclick="showFsmCustomerPortalModal('${c.id}')">Manage</button></div>`:''}
       <div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn btn-sm" onclick="showCustModal('${c.id}')">Edit</button><button class="btn btn-sm btn-red" onclick="delCustomer('${c.id}')">×</button></div>
     </div>`).join('');
 }
@@ -6449,7 +6453,7 @@ function fsmBadge(val,map){
   return `<span class="sbadge ${cls}" style="text-transform:capitalize">${esc((val||'').replace(/_/g,' '))}</span>`;
 }
 
-const FSM_TAB_LABELS={tickets:'Tickets',schedule:'Schedule',maintenance:'Maintenance',contracts:'Contracts',billing:'Billing',parts:'Parts',sites:'Sites',assets:'Assets',engineers:'Engineers',customers:'Customers',kb:'Knowledge Base',reports:'Reports'};
+const FSM_TAB_LABELS={tickets:'Tickets',schedule:'Schedule',maintenance:'Maintenance',contracts:'Contracts',billing:'Billing',parts:'Parts',sites:'Sites',assets:'Assets',engineers:'Engineers',kb:'Knowledge Base',reports:'Reports'};
 const FSM_NEW_BTN={tickets:['+ New Ticket','showFsmTicketModal()'],maintenance:['+ New PM Schedule','showFsmPmModal()'],contracts:['+ New Contract','showFsmContractModal()'],parts:['+ New Part','showFsmPartModal()'],sites:['+ New Site','showFsmSiteModal()'],assets:['+ New Asset','showFsmAssetModal()'],engineers:['+ New Engineer','showFsmEngineerModal()'],kb:['+ New Article','showFsmKbModal()']};
 function fsmHTML(){
   const view=A.fsmView||'tickets';
@@ -6461,7 +6465,7 @@ function fsmHTML(){
       </div>
       ${newBtn?`<button class="btn btn-navy" onclick="${newBtn[1]}">${newBtn[0]}</button>`:''}
     </div>
-    ${view==='reports'?fsmReportsHTML():view==='tickets'?fsmTicketsListHTML():view==='schedule'?fsmScheduleHTML():view==='maintenance'?fsmPmListHTML():view==='contracts'?fsmContractsListHTML():view==='billing'?fsmBillingListHTML():view==='parts'?fsmPartsListHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():view==='customers'?fsmCustomersOnboardHTML():view==='kb'?fsmKbListHTML():fsmEngineersListHTML()}
+    ${view==='reports'?fsmReportsHTML():view==='tickets'?fsmTicketsListHTML():view==='schedule'?fsmScheduleHTML():view==='maintenance'?fsmPmListHTML():view==='contracts'?fsmContractsListHTML():view==='billing'?fsmBillingListHTML():view==='parts'?fsmPartsListHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():view==='kb'?fsmKbListHTML():fsmEngineersListHTML()}
   </div>`;
 }
 
@@ -6725,14 +6729,14 @@ function fsmSwitchView(view){
   if(view==='billing'&&A.fsmBillingTickets==null)loadFSMBilling();
   if(view==='reports'&&A.fsmReport==null)loadFSMReport();
   if(view==='kb'&&A.fsmKb==null)loadFSMKb();
-  if(view==='customers'&&A.fsmPortalStatus==null)loadFSMCustomersOnboard();
 }
 
-// ── Module 14: Customer Portal — standalone onboarding view ───────────────
-// Every customer in the company, independent of any ticket/contract/project
-// context, so staff can grant portal access at the moment that actually
-// matters (project handover, new AMC) rather than only reactively from
-// inside an existing ticket.
+// ── Module 14: Customer Portal — access management ─────────────────────────
+// Lives on the global Customers page (not a separate FSM tab) since portal
+// access is a property of the customer record itself, independent of any
+// ticket/contract/project context — staff grant it at the moment that
+// actually matters (project handover, new AMC) rather than only reactively
+// from inside an existing ticket.
 function fsmPortalStatusBadge(customerId){
   const s=(A.fsmPortalStatus||{})[customerId];
   if(!s||!s.total)return `<span style="color:var(--gray-400);font-size:12px">No portal access</span>`;
@@ -6740,37 +6744,14 @@ function fsmPortalStatusBadge(customerId){
   return `<span class="sbadge s-cancelled">Portal Locked</span>`;
 }
 
-function fsmCustomersOnboardHTML(){
-  const list=A.fsmCustomersCache;
-  if(list==null)return `<div style="padding:22px;color:var(--gray-500)">Loading…</div>`;
-  const search=(A.fsmCustSearch||'').toLowerCase();
-  const filtered=search?list.filter(c=>(c.name||'').toLowerCase().includes(search)||(c.email||'').toLowerCase().includes(search)):list;
-  const cols='1fr 1fr 150px 140px';
-  const rows=filtered.map(c=>`<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="showFsmCustomerPortalModal('${c.id}')">
-    <div data-label="Customer"><strong>${esc(c.name)}</strong></div>
-    <div data-label="Email" style="color:var(--gray-500);font-size:13px">${esc(c.email||'')}</div>
-    <div data-label="Portal Status">${fsmPortalStatusBadge(c.id)}</div>
-    <div data-label="Manage"><button class="btn btn-sm" onclick="event.stopPropagation();showFsmCustomerPortalModal('${c.id}')">Manage Access</button></div>
-  </div>`).join('');
-  return `<div style="margin-bottom:14px">
-    <input class="iinput" style="max-width:280px" placeholder="Search customers…" value="${esc(A.fsmCustSearch||'')}" oninput="A.fsmCustSearch=this.value;draw()">
-  </div>
-  ${!filtered.length?`<div style="padding:28px;text-align:center;color:var(--gray-500)">${list.length?'No customers match your search.':'No customers yet.'}</div>`
-    :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Customer</div><div>Email</div><div>Portal Status</div><div></div></div>${rows}`}`;
-}
-
-async function loadFSMCustomersOnboard(){
-  const [cr,sr]=await Promise.all([
-    api('GET','/api/customers?limit=500'),
-    api('GET','/api/fsm_portal?action=list_portal_status'),
-  ]);
-  A.fsmCustomersCache=cr.customers||[];
+async function loadFSMPortalStatus(){
+  const sr=await api('GET','/api/fsm_portal?action=list_portal_status');
   A.fsmPortalStatus=sr.status||{};
   draw();
 }
 
 function showFsmCustomerPortalModal(customerId){
-  const c=(A.fsmCustomersCache||[]).find(x=>x.id===customerId);
+  const c=(A.fsmCustomersCache||[]).find(x=>x.id===customerId)||(CUSTS.list||[]).find(x=>x.id===customerId);
   if(!c)return;
   A.fsmPortalAccess=undefined;
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmCustPortalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmCustomerPortalModal()">
@@ -7782,11 +7763,15 @@ async function toggleFSMPortalUser(portalUserId,makeActive,customerId){
   const r=await api('POST','/api/fsm_portal',{action:'set_active',portal_user_id:portalUserId,is_active:makeActive});
   if(r.error){alert(r.error);return;}
   A.fsmPortalAccess=undefined;loadFSMPortalAccess(customerId);
-  // Keep the Customers-tab status badges in sync too, if that list is loaded.
-  if(A.fsmPortalStatus){
-    const r2=await api('GET','/api/fsm_portal?action=list_portal_status');
-    if(!r2.error)A.fsmPortalStatus=r2.status||{};
-  }
+  await refreshFSMPortalStatus();
+}
+// Portal status badges live on the Customers master page, which renders via
+// direct DOM writes (loadCustomersPage) rather than the generic draw() cycle
+// — refetch and re-render that table if it's the page currently on screen.
+async function refreshFSMPortalStatus(){
+  const r=await api('GET','/api/fsm_portal?action=list_portal_status');
+  if(!r.error)A.fsmPortalStatus=r.status||{};
+  if(A.page==='customers')loadCustomersPage();
 }
 
 async function sendFSMPortalInvite(customerId){
@@ -7798,6 +7783,7 @@ async function sendFSMPortalInvite(customerId){
   if(r.error){if(msgEl)msgEl.textContent=r.error;return;}
   if(msgEl)msgEl.textContent=r.message||'Invite sent.';
   A.fsmPortalAccess=undefined;loadFSMPortalAccess(customerId);
+  await refreshFSMPortalStatus();
 }
 
 const CM_TICKET_TYPES=new Set(['incident','corrective_maintenance']);
