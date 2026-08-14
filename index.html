@@ -689,10 +689,30 @@ function initNewDeliveryChallan(){
   if(hasFeature('fsm_module')&&A.fsmSites==null)loadFSMSites();
   draw();
 }
+// Maps a quote option's line items (mkItem() shape: brand/model/desc/qty/
+// uom) onto delivery-challan item rows. No serials/condition on a quote --
+// those are only known once the actual units are picked and delivered.
+function dcItemsFromQuoteOption(opt){
+  const items=[];
+  (opt.sections||[]).forEach(sec=>{
+    (sec.items||[]).forEach(it=>{
+      if(!(it.brand||it.model||it.desc))return;
+      items.push({
+        item_name:it.desc||[it.brand,it.model].filter(Boolean).join(' ')||'Item',
+        brand:it.brand||'',model_no:it.model||'',
+        quantity:it.qty||1,unit:it.uom||'pcs',
+        condition:'new',serial_numbers:[],remarks:'',
+      });
+    });
+  });
+  return items;
+}
 // Entry point from the Quote editor's ⋯ More menu — only enabled once the
 // quote is awarded (also enforced server-side by project-for-quote). Pre-
-// fills the quote and, if the quote has already turned into a project
-// (projects.quotation_id), that project and its vendor POs too.
+// fills the quote, its line items, and — if the quote has already turned
+// into a project (projects.quotation_id) — that project and its vendor
+// POs too. If the quote has more than one option, asks which one was
+// awarded (the app doesn't track that anywhere else).
 async function dcStartFromQuote(){
   const q=A.activeQuote;
   if(!q||q.status!=='awarded')return;
@@ -705,6 +725,17 @@ async function dcStartFromQuote(){
     A.dcDetail.project_id=ctx.project.id;
     loadDcProjectPOs(ctx.project.id);
   }
+  const options=q.quote_data||[];
+  let opt=options[0]||null;
+  if(options.length>1){
+    const labels=options.map((o,i)=>`${i+1}. ${o.label||'Option '+(i+1)}`).join('\n');
+    const pick=prompt(`This quote has ${options.length} options. Which one was awarded? Enter its number:\n${labels}`,'1');
+    if(pick===null)return;
+    const idx=parseInt(pick,10)-1;
+    opt=options[idx>=0&&idx<options.length?idx:0];
+  }
+  const items=opt?dcItemsFromQuoteOption(opt):[];
+  if(items.length)A.dcDetail.items=items;
   A.dcDetailId=null;A.page='deliveryChallanDetail';draw();
 }
 async function loadDeliveryChallanDetail(id){
