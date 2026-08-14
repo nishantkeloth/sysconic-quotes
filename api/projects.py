@@ -94,11 +94,18 @@ def list_projects():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
     if not has_feature(claims, 'projects'): return jsonify({'error': 'Feature not enabled'}), 403
-    q = sb.table('projects').select('*').eq('company_id', claims['company_id']).order('created_at', desc=True)
+    q = sb.table('projects').select('*').eq('company_id', claims['company_id'])
     status = (request.args.get('status') or '').strip()
     if status in STATUSES: q = q.eq('status', status)
     search = (request.args.get('search') or '').strip()
     if search: q = q.ilike('name', f'%{search}%')
+
+    sort = (request.args.get('sort') or 'created_at').strip()
+    if sort not in ('created_at', 'zoho_project_no', 'name'):
+        sort = 'created_at'
+    desc = (request.args.get('dir') or 'desc') == 'desc'
+    q = q.order(sort, desc=desc)
+
     rows = q.execute()
     return jsonify({'projects': rows.data or []})
 

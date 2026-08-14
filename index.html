@@ -539,12 +539,29 @@ function defaultLandingPage(){
 // zoho_project_no. Display should always prefer it, falling back to the
 // internal id only if the custom field hasn't been set in Zoho yet.
 function zohoNo(o){return (o&&(o.zoho_project_no||o.zoho_project_id))||'';}
+// Sortable column header for the plain Projects list. Clicking toggles
+// asc/desc on that field; clicking a different column switches to it (asc
+// first). Mirrors the same pattern used for Project Performance (ppSort).
+function projectsSort(field){
+  if(A.projectsSort===field){A.projectsDir=A.projectsDir==='asc'?'desc':'asc';}
+  else{A.projectsSort=field;A.projectsDir='asc';}
+  A.projects=null;draw();loadProjectsPage();
+}
+function projectsSortArrow(field){
+  if(A.projectsSort!==field)return '';
+  return A.projectsDir==='asc'?' ▲':' ▼';
+}
+function projectsSortTh(field,label){
+  return `<th style="padding:8px;cursor:pointer;user-select:none" onclick="projectsSort('${field}')" title="Sort by ${esc(label)}">${esc(label)}${projectsSortArrow(field)}</th>`;
+}
 function projectsHTML(){
   const list=A.projects||null;
   const rows=(list||[]).map(p=>`<tr style="border-bottom:1px solid var(--gray-100)">
     <td style="padding:8px;font-weight:600">${esc(p.name)}</td>
     <td style="padding:8px">${esc(p.customer||'')}</td>
     <td style="padding:8px">${esc(p.site_location||'')}</td>
+    <td style="padding:8px">${zohoNo(p)?esc(zohoNo(p)):'—'}</td>
+    <td style="padding:8px">${p.created_at?new Date(p.created_at).toLocaleDateString():''}</td>
     <td style="padding:8px"><select class="iinput" onchange="updateProjectStatus('${p.id}',this.value)">
       ${['active','on_hold','completed','cancelled'].map(s=>`<option value="${s}" ${p.status===s?'selected':''}>${s.replace('_',' ')}</option>`).join('')}
     </select></td>
@@ -568,13 +585,15 @@ function projectsHTML(){
       :!list.length?`<div style="padding:22px;color:var(--gray-500)">No projects yet — add your first one above.</div>`
       :`<table style="width:100%;border-collapse:collapse;font-size:14px">
         <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200)">
-          <th style="padding:8px">Name</th><th style="padding:8px">Customer</th><th style="padding:8px">Site</th><th style="padding:8px">Status</th><th style="padding:8px">PO</th><th style="padding:8px">Zoho</th><th style="padding:8px"></th>
+          <th style="padding:8px">Name</th><th style="padding:8px">Customer</th><th style="padding:8px">Site</th>${projectsSortTh('zoho_project_no','Project No')}${projectsSortTh('created_at','Created')}<th style="padding:8px">Status</th><th style="padding:8px">PO</th><th style="padding:8px">Zoho</th><th style="padding:8px"></th>
         </tr></thead><tbody>${rows}</tbody></table>`}
     </div>
   </div>`;
 }
 async function loadProjectsPage(){
-  const r=await api('GET','/api/projects');
+  const qs=new URLSearchParams();
+  if(A.projectsSort){qs.set('sort',A.projectsSort);qs.set('dir',A.projectsDir||'asc');}
+  const r=await api('GET','/api/projects'+(qs.toString()?'?'+qs.toString():''));
   if(r.error){A.projects=[];alert(r.error);}else{A.projects=r.projects||[];}
   draw();
 }
@@ -678,9 +697,12 @@ const PP_COLUMNS=[
   {key:'customer',label:'Customer',
     tip:'Customer this project is for, from the awarded quote or Zoho Books.',
     cell:p=>`<td style="padding:8px">${esc(p.customer||'')}</td>`},
-  {key:'projectNo',label:'Project No',
+  {key:'projectNo',label:'Project No',sortKey:'zoho_project_no',
     tip:'Zoho Books project number (the cf_project_no custom field). Falls back to Zoho\'s internal project ID if that field isn\'t set.',
     cell:p=>`<td style="padding:8px">${zohoNo(p)?esc(zohoNo(p)):'—'}</td>`},
+  {key:'created',label:'Created',sortKey:'created_at',
+    tip:'Date this project was created.',
+    cell:p=>`<td style="padding:8px">${p.created_at?new Date(p.created_at).toLocaleDateString():''}</td>`},
   {key:'value',label:'Value',
     tip:'Revenue Forecast: the project\'s current expected revenue. Comes from the awarded quote\'s subtotal (ex-VAT) frozen when the project was created, or from Zoho\'s Total Project Cost for projects with no quote behind them.',
     cell:p=>`<td style="padding:8px">AED ${fmt(p.revenue_forecast||0)}</td>`},
@@ -724,6 +746,15 @@ function ppToggleCol(key){
   draw();
 }
 function ppToggleColMenu(){A.ppColMenuOpen=!A.ppColMenuOpen;draw();}
+// Sort by any PP_COLUMNS entry that declares a sortKey (backend field name
+// whitelisted in api/project_performance.py's PP_LIST_FIELDS). Clicking the
+// same column again flips direction; clicking a different one starts asc.
+function ppSort(sortKey){
+  A.ppFilters=A.ppFilters||{};
+  if(A.ppFilters.sort===sortKey){A.ppFilters.dir=A.ppFilters.dir==='asc'?'desc':'asc';}
+  else{A.ppFilters.sort=sortKey;A.ppFilters.dir='asc';}
+  A.portfolio=null;draw();loadPortfolioPage();
+}
 
 function portfolioHTML(){
   const d=A.portfolio;
@@ -785,7 +816,7 @@ function portfolioHTML(){
     <div style="background:#fff;border-radius:10px;overflow:auto;box-shadow:0 1px 3px rgba(0,0,0,.06);max-height:calc(100vh - 320px)">
       ${d===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
       :!rows.length?`<div style="padding:22px;color:var(--gray-500)">No projects yet — a project appears here automatically once a quote is marked Awarded.</div>`
-      :(()=>{const th=(c)=>`<th style="padding:8px;position:sticky;top:0;background:var(--navy);color:#fff;z-index:1;text-align:left;border-bottom:1px solid var(--gray-200)" title="${esc(c.tip)}">${esc(c.label)}</th>`;return `<table style="width:100%;border-collapse:collapse;font-size:13.5px">
+      :(()=>{const th=(c)=>{const sortable=!!c.sortKey;const active=sortable&&(A.ppFilters||{}).sort===c.sortKey;const arrow=active?((A.ppFilters.dir==='asc')?' ▲':' ▼'):'';return `<th style="padding:8px;position:sticky;top:0;background:var(--navy);color:#fff;z-index:1;text-align:left;border-bottom:1px solid var(--gray-200)${sortable?';cursor:pointer;user-select:none':''}" title="${esc(c.tip)}" ${sortable?`onclick="ppSort('${c.sortKey}')"`:''}>${esc(c.label)}${arrow}</th>`;};return `<table style="width:100%;border-collapse:collapse;font-size:13.5px">
         <thead><tr>
           ${visibleCols.map(th).join('')}
         </tr></thead><tbody>${rowsHtml}</tbody></table>`;})()}
@@ -3058,9 +3089,12 @@ function appHTML(){
     <nav class="sb-nav">
       ${A.user?.is_platform_admin?'':`
       <div class="sb-sec">Workspace</div>
-      ${hasPageAccess('quotes')?`<div class="sb-item ${A.page==='dashboard'?'active':''}" onclick="${nav('dashboard')}"><span class="sb-icon">🏠</span>Quotes</div>`:''}
-      ${sbGroupHTML('sales','Sales',[
-        hasPageAccess('deals')?`<div class="sb-item ${A.page==='deals'?'active':''}" onclick="${nav('deals')}"><span class="sb-icon">🤝</span>Deals</div>`:'',
+      ${hasPageAccess('deals')?`<div class="sb-item ${A.page==='deals'?'active':''}" onclick="${nav('deals')}"><span class="sb-icon">🤝</span>Deals</div>`:''}
+      ${sbGroupHTML('proposals','Proposals',[
+        hasPageAccess('quotes')?`<div class="sb-item ${A.page==='dashboard'?'active':''}" onclick="${nav('dashboard')}"><span class="sb-icon">🏠</span>Quotes</div>`:'',
+        hasPageAccess('reviewQueue')?`<div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>`:''
+      ])}
+      ${sbGroupHTML('masterdata','Master Data',[
         hasPageAccess('products')?`<div class="sb-item ${A.page==='products'?'active':''}" onclick="${nav('products')}"><span class="sb-icon">📦</span>Products</div>`:'',
         hasPageAccess('customers')?`<div class="sb-item ${A.page==='customers'?'active':''}" onclick="${nav('customers')}"><span class="sb-icon">👤</span>Customers</div>`:'',
         hasPageAccess('vendors')?`<div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="${nav('vendorMaster')}"><span class="sb-icon">🏭</span>Vendors</div>`:''
@@ -3074,7 +3108,6 @@ function appHTML(){
         hasFeature('fsm_module')&&hasPageAccess('myJobs')?`<div class="sb-item ${(A.page==='myJobs'||A.page==='myJobDetail')?'active':''}" onclick="${nav('myJobs')}"><span class="sb-icon">🧰</span>My Jobs</div>`:''
       ])}
       ${sbGroupHTML('reports','Reports',[
-        hasPageAccess('reviewQueue')?`<div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>`:'',
         hasFeature('testimonials')&&hasPageAccess('testimonials')?`<div class="sb-item ${A.page==='testimonials'?'active':''}" onclick="${nav('testimonials')}"><span class="sb-icon">⭐</span>Testimonials</div>`:'',
         hasPageAccess('insights')?`<div class="sb-item ${A.page==='insights'?'active':''}" onclick="${nav('insights')}"><span class="sb-icon">📈</span>Insights</div>`:''
       ])}
