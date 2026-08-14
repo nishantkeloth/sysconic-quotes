@@ -7530,11 +7530,13 @@ async function loadFSMEngineers(){
 async function showFsmEngineerModal(engineerId){
   const e=engineerId?(A.fsmEngineers||[]).find(x=>x.id===engineerId):null;
   const isNew=!e;
-  if(A.fsmTeamCache==null){
-    const tr=await api('GET','/api/auth/team');
-    A.fsmTeamCache=tr.error?[]:(tr.members||[]);
-  }
-  const users=A.fsmTeamCache||[];
+  // Always fetch fresh rather than caching for the session -- this list feeds
+  // a foreign-key-checked field (fsm_engineers.user_id), so a stale entry for
+  // a team member who's since been removed would only surface as an opaque
+  // "not present in table users" error on save instead of just not being an
+  // option to pick in the first place.
+  const tr=await api('GET','/api/auth/team');
+  const users=tr.error?[]:(tr.members||[]);
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmEngModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmEngineerModal()">
     <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
       <div class="modal-title">${isNew?'New Engineer':esc(e.name)}</div>

@@ -19,6 +19,17 @@ app = Flask(__name__)
 VALID_AVAILABILITY = {"available", "busy", "on_leave", "off_duty"}
 
 
+def _friendly_engineer_error(e):
+    """fsm_engineers_user_id_fkey fires when the selected 'Linked User Login'
+    no longer exists (e.g. that team member was removed after the dropdown
+    was loaded). Translate the raw Postgres constraint message into
+    something a coordinator can actually act on."""
+    msg = str(e)
+    if "fsm_engineers_user_id_fkey" in msg:
+        return "That user account no longer exists. Refresh the page and pick another team member to link, or leave it unlinked."
+    return msg
+
+
 def has_page_access(claims, page_key):
     if claims.get('role') == 'admin':
         return True
@@ -102,7 +113,7 @@ def create_engineer():
         result = sb.table("fsm_engineers").insert(record).execute()
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": _friendly_engineer_error(e)}), 500
     return jsonify(result.data[0]), 201
 
 
@@ -152,7 +163,7 @@ def update_engineer():
         result = sb.table("fsm_engineers").update(update).eq("id", engineer_id).eq("company_id", company_id).execute()
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": _friendly_engineer_error(e)}), 500
     if not result.data:
         return jsonify({"error": "not found"}), 404
     return jsonify(result.data[0])
