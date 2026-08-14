@@ -680,10 +680,9 @@ function deliveryChallansHTML(){
 
 function initNewDeliveryChallan(){
   A.dcDetail={id:null,status:'draft',challan_type:'installation',challan_date:new Date().toISOString().slice(0,10),
-    quote_id:'',project_id:'',site_id:'',purchase_order_id:'',customer_name:'',delivery_address:'',warehouse:'',expected_return_date:'',
+    quote_id:'',project_id:'',site_id:'',customer_po_number:'',customer_name:'',delivery_address:'',warehouse:'',expected_return_date:'',
     vehicle_number:'',driver_name:'',packages_count:'',total_weight_kg:'',customer_notes:'',terms_conditions:'',
     items:[{item_name:'',brand:'',model_no:'',quantity:1,unit:'pcs',condition:'new',serial_numbers:[],remarks:''}]};
-  A.dcPOs=[];
   if(A.quotes==null)loadQuotes();
   if(A.projects==null)loadProjectsPage();
   if(hasFeature('fsm_module')&&A.fsmSites==null)loadFSMSites();
@@ -710,8 +709,10 @@ function dcItemsFromQuoteOption(opt){
 // Entry point from the Quote editor's ⋯ More menu — only enabled once the
 // quote is awarded (also enforced server-side by project-for-quote). Pre-
 // fills the quote, its line items, and — if the quote has already turned
-// into a project (projects.quotation_id) — that project and its vendor
-// POs too. If the quote has more than one option, asks which one was
+// into a project (projects.quotation_id) — that project, plus the
+// project's PO number as a starting point for Customer Purchase Order (a
+// coordinator can still change it — this is the customer's PO to us, not
+// a vendor PO). If the quote has more than one option, asks which one was
 // awarded (the app doesn't track that anywhere else).
 async function dcStartFromQuote(){
   const q=A.activeQuote;
@@ -723,7 +724,7 @@ async function dcStartFromQuote(){
   A.dcDetail.customer_name=ctx.customer_name||q.customer||'';
   if(ctx.project){
     A.dcDetail.project_id=ctx.project.id;
-    loadDcProjectPOs(ctx.project.id);
+    if(ctx.project.po_number)A.dcDetail.customer_po_number=ctx.project.po_number;
   }
   const options=q.quote_data||[];
   let opt=options[0]||null;
@@ -745,7 +746,6 @@ async function loadDeliveryChallanDetail(id){
   if(A.quotes==null)loadQuotes();
   if(A.projects==null)loadProjectsPage();
   if(hasFeature('fsm_module')&&A.fsmSites==null)loadFSMSites();
-  if(r.project_id)loadDcProjectPOs(r.project_id);else A.dcPOs=[];
   draw();
 }
 function dcAddItemRow(){A.dcDetail.items.push({item_name:'',brand:'',model_no:'',quantity:1,unit:'pcs',condition:'new',serial_numbers:[],remarks:''});draw();}
@@ -760,16 +760,10 @@ function dcOnSiteChange(siteId){
   }
   draw();
 }
-async function loadDcProjectPOs(projectId){
-  A.dcPOs=null;draw();
-  const r=await api('GET','/api/delivery_challans/purchase-orders?project_id='+projectId);
-  A.dcPOs=r.error?[]:(r.purchase_orders||[]);
-  draw();
-}
 function dcOnProjectChange(projectId){
   A.dcDetail.project_id=projectId;
-  A.dcDetail.purchase_order_id='';
-  if(projectId)loadDcProjectPOs(projectId);else A.dcPOs=[];
+  const project=(A.projects||[]).find(p=>p.id===projectId);
+  if(project&&project.po_number&&!A.dcDetail.customer_po_number)A.dcDetail.customer_po_number=project.po_number;
   draw();
 }
 
@@ -779,7 +773,7 @@ async function saveDeliveryChallan(){
   if(!items.length){alert('Add at least one item');return;}
   const body={
     challan_type:d.challan_type,challan_date:d.challan_date,
-    quote_id:d.quote_id||null,project_id:d.project_id||null,site_id:d.site_id||null,purchase_order_id:d.purchase_order_id||null,
+    quote_id:d.quote_id||null,project_id:d.project_id||null,site_id:d.site_id||null,customer_po_number:d.customer_po_number,
     customer_name:d.customer_name,delivery_address:d.delivery_address,warehouse:d.warehouse,
     expected_return_date:d.challan_type==='loan_demo'?(d.expected_return_date||null):null,
     vehicle_number:d.vehicle_number,driver_name:d.driver_name,packages_count:d.packages_count,
@@ -788,9 +782,7 @@ async function saveDeliveryChallan(){
   };
   const r=d.id?await api('PUT','/api/delivery_challans/'+d.id,body):await api('POST','/api/delivery_challans',body);
   if(r.error){alert(r.error);return;}
-  A.dcDetail=r;A.dcDetailId=r.id;A.dcList=null;
-  if(r.project_id)loadDcProjectPOs(r.project_id);
-  draw();
+  A.dcDetail=r;A.dcDetailId=r.id;A.dcList=null;draw();
 }
 async function dcSetStatus(status){
   if(status==='cancelled'&&!confirm('Cancel this delivery challan?'))return;
@@ -858,14 +850,9 @@ function deliveryChallanDetailHTML(){
 
   const field=(label,inputHtml)=>`<div><div style="font-size:12px;color:var(--gray-500);margin-bottom:4px">${label}</div>${inputHtml}</div>`;
   const readonly=(label,val)=>field(label,`<div style="padding:7px 0;font-size:14px">${val?esc(String(val)):'<span style="color:var(--gray-400)">—</span>'}</div>`);
-  const poLabelRaw=po=>`${po.po_number||po.id}${po.vendor_name?' — '+po.vendor_name:''}`;
-  const poOpts=(A.dcPOs||[]).map(po=>`<option value="${po.id}" ${d.purchase_order_id===po.id?'selected':''}>${esc(poLabelRaw(po))}</option>`).join('');
-  const poField=editable?field('Purchase order',
-      !d.project_id?`<select class="iinput" disabled><option>Select a project first</option></select>`
-      :A.dcPOs==null?`<select class="iinput" disabled><option>Loading…</option></select>`
-      :!A.dcPOs.length?`<select class="iinput" disabled><option>No POs synced for this project</option></select>`
-      :`<select class="iinput" onchange="A.dcDetail.purchase_order_id=this.value">${'<option value="">— none —</option>'+poOpts}</select>`)
-    :(d.purchase_order_id?readonly('Purchase order',(()=>{const po=(A.dcPOs||[]).find(p=>p.id===d.purchase_order_id);return po?poLabelRaw(po):null;})()):'');
+  const poField=editable
+    ?field('Customer purchase order',`<input class="iinput" placeholder="PO number from the customer" value="${esc(d.customer_po_number||'')}" oninput="A.dcDetail.customer_po_number=this.value">`)
+    :readonly('Customer purchase order',d.customer_po_number);
 
   const headerGrid=editable?`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
       ${field('Challan type',`<select class="iinput" onchange="A.dcDetail.challan_type=this.value;draw()">${Object.entries(DC_TYPE_LABELS).map(([k,l])=>`<option value="${k}" ${d.challan_type===k?'selected':''}>${l}</option>`).join('')}</select>`)}

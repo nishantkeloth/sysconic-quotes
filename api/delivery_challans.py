@@ -98,7 +98,8 @@ def _clean_header(d, partial=False):
     out = {}
     text_fields = ('customer_name', 'delivery_address', 'warehouse', 'vehicle_number',
                    'driver_name', 'packages_count', 'received_by_name',
-                   'received_by_designation', 'customer_notes', 'terms_conditions')
+                   'received_by_designation', 'customer_notes', 'terms_conditions',
+                   'customer_po_number')
     for k in text_fields:
         if k in d:
             out[k] = (str(d.get(k) or '').strip() or None)
@@ -113,7 +114,7 @@ def _clean_header(d, partial=False):
         out['challan_date'] = (str(d.get('challan_date') or '').strip()[:10] or None)
     if 'expected_return_date' in d:
         out['expected_return_date'] = (str(d.get('expected_return_date') or '').strip()[:10] or None)
-    for k in ('quote_id', 'project_id', 'site_id', 'purchase_order_id'):
+    for k in ('quote_id', 'project_id', 'site_id'):
         if k in d:
             out[k] = d.get(k) or None
     if 'total_weight_kg' in d:
@@ -224,24 +225,14 @@ def project_for_quote():
     if quote.data[0]['status'] != 'awarded':
         return jsonify({'error': 'This quote is not awarded yet — delivery challans can only be created from an awarded quote.'}), 409
 
-    project = sb.table('projects').select('id,name').eq('quotation_id', quote_id).eq('company_id', company_id).execute()
+    # po_number here is projects.po_number -- a plain text field a coordinator
+    # can set on the project (distinct from the customer_po_number typed
+    # directly on the challan; used only to pre-fill it as a starting point).
+    project = sb.table('projects').select('id,name,po_number').eq('quotation_id', quote_id).eq('company_id', company_id).execute()
     return jsonify({
         'customer_name': quote.data[0].get('customer'),
         'project': project.data[0] if project.data else None,
     })
-
-
-@app.route('/api/delivery_challans/purchase-orders', methods=['GET'])
-def purchase_orders_for_project():
-    company_id = g.claims['company_id']
-    project_id = request.args.get('project_id')
-    if not project_id:
-        return jsonify({'purchase_orders': []})
-    sb = get_sb()
-    rows = sb.table('zoho_purchase_orders').select('id,po_number,vendor_name,po_date,status,total')\
-        .eq('company_id', company_id).eq('project_id', project_id)\
-        .order('po_date', desc=True).execute()
-    return jsonify({'purchase_orders': rows.data or []})
 
 
 # ------------------------------------------------------------------
