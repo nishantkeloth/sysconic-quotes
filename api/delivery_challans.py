@@ -61,15 +61,31 @@ def rbac_gate():
     return None
 
 
+# Prefix/padding are per-company settings (defaults 'DC'/4 apply with no
+# settings row needed, matching the DC-2026-0001 format already in use);
+# the running number itself lives in delivery_challan_counters and is only
+# ever touched atomically via dc_next_challan_number() -- never read-then-
+# write from Python, so concurrent challan creation can't hand out the same
+# number twice. Same pattern as _numbering_settings()/_next_quote_ref() in
+# api/quotes.py.
+def _numbering_settings(company_id):
+    sb = get_sb()
+    row = sb.table('dc_numbering_settings').select('prefix,padding').eq('company_id', company_id).execute()
+    if row.data:
+        return row.data[0].get('prefix') or 'DC', row.data[0].get('padding') or 4
+    return 'DC', 4
+
+
 def _next_challan_number(sb, company_id):
     year = datetime.utcnow().year
+    prefix, padding = _numbering_settings(company_id)
     result = sb.rpc('dc_next_challan_number', {
         'p_company_id': company_id, 'p_year': year
     }).execute()
     seq = result.data
     if isinstance(seq, list):
         seq = seq[0].get('dc_next_challan_number') if seq else 1
-    return f'DC-{year}-{seq:04d}'
+    return f'{prefix}-{year}-{str(seq).zfill(padding)}'
 
 
 def _clean_item(d):
@@ -121,6 +137,64 @@ def _clean_header(d, partial=False):
         v = d.get('total_weight_kg')
         out['total_weight_kg'] = float(v) if v not in (None, '') else None
     return out, None
+
+
+# ------------------------------------------------------------------
+# Numbering settings (admin only) — mirrors GET/PATCH /api/quotes/numbering
+# ------------------------------------------------------------------
+@app.route('/api/delivery_challans/numbering', methods=['GET'])
+def get_dc_numbering():
+    claims = g.claims
+    if claims.get('role') != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+    company_id = claims['company_id']
+    prefix, padding = _numbering_settings(company_id)
+    sb = get_sb()
+    rows = sb.table('delivery_challan_counters').select('year,seq').eq('company_id', company_id).order('year').execute()
+    # UI works in "next number to hand out" terms (like quotes); the counter
+    # table stores "last number handed out", so translate seq -> seq + 1.
+    sequences = [{'year': r['year'], 'next_number': (r['seq'] or 0) + 1} for r in (rows.data or [])]
+    return jsonify({
+        'prefix': prefix, 'padding': padding,
+        'current_year': datetime.utcnow().year, 'sequences': sequences,
+    })
+
+
+@app.route('/api/delivery_challans/numbering', methods=['PATCH'])
+def update_dc_numbering():
+    claims = g.claims
+    if claims.get('role') != 'admin':
+        return jsonify({'error': 'Admin only'}), 403
+    company_id = claims['company_id']
+    sb = get_sb()
+    d = request.get_json(force=True) or {}
+
+    if 'prefix' in d or 'padding' in d:
+        prefix = (d.get('prefix') or 'DC').strip()[:20] or 'DC'
+        try:
+            padding = max(1, min(6, int(d.get('padding') or 4)))
+        except (TypeError, ValueError):
+            padding = 4
+        sb.table('dc_numbering_settings').upsert({
+            'company_id': company_id, 'prefix': prefix, 'padding': padding,
+            'updated_by': claims['user_id'], 'updated_at': datetime.utcnow().isoformat(),
+        }, on_conflict='company_id').execute()
+
+    if 'year' in d and 'next_number' in d:
+        try:
+            year = int(d['year'])
+            next_number = int(d['next_number'])
+        except (TypeError, ValueError):
+            return jsonify({'error': 'Invalid year or next_number'}), 400
+        if next_number < 1:
+            return jsonify({'error': 'next_number must be at least 1'}), 400
+        # dc_next_challan_number() does seq+1 then returns it, so storing
+        # next_number-1 here makes the *next* call hand out next_number.
+        sb.table('delivery_challan_counters').upsert({
+            'company_id': company_id, 'year': year, 'seq': next_number - 1,
+        }, on_conflict='company_id,year').execute()
+
+    return get_dc_numbering()
 
 
 # ------------------------------------------------------------------
