@@ -6545,6 +6545,16 @@ function fsmSlaCardHTML(t){
 function fsmTicketsListHTML(){
   const list=A.fsmTickets||null;
   const cols='120px 1fr 140px 90px 120px 140px 100px';
+  const engineers=A.fsmEngineers||[];
+  const engName=id=>{const e=engineers.find(x=>x.id===id);return e?e.name:'';};
+  const filterBar=`<div style="margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+    <label style="font-size:13px;color:var(--gray-500)">Engineer:</label>
+    <select class="iinput" style="width:auto" onchange="A.fsmTicketEngineerFilter=this.value;A.fsmTickets=null;draw()">
+      <option value="">All engineers</option>
+      ${engineers.map(e=>`<option value="${e.id}" ${A.fsmTicketEngineerFilter===e.id?'selected':''}>${esc(e.name)}</option>`).join('')}
+    </select>
+    ${A.fsmTicketEngineerFilter?`<span style="font-size:12px;color:var(--gray-500)">Showing ${(list||[]).length} job${(list||[]).length===1?'':'s'} for ${esc(engName(A.fsmTicketEngineerFilter))}</span>`:''}
+  </div>`;
   const rows=(list||[]).map(t=>`<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="A.page='fsmDetail';A.fsmDetailId='${t.id}';A.fsmDetail=null;A.fsmActivity=null;draw();loadFSMDetail('${t.id}')">
     <div data-label="Ticket #"><strong>${esc(t.ticket_number)}</strong></div>
     <div data-label="Subject">${esc(t.subject)}</div>
@@ -6554,9 +6564,9 @@ function fsmTicketsListHTML(){
     <div data-label="SLA">${fsmTicketSlaCell(t)}</div>
     <div data-label="Created" style="color:var(--gray-500);font-size:13px">${new Date(t.created_at).toLocaleDateString()}</div>
   </div>`).join('');
-  return list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
-    :!list.length?`<div style="padding:28px;text-align:center;color:var(--gray-500)">No tickets yet — create the first one.</div>`
-    :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Ticket #</div><div>Subject</div><div>Type</div><div>Priority</div><div>Status</div><div>SLA</div><div>Created</div></div>${rows}`;
+  return filterBar+(list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
+    :!list.length?`<div style="padding:28px;text-align:center;color:var(--gray-500)">${A.fsmTicketEngineerFilter?'No jobs assigned to this engineer.':'No tickets yet — create the first one.'}</div>`
+    :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Ticket #</div><div>Subject</div><div>Type</div><div>Priority</div><div>Status</div><div>SLA</div><div>Created</div></div>${rows}`);
 }
 
 const FSM_ASSET_CATEGORIES=['LED Wall','Video Wall','Projector','Display / Monitor','DSP (Audio Processor)','Audio Amplifier','Speaker System','Control Processor','Matrix Switcher / Extender','Video Conferencing Codec','Camera','Microphone System','AV Rack','Network Switch (AV over IP)'];
@@ -7480,7 +7490,9 @@ async function fsmSchedDropUnscheduled(ev){
 }
 
 async function loadFSMPage(){
-  const r=await api('GET','/api/fsm_tickets?resource=ticket&action=list');
+  if(A.fsmEngineers==null)loadFSMEngineers(); // fire-and-forget — filter dropdown just redraws empty until this resolves
+  const qs=A.fsmTicketEngineerFilter?'&engineer_id='+A.fsmTicketEngineerFilter:'';
+  const r=await api('GET','/api/fsm_tickets?resource=ticket&action=list'+qs);
   if(r.error){A.fsmTickets=[];alert(r.error);}else{A.fsmTickets=Array.isArray(r)?r:[];}
   draw();
 }
