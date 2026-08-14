@@ -21,7 +21,7 @@
 create table if not exists fsm_engineers (
   id uuid default gen_random_uuid() primary key,
   company_id uuid references companies(id) on delete cascade not null,
-  user_id uuid references users(id),
+  user_id uuid references public.users(id),
   name text not null,
   email text,
   phone text,
@@ -46,6 +46,25 @@ begin
   ) then
     alter table fsm_engineers add constraint fsm_engineers_availability_check
       check (availability in ('available','busy','on_leave','off_duty'));
+  end if;
+end $$;
+
+-- Self-heal: an earlier run of this migration created user_id with a bare
+-- `references users(id)`, which Postgres resolved against Supabase's built-in
+-- auth.users instead of this app's own public.users table (this app has its
+-- own custom JWT auth and never writes to auth.users, so every real account
+-- failed the FK check). Repoint the constraint at public.users if it's still
+-- wrong; no-op if it's already correct.
+do $$
+begin
+  if exists (
+    select 1 from pg_constraint
+    where conname = 'fsm_engineers_user_id_fkey'
+      and pg_get_constraintdef(oid) ilike '%auth.users%'
+  ) then
+    alter table fsm_engineers drop constraint fsm_engineers_user_id_fkey;
+    alter table fsm_engineers add constraint fsm_engineers_user_id_fkey
+      foreign key (user_id) references public.users(id);
   end if;
 end $$;
 
