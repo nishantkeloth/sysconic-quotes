@@ -38,6 +38,11 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .sb-item:hover{color:#fff;background:rgba(255,255,255,.08)}
 .sb-item.active{color:#fff;background:rgba(255,255,255,.14);border-left-color:#60a5fa;font-weight:600}
 .sb-icon{font-size:16px;width:20px;text-align:center}
+.sb-group-hd{display:flex;align-items:center;gap:7px;padding:12px 20px 6px;cursor:pointer;color:rgba(255,255,255,.4);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;transition:color .15s;user-select:none}
+.sb-group-hd:hover{color:rgba(255,255,255,.75)}
+.sb-group-arrow{font-size:9px;transition:transform .15s;display:inline-block;flex-shrink:0}
+.sb-group-arrow.open{transform:rotate(90deg)}
+.sb-group-items.collapsed{display:none}
 .sb-foot{padding:14px 18px;border-top:1px solid rgba(255,255,255,.1)}
 .sb-user{display:flex;align-items:center;gap:10px;margin-bottom:8px}
 .sb-avatar{width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.2);display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;flex-shrink:0}
@@ -493,8 +498,17 @@ const A={screen:'login',token:null,user:null,company:null,
   page:'dashboard',quotes:[],activeQuote:null,view:'internal',cur:'AED',rate:1,
   activeOpt:0,saveStatus:'',searchQ:'',filterStatus:'all',sbOpen:false,
   sbCollapsed:localStorage.getItem('sq_sidebar_collapsed')==='1',
+  sbGroupOpen:JSON.parse(localStorage.getItem('sq_sidebar_groups')||'{}'),
   portfolio:null,ppFilters:{},ppDetail:null,ppDetailId:null,ppDetailTab:'overview'};
 function toggleSidebar(){A.sbOpen=!A.sbOpen;draw();}
+// Sidebar nav groups default to open; a group only stays collapsed once the
+// user explicitly closes it (persisted so the choice survives a reload).
+function sbGroupIsOpen(key){return A.sbGroupOpen[key]!==false;}
+function toggleSbGroup(key){
+  A.sbGroupOpen[key]=!sbGroupIsOpen(key);
+  localStorage.setItem('sq_sidebar_groups',JSON.stringify(A.sbGroupOpen));
+  draw();
+}
 // Single hamburger button handles both layouts: on narrow screens it slides
 // the off-canvas drawer (sbOpen, unchanged); on desktop it fully hides the
 // 240px sidebar instead (sbCollapsed) so the main content can use that
@@ -3017,6 +3031,18 @@ function helpDrawerHTML(){
   </div>`;
 }
 
+// Collapsible sidebar nav group: `items` is an array of already-rendered
+// sb-item HTML strings (or '' for ones the user lacks access to). Renders
+// nothing if every item in the group is hidden, so an empty section never
+// shows up with just a header and no rows underneath.
+function sbGroupHTML(key,label,items){
+  const html=items.filter(Boolean).join('');
+  if(!html)return '';
+  const open=sbGroupIsOpen(key);
+  return `<div class="sb-group-hd" onclick="toggleSbGroup('${key}')"><span class="sb-group-arrow ${open?'open':''}">▸</span>${label}</div>
+    <div class="sb-group-items${open?'':' collapsed'}">${html}</div>`;
+}
+
 // ── App shell ─────────────────────────────────────────────────────────────────
 function appHTML(){
   const init=(A.user?.name||'U').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
@@ -3033,15 +3059,26 @@ function appHTML(){
       ${A.user?.is_platform_admin?'':`
       <div class="sb-sec">Workspace</div>
       ${hasPageAccess('quotes')?`<div class="sb-item ${A.page==='dashboard'?'active':''}" onclick="${nav('dashboard')}"><span class="sb-icon">🏠</span>Quotes</div>`:''}
-      ${hasPageAccess('deals')?`<div class="sb-item ${A.page==='deals'?'active':''}" onclick="${nav('deals')}"><span class="sb-icon">🤝</span>Deals</div>`:''}
-      ${hasPageAccess('products')?`<div class="sb-item ${A.page==='products'?'active':''}" onclick="${nav('products')}"><span class="sb-icon">📦</span>Products</div>`:''}
-      ${hasPageAccess('customers')?`<div class="sb-item ${A.page==='customers'?'active':''}" onclick="${nav('customers')}"><span class="sb-icon">👤</span>Customers</div>`:''}
-      ${hasPageAccess('vendors')?`<div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="${nav('vendorMaster')}"><span class="sb-icon">🏭</span>Vendors</div>`:''}
-      ${hasFeature('projects')&&hasPageAccess('projects')?`<div class="sb-item ${A.page==='projects'?'active':''}" onclick="${nav('projects')}"><span class="sb-icon">📁</span>Projects</div>`:''}
-      ${hasFeature('fsm_module')&&hasPageAccess('fsm')?`<div class="sb-item ${(A.page==='fsm'||A.page==='fsmDetail')?'active':''}" onclick="${nav('fsm')}"><span class="sb-icon">🔧</span>Field Service</div>`:''}
-      ${hasFeature('fsm_module')&&hasPageAccess('myJobs')?`<div class="sb-item ${(A.page==='myJobs'||A.page==='myJobDetail')?'active':''}" onclick="${nav('myJobs')}"><span class="sb-icon">🧰</span>My Jobs</div>`:''}
-      ${hasFeature('project_performance')&&hasPageAccess('projectPerformance')?`<div class="sb-item ${(A.page==='projectPerformance'||A.page==='projectPerformanceDetail')?'active':''}" onclick="${nav('projectPerformance')}"><span class="sb-icon">📊</span>Project Performance</div>`:''}
-      ${hasPageAccess('reviewQueue')?`<div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>`:''}       ${hasFeature('testimonials')&&hasPageAccess('testimonials')?`<div class="sb-item ${A.page==='testimonials'?'active':''}" onclick="${nav('testimonials')}"><span class="sb-icon">⭐</span>Testimonials</div>`:''}       ${hasPageAccess('insights')?`<div class="sb-item ${A.page==='insights'?'active':''}" onclick="${nav('insights')}"><span class="sb-icon">📈</span>Insights</div>`:''}       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}`}       ${(A.user?.role==='admin'&&!A.user?.is_platform_admin)?`<div class="sb-sec">Settings</div>
+      ${sbGroupHTML('sales','Sales',[
+        hasPageAccess('deals')?`<div class="sb-item ${A.page==='deals'?'active':''}" onclick="${nav('deals')}"><span class="sb-icon">🤝</span>Deals</div>`:'',
+        hasPageAccess('products')?`<div class="sb-item ${A.page==='products'?'active':''}" onclick="${nav('products')}"><span class="sb-icon">📦</span>Products</div>`:'',
+        hasPageAccess('customers')?`<div class="sb-item ${A.page==='customers'?'active':''}" onclick="${nav('customers')}"><span class="sb-icon">👤</span>Customers</div>`:'',
+        hasPageAccess('vendors')?`<div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="${nav('vendorMaster')}"><span class="sb-icon">🏭</span>Vendors</div>`:''
+      ])}
+      ${sbGroupHTML('projects','Projects',[
+        hasFeature('projects')&&hasPageAccess('projects')?`<div class="sb-item ${A.page==='projects'?'active':''}" onclick="${nav('projects')}"><span class="sb-icon">📁</span>Projects</div>`:'',
+        hasFeature('project_performance')&&hasPageAccess('projectPerformance')?`<div class="sb-item ${(A.page==='projectPerformance'||A.page==='projectPerformanceDetail')?'active':''}" onclick="${nav('projectPerformance')}"><span class="sb-icon">📊</span>Project Performance</div>`:''
+      ])}
+      ${sbGroupHTML('fsm','Field Service',[
+        hasFeature('fsm_module')&&hasPageAccess('fsm')?`<div class="sb-item ${(A.page==='fsm'||A.page==='fsmDetail')?'active':''}" onclick="${nav('fsm')}"><span class="sb-icon">🔧</span>Field Service</div>`:'',
+        hasFeature('fsm_module')&&hasPageAccess('myJobs')?`<div class="sb-item ${(A.page==='myJobs'||A.page==='myJobDetail')?'active':''}" onclick="${nav('myJobs')}"><span class="sb-icon">🧰</span>My Jobs</div>`:''
+      ])}
+      ${sbGroupHTML('reports','Reports',[
+        hasPageAccess('reviewQueue')?`<div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>`:'',
+        hasFeature('testimonials')&&hasPageAccess('testimonials')?`<div class="sb-item ${A.page==='testimonials'?'active':''}" onclick="${nav('testimonials')}"><span class="sb-icon">⭐</span>Testimonials</div>`:'',
+        hasPageAccess('insights')?`<div class="sb-item ${A.page==='insights'?'active':''}" onclick="${nav('insights')}"><span class="sb-icon">📈</span>Insights</div>`:''
+      ])}
+      ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}`}       ${(A.user?.role==='admin'&&!A.user?.is_platform_admin)?`<div class="sb-sec">Settings</div>
       <div class="sb-item ${A.page==='team'?'active':''}" onclick="${nav('team')}"><span class="sb-icon">👥</span>Team</div>
       <div class="sb-item ${A.page==='integrations'?'active':''}" onclick="${nav('integrations')}"><span class="sb-icon">🔌</span>Integrations</div>
       <div class="sb-item ${A.page==='companyProfile'?'active':''}" onclick="${nav('companyProfile')}"><span class="sb-icon">🏢</span>Company Profile</div>
