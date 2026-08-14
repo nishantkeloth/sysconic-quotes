@@ -622,6 +622,280 @@ async function deleteProject(id){
   A.projects=null;draw();loadProjectsPage();
 }
 // ══════════════════════════════════════════════════════════════════════════
+// Delivery Challans — goods-movement documents for AV equipment leaving the
+// warehouse (installation delivery, loan/demo units, RMA returns, warehouse
+// transfers, returns from site). No rate/tax/amount columns on purpose --
+// this traces WHAT left and to WHOM, not what it's worth. See
+// api/delivery_challans.py and migration-delivery-challans.sql.
+// ══════════════════════════════════════════════════════════════════════════
+const DC_TYPE_LABELS={installation:'Installation',loan_demo:'Loan / demo',rma_return:'RMA return',warehouse_transfer:'Warehouse transfer',site_return:'Return from site'};
+const DC_STATUS_CLASS={draft:'s-draft',dispatched:'s-sent',delivered:'s-resolved',returned:'s-waiting',cancelled:'s-cancelled'};
+
+async function loadDeliveryChallans(){
+  const qs=new URLSearchParams();
+  const f=A.dcFilters||{};
+  if(f.status)qs.set('status',f.status);
+  if(f.challan_type)qs.set('challan_type',f.challan_type);
+  if(f.search)qs.set('search',f.search);
+  const r=await api('GET','/api/delivery_challans'+(qs.toString()?'?'+qs.toString():''));
+  if(r.error){A.dcList=[];alert(r.error);draw();return;}
+  A.dcList=r.challans||[];draw();
+}
+function dcSetFilter(key,val){A.dcFilters=A.dcFilters||{};A.dcFilters[key]=val;A.dcList=null;draw();loadDeliveryChallans();}
+
+function deliveryChallansHTML(){
+  const list=A.dcList;
+  const rows=(list||[]).map(c=>`<tr style="border-bottom:1px solid var(--gray-100);cursor:pointer" onclick="A.page='deliveryChallanDetail';A.dcDetailId='${c.id}';A.dcDetail=null;draw()">
+    <td style="padding:8px;font-weight:600">${esc(c.challan_number)}</td>
+    <td style="padding:8px">${fsmBadge(DC_TYPE_LABELS[c.challan_type]||c.challan_type,null)}</td>
+    <td style="padding:8px">${esc(c.customer_name||'')}</td>
+    <td style="padding:8px">${fsmBadge(c.status,DC_STATUS_CLASS)}</td>
+    <td style="padding:8px">${c.challan_date?new Date(c.challan_date).toLocaleDateString():''}</td>
+    <td style="padding:8px">${c.challan_type==='loan_demo'&&c.expected_return_date?new Date(c.expected_return_date).toLocaleDateString():'—'}</td>
+  </tr>`).join('');
+  return `<div style="padding:24px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0">Delivery Challans</h2>
+      <button class="btn btn-navy" onclick="A.page='deliveryChallanDetail';A.dcDetailId=null;A.dcDetail=null;draw()">+ New Challan</button>
+    </div>
+    <div style="background:#fff;border-radius:10px;padding:14px 16px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.06);display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <input class="iinput" placeholder="Search challan # or customer" style="max-width:220px" onkeydown="if(event.key==='Enter')dcSetFilter('search',this.value)">
+      <select class="iinput" style="max-width:170px" onchange="dcSetFilter('status',this.value)">
+        <option value="">All statuses</option><option value="draft">Draft</option><option value="dispatched">Dispatched</option><option value="delivered">Delivered</option><option value="returned">Returned</option><option value="cancelled">Cancelled</option>
+      </select>
+      <select class="iinput" style="max-width:190px" onchange="dcSetFilter('challan_type',this.value)">
+        <option value="">All types</option>${Object.entries(DC_TYPE_LABELS).map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}
+      </select>
+    </div>
+    <div style="background:#fff;border-radius:10px;overflow:auto;box-shadow:0 1px 3px rgba(0,0,0,.06)">
+      ${list==null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
+      :!list.length?`<div style="padding:22px;color:var(--gray-500)">No delivery challans yet — create your first one above.</div>`
+      :`<table style="width:100%;border-collapse:collapse;font-size:14px">
+        <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200)">
+          <th style="padding:8px">Challan #</th><th style="padding:8px">Type</th><th style="padding:8px">Customer</th><th style="padding:8px">Status</th><th style="padding:8px">Date</th><th style="padding:8px">Expected return</th>
+        </tr></thead><tbody>${rows}</tbody></table>`}
+    </div>
+  </div>`;
+}
+
+function initNewDeliveryChallan(){
+  A.dcDetail={id:null,status:'draft',challan_type:'installation',challan_date:new Date().toISOString().slice(0,10),
+    quote_id:'',project_id:'',site_id:'',customer_name:'',delivery_address:'',warehouse:'',expected_return_date:'',
+    vehicle_number:'',driver_name:'',packages_count:'',total_weight_kg:'',customer_notes:'',terms_conditions:'',
+    items:[{item_name:'',brand:'',model_no:'',quantity:1,unit:'pcs',condition:'new',serial_numbers:[],remarks:''}]};
+  if(A.quotes==null)loadQuotes();
+  if(A.projects==null)loadProjectsPage();
+  if(hasFeature('fsm_module')&&A.fsmSites==null)loadFSMSites();
+  draw();
+}
+async function loadDeliveryChallanDetail(id){
+  const r=await api('GET','/api/delivery_challans/'+id);
+  if(r.error){alert(r.error);A.page='deliveryChallans';draw();return;}
+  A.dcDetail=r;
+  if(A.quotes==null)loadQuotes();
+  if(A.projects==null)loadProjectsPage();
+  if(hasFeature('fsm_module')&&A.fsmSites==null)loadFSMSites();
+  draw();
+}
+function dcAddItemRow(){A.dcDetail.items.push({item_name:'',brand:'',model_no:'',quantity:1,unit:'pcs',condition:'new',serial_numbers:[],remarks:''});draw();}
+function dcRemoveItemRow(i){A.dcDetail.items.splice(i,1);draw();}
+function dcSerialsText(it){return (it.serial_numbers||[]).join(', ');}
+function dcUpdateItemSerials(i,val){A.dcDetail.items[i].serial_numbers=val.split(',').map(s=>s.trim()).filter(Boolean);}
+function dcOnSiteChange(siteId){
+  A.dcDetail.site_id=siteId;
+  const site=(A.fsmSites||[]).find(s=>s.id===siteId);
+  if(site){
+    if(!A.dcDetail.delivery_address)A.dcDetail.delivery_address=[site.building,site.floor,site.address].filter(Boolean).join(', ');
+  }
+  draw();
+}
+
+async function saveDeliveryChallan(){
+  const d=A.dcDetail;
+  const items=d.items.filter(it=>(it.item_name||'').trim());
+  if(!items.length){alert('Add at least one item');return;}
+  const body={
+    challan_type:d.challan_type,challan_date:d.challan_date,
+    quote_id:d.quote_id||null,project_id:d.project_id||null,site_id:d.site_id||null,
+    customer_name:d.customer_name,delivery_address:d.delivery_address,warehouse:d.warehouse,
+    expected_return_date:d.challan_type==='loan_demo'?(d.expected_return_date||null):null,
+    vehicle_number:d.vehicle_number,driver_name:d.driver_name,packages_count:d.packages_count,
+    total_weight_kg:d.total_weight_kg||null,customer_notes:d.customer_notes,terms_conditions:d.terms_conditions,
+    items,
+  };
+  const r=d.id?await api('PUT','/api/delivery_challans/'+d.id,body):await api('POST','/api/delivery_challans',body);
+  if(r.error){alert(r.error);return;}
+  A.dcDetail=r;A.dcDetailId=r.id;A.dcList=null;draw();
+}
+async function dcSetStatus(status){
+  if(status==='cancelled'&&!confirm('Cancel this delivery challan?'))return;
+  const r=await api('PUT','/api/delivery_challans/'+A.dcDetail.id+'/status',{status});
+  if(r.error){alert(r.error);return;}
+  A.dcDetail=null;A.dcList=null;loadDeliveryChallanDetail(A.dcDetailId);
+}
+async function dcAcknowledge(){
+  const name=(document.getElementById('dcRecvName')?.value||'').trim();
+  if(!name){alert('Received by name is required');return;}
+  const designation=(document.getElementById('dcRecvDesig')?.value||'').trim();
+  const r=await api('POST','/api/delivery_challans/'+A.dcDetail.id+'/acknowledge',{received_by_name:name,received_by_designation:designation});
+  if(r.error){alert(r.error);return;}
+  A.dcDetail=null;A.dcList=null;loadDeliveryChallanDetail(A.dcDetailId);
+}
+async function dcDeleteChallan(){
+  if(!confirm('Delete this draft challan? This cannot be undone.'))return;
+  const r=await api('DELETE','/api/delivery_challans/'+A.dcDetail.id);
+  if(r.error){alert(r.error);return;}
+  A.page='deliveryChallans';A.dcDetail=null;A.dcList=null;draw();loadDeliveryChallans();
+}
+async function dcCreateAssets(){
+  const r=await api('POST','/api/delivery_challans/'+A.dcDetail.id+'/create-assets',{});
+  if(r.error){alert(r.error);return;}
+  let msg=`Created ${r.created.length} asset(s) in Field Service.`;
+  if(r.skipped&&r.skipped.length)msg+=` Skipped ${r.skipped.length}: `+r.skipped.map(s=>s.serial+' ('+s.reason+')').join(', ');
+  alert(msg);
+  A.dcDetail=null;loadDeliveryChallanDetail(A.dcDetailId);
+}
+
+function deliveryChallanDetailHTML(){
+  const d=A.dcDetail;
+  if(!d)return `<div style="padding:24px;color:var(--gray-500)">Loading…</div>`;
+  const editable=d.status==='draft';
+  const isNew=!d.id;
+  const quoteOpts=(A.quotes||[]).map(q=>`<option value="${q.id}" ${d.quote_id===q.id?'selected':''}>${esc(q.quote_ref||q.title)} — ${esc(q.customer||'')}</option>`).join('');
+  const projectOpts=(A.projects||[]).map(p=>`<option value="${p.id}" ${d.project_id===p.id?'selected':''}>${esc(p.name)}</option>`).join('');
+  const siteOpts=(A.fsmSites||[]).map(s=>`<option value="${s.id}" ${d.site_id===s.id?'selected':''}>${esc(s.name)}</option>`).join('');
+
+  const itemRows=d.items.map((it,i)=>editable?`<tr style="border-bottom:1px solid var(--gray-100)">
+    <td style="padding:6px"><input class="iinput" placeholder="Item name" value="${esc(it.item_name)}" oninput="A.dcDetail.items[${i}].item_name=this.value"></td>
+    <td style="padding:6px"><input class="iinput" placeholder="Brand" value="${esc(it.brand||'')}" oninput="A.dcDetail.items[${i}].brand=this.value"></td>
+    <td style="padding:6px"><input class="iinput" placeholder="Model" value="${esc(it.model_no||'')}" oninput="A.dcDetail.items[${i}].model_no=this.value"></td>
+    <td style="padding:6px"><input class="iinput" type="number" min="0" step="1" style="width:64px" value="${it.quantity}" oninput="A.dcDetail.items[${i}].quantity=this.value"></td>
+    <td style="padding:6px"><input class="iinput" style="width:64px" value="${esc(it.unit||'pcs')}" oninput="A.dcDetail.items[${i}].unit=this.value"></td>
+    <td style="padding:6px"><select class="iinput" onchange="A.dcDetail.items[${i}].condition=this.value">
+      ${['new','refurbished','demo'].map(c=>`<option value="${c}" ${it.condition===c?'selected':''}>${c}</option>`).join('')}
+    </select></td>
+    <td style="padding:6px"><input class="iinput" placeholder="Comma-separated" value="${esc(dcSerialsText(it))}" oninput="dcUpdateItemSerials(${i},this.value)"></td>
+    <td style="padding:6px"><input class="iinput" placeholder="Remarks" value="${esc(it.remarks||'')}" oninput="A.dcDetail.items[${i}].remarks=this.value"></td>
+    <td style="padding:6px;text-align:right"><button class="idel" onclick="dcRemoveItemRow(${i})" title="Remove row">✕</button></td>
+  </tr>`:`<tr style="border-bottom:1px solid var(--gray-100)">
+    <td style="padding:8px;font-weight:600">${esc(it.item_name)}</td>
+    <td style="padding:8px">${esc(it.brand||'')}</td>
+    <td style="padding:8px">${esc(it.model_no||'')}</td>
+    <td style="padding:8px">${it.quantity}</td>
+    <td style="padding:8px">${esc(it.unit||'')}</td>
+    <td style="padding:8px;text-transform:capitalize">${esc(it.condition)}</td>
+    <td style="padding:8px">${it.serial_numbers&&it.serial_numbers.length?esc(it.serial_numbers.join(', ')):'<span style="color:var(--gray-400)">not serialized</span>'}${it.fsm_asset_ids&&it.fsm_asset_ids.length?` <span style="color:#16a34a;font-weight:600" title="Traced as Field Service assets">✓</span>`:''}</td>
+    <td style="padding:8px">${esc(it.remarks||'')}</td>
+    <td style="padding:8px"></td>
+  </tr>`).join('');
+
+  const hasUntracedSerials=d.items.some(it=>(it.serial_numbers||[]).length>(it.fsm_asset_ids||[]).length);
+
+  const field=(label,inputHtml)=>`<div><div style="font-size:12px;color:var(--gray-500);margin-bottom:4px">${label}</div>${inputHtml}</div>`;
+  const readonly=(label,val)=>field(label,`<div style="padding:7px 0;font-size:14px">${val?esc(String(val)):'<span style="color:var(--gray-400)">—</span>'}</div>`);
+
+  const headerGrid=editable?`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+      ${field('Challan type',`<select class="iinput" onchange="A.dcDetail.challan_type=this.value;draw()">${Object.entries(DC_TYPE_LABELS).map(([k,l])=>`<option value="${k}" ${d.challan_type===k?'selected':''}>${l}</option>`).join('')}</select>`)}
+      ${field('Challan date',`<input class="iinput" type="date" value="${d.challan_date||''}" onchange="A.dcDetail.challan_date=this.value">`)}
+      ${field('Customer',`<input class="iinput" value="${esc(d.customer_name||'')}" oninput="A.dcDetail.customer_name=this.value">`)}
+      ${field('Linked quote',`<select class="iinput" onchange="A.dcDetail.quote_id=this.value">${A.quotes==null?'<option>Loading…</option>':'<option value="">— none —</option>'+quoteOpts}</select>`)}
+      ${field('Project',`<select class="iinput" onchange="A.dcDetail.project_id=this.value">${A.projects==null?'<option>Loading…</option>':'<option value="">— none —</option>'+projectOpts}</select>`)}
+      ${hasFeature('fsm_module')?field('Site',`<select class="iinput" onchange="dcOnSiteChange(this.value)">${A.fsmSites==null?'<option>Loading…</option>':'<option value="">— none —</option>'+siteOpts}</select>`):field('Delivery address',`<input class="iinput" value="${esc(d.delivery_address||'')}" oninput="A.dcDetail.delivery_address=this.value">`)}
+      ${field('Warehouse',`<input class="iinput" value="${esc(d.warehouse||'')}" oninput="A.dcDetail.warehouse=this.value">`)}
+      ${d.challan_type==='loan_demo'?field('Expected return date',`<input class="iinput" type="date" value="${d.expected_return_date||''}" onchange="A.dcDetail.expected_return_date=this.value">`):''}
+    </div>${hasFeature('fsm_module')?`<div style="margin-top:10px">${field('Delivery address',`<textarea class="iinput" rows="2" oninput="A.dcDetail.delivery_address=this.value">${esc(d.delivery_address||'')}</textarea>`)}</div>`:''}`
+    :`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+      ${readonly('Challan type',DC_TYPE_LABELS[d.challan_type]||d.challan_type)}
+      ${readonly('Challan date',d.challan_date?new Date(d.challan_date).toLocaleDateString():'')}
+      ${readonly('Customer',d.customer_name)}
+      ${readonly('Project',(A.projects||[]).find(p=>p.id===d.project_id)?.name)}
+      ${readonly('Site',(A.fsmSites||[]).find(s=>s.id===d.site_id)?.name)}
+      ${readonly('Warehouse',d.warehouse)}
+      ${d.challan_type==='loan_demo'?readonly('Expected return date',d.expected_return_date?new Date(d.expected_return_date).toLocaleDateString():''):''}
+    </div>${d.delivery_address?`<div style="margin-top:10px">${readonly('Delivery address',d.delivery_address)}</div>`:''}`;
+
+  const logisticsSection=editable?`<div style="background:var(--gray-50,#f9fafb);border-radius:10px;padding:14px 16px;margin-top:16px">
+      <div style="font-weight:600;font-size:13px;margin-bottom:10px">Logistics</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+        ${field('Vehicle number',`<input class="iinput" value="${esc(d.vehicle_number||'')}" oninput="A.dcDetail.vehicle_number=this.value">`)}
+        ${field('Driver',`<input class="iinput" value="${esc(d.driver_name||'')}" oninput="A.dcDetail.driver_name=this.value">`)}
+        ${field('Packages',`<input class="iinput" value="${esc(d.packages_count||'')}" oninput="A.dcDetail.packages_count=this.value">`)}
+        ${field('Total weight (kg)',`<input class="iinput" type="number" min="0" value="${d.total_weight_kg||''}" oninput="A.dcDetail.total_weight_kg=this.value">`)}
+      </div>
+    </div>`:(d.vehicle_number||d.driver_name||d.packages_count||d.total_weight_kg?`<div style="background:var(--gray-50,#f9fafb);border-radius:10px;padding:14px 16px;margin-top:16px">
+      <div style="font-weight:600;font-size:13px;margin-bottom:10px">Logistics</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+        ${readonly('Vehicle number',d.vehicle_number)}${readonly('Driver',d.driver_name)}${readonly('Packages',d.packages_count)}${readonly('Total weight (kg)',d.total_weight_kg)}
+      </div>
+    </div>`:'');
+
+  const ackSection=(d.status==='draft'||d.status==='dispatched')?`<div style="background:var(--gray-50,#f9fafb);border-radius:10px;padding:14px 16px;margin-top:16px">
+      <div style="font-weight:600;font-size:13px;margin-bottom:10px">Site acknowledgment</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:12px;align-items:end">
+        ${field('Received by',`<input class="iinput" id="dcRecvName" placeholder="Name on-site">`)}
+        ${field('Designation',`<input class="iinput" id="dcRecvDesig" placeholder="e.g. Site engineer">`)}
+        <button class="btn btn-navy" onclick="dcAcknowledge()" ${isNew?'disabled':''}>Mark delivered</button>
+      </div>
+      ${isNew?'<div style="font-size:12px;color:var(--gray-500);margin-top:6px">Save the challan first before recording receipt.</div>':''}
+    </div>`:(d.received_by_name?`<div style="background:var(--gray-50,#f9fafb);border-radius:10px;padding:14px 16px;margin-top:16px">
+      <div style="font-weight:600;font-size:13px;margin-bottom:10px">Site acknowledgment</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+        ${readonly('Received by',d.received_by_name)}${readonly('Designation',d.received_by_designation)}${readonly('Received at',d.received_at?new Date(d.received_at).toLocaleString():'')}
+      </div>
+    </div>`:'');
+
+  const actions=[];
+  if(editable){
+    actions.push(`<button class="btn btn-navy" onclick="saveDeliveryChallan()">${isNew?'Create challan':'Save changes'}</button>`);
+    if(!isNew){
+      actions.push(`<button class="btn" onclick="dcSetStatus('dispatched')">Mark dispatched</button>`);
+      actions.push(`<button class="idel" style="padding:8px 14px" onclick="dcDeleteChallan()">Delete draft</button>`);
+    }
+  }
+  if(!isNew&&(d.status==='draft'||d.status==='dispatched')){
+    actions.push(`<button class="btn" style="color:var(--red)" onclick="dcSetStatus('cancelled')">Cancel challan</button>`);
+  }
+  if(!isNew&&d.status==='delivered'&&d.challan_type==='loan_demo'){
+    actions.push(`<button class="btn" onclick="dcSetStatus('returned')">Mark returned</button>`);
+  }
+  if(!isNew&&hasFeature('fsm_module')&&d.site_id&&hasUntracedSerials&&(d.status==='delivered'||d.status==='dispatched')){
+    actions.push(`<button class="btn btn-green" onclick="dcCreateAssets()" title="Creates a Field Service asset per serial number so warranty and service history are tracked from day one">🔗 Create Field Service assets</button>`);
+  }
+
+  return `<div style="padding:24px;max-width:1100px">
+    <button class="btn" style="margin-bottom:12px" onclick="A.page='deliveryChallans';A.dcDetail=null;draw();loadDeliveryChallans()">← Back to Delivery Challans</button>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0">${isNew?'New delivery challan':esc(d.challan_number)}</h2>
+      ${!isNew?fsmBadge(d.status,DC_STATUS_CLASS):''}
+    </div>
+    <div class="card" style="padding:18px">
+      ${headerGrid}
+    </div>
+
+    <div style="font-weight:600;font-size:14px;margin:18px 0 8px">Item table</div>
+    <div style="background:#fff;border-radius:10px;overflow:auto;box-shadow:0 1px 3px rgba(0,0,0,.06)">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200)">
+          <th style="padding:8px">Item</th><th style="padding:8px">Brand</th><th style="padding:8px">Model</th><th style="padding:8px">Qty</th><th style="padding:8px">Unit</th><th style="padding:8px">Condition</th><th style="padding:8px">Serial numbers</th><th style="padding:8px">Remarks</th><th style="padding:8px"></th>
+        </tr></thead>
+        <tbody>${itemRows}</tbody>
+      </table>
+      ${editable?`<div style="padding:10px"><button class="btn" onclick="dcAddItemRow()">+ Add row</button></div>`:''}
+    </div>
+
+    ${logisticsSection}
+    ${ackSection}
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-top:16px">
+      ${field('Customer notes',editable?`<textarea class="iinput" rows="3" oninput="A.dcDetail.customer_notes=this.value">${esc(d.customer_notes||'')}</textarea>`:`<div style="font-size:14px;color:var(--gray-700)">${esc(d.customer_notes||'—')}</div>`)}
+      ${field('Terms and conditions',editable?`<textarea class="iinput" rows="3" oninput="A.dcDetail.terms_conditions=this.value">${esc(d.terms_conditions||'')}</textarea>`:`<div style="font-size:14px;color:var(--gray-700)">${esc(d.terms_conditions||'—')}</div>`)}
+    </div>
+
+    <div style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap">${actions.join('')}</div>
+  </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
 // Project Performance module — portfolio dashboard, project list, project
 // detail (Overview / Financial Performance / Cost Control / Billing &
 // Collection / Cash Position tabs). Reuses the app's existing design system
@@ -2615,6 +2889,11 @@ function draw(){
   if(A.page==='fsmDetail'&&A.fsmDetail==null)setTimeout(function(){loadFSMDetail(A.fsmDetailId);},50);
   if(A.page==='myJobs'&&A.myJobs==null)setTimeout(loadMyJobs,50);
   if(A.page==='myJobDetail'&&A.myJobDetail==null)setTimeout(function(){loadMyJobDetail(A.myJobDetailId);},50);
+  if(A.page==='deliveryChallans'&&A.dcList==null)setTimeout(loadDeliveryChallans,50);
+  if(A.page==='deliveryChallanDetail'&&A.dcDetail==null){
+    if(A.dcDetailId)setTimeout(function(){loadDeliveryChallanDetail(A.dcDetailId);},50);
+    else setTimeout(initNewDeliveryChallan,50);
+  }
   if(A.page==='projectPerformance'&&A.portfolio==null)setTimeout(loadPortfolioPage,50);
   if(A.page==='projectPerformanceDetail'&&A.ppDetail==null)setTimeout(loadProjectPerformanceDetail,50);
   if(A.page==='vendorMaster')setTimeout(loadVendorsMaster,50);
@@ -3077,7 +3356,7 @@ function sbGroupHTML(key,label,items){
 // ── App shell ─────────────────────────────────────────────────────────────────
 function appHTML(){
   const init=(A.user?.name||'U').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
-  const PAGE_TITLES={dashboard:'Dashboard',deals:'Deals',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',log:'Activity Log',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master',integrations:'Integrations',platform:'All Companies',companyProfile:'Company Profile',rolesPermissions:'Roles & Permissions',reviewQueue:'Review Queue',testimonials:'Testimonials',projectPerformance:'Project Performance',projectPerformanceDetail:'Project Detail'};
+  const PAGE_TITLES={dashboard:'Dashboard',deals:'Deals',editor:'Quotation',terms:'Terms & Conditions',summary:'Summary',vendor:'Vendor Payments',print:'Print / PDF',log:'Activity Log',team:'Team & Settings',products:'Product Catalog',customers:'Customer Master',vendorMaster:'Vendor Master',integrations:'Integrations',platform:'All Companies',companyProfile:'Company Profile',rolesPermissions:'Roles & Permissions',reviewQueue:'Review Queue',testimonials:'Testimonials',projectPerformance:'Project Performance',projectPerformanceDetail:'Project Detail',deliveryChallans:'Delivery Challans',deliveryChallanDetail:'Delivery Challan'};
   const inEditor=['editor','terms','summary','vendor','print','log'].includes(A.page);
 
   const nav=(page,cb)=>`A.page='${page}';${cb||''}closeSidebar();draw()`;
@@ -3100,6 +3379,9 @@ function appHTML(){
         hasPageAccess('products')?`<div class="sb-item ${A.page==='products'?'active':''}" onclick="${nav('products')}"><span class="sb-icon">📦</span>Products</div>`:'',
         hasPageAccess('customers')?`<div class="sb-item ${A.page==='customers'?'active':''}" onclick="${nav('customers')}"><span class="sb-icon">👤</span>Customers</div>`:'',
         hasPageAccess('vendors')?`<div class="sb-item ${A.page==='vendorMaster'?'active':''}" onclick="${nav('vendorMaster')}"><span class="sb-icon">🏭</span>Vendors</div>`:''
+      ])}
+      ${sbGroupHTML('delivery','Delivery',[
+        hasFeature('delivery_challans')&&hasPageAccess('deliveryChallans')?`<div class="sb-item ${(A.page==='deliveryChallans'||A.page==='deliveryChallanDetail')?'active':''}" onclick="${nav('deliveryChallans')}"><span class="sb-icon">🚚</span>Delivery Challans</div>`:''
       ])}
       ${sbGroupHTML('projects','Projects',[
         hasFeature('projects')&&hasPageAccess('projects')?`<div class="sb-item ${A.page==='projects'?'active':''}" onclick="${nav('projects')}"><span class="sb-icon">📁</span>Projects</div>`:'',
@@ -3152,6 +3434,8 @@ function appHTML(){
   else if(A.page==='fsmDetail')pageContent=fsmDetailHTML();
   else if(A.page==='myJobs')pageContent=myJobsHTML();
   else if(A.page==='myJobDetail')pageContent=myJobDetailHTML();
+  else if(A.page==='deliveryChallans')pageContent=deliveryChallansHTML();
+  else if(A.page==='deliveryChallanDetail')pageContent=deliveryChallanDetailHTML();
   else if(A.page==='projectPerformance')pageContent=portfolioHTML();
   else if(A.page==='projectPerformanceDetail')pageContent=projectPerformanceDetailHTML();
   else if(A.page==='vendorMaster')pageContent=vendorsMasterHTML();
@@ -5832,7 +6116,7 @@ function importVendorsMaster(event){
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────
-const RBAC_PAGE_LABELS = {insights:'Insights',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service',myJobs:'My Jobs (Engineer)'};
+const RBAC_PAGE_LABELS = {insights:'Insights',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service',myJobs:'My Jobs (Engineer)',deliveryChallans:'Delivery Challans'};
 let RBAC_PAGE_KEYS_FE = [];
 let RBAC_ROLES_CACHE = [];
 
