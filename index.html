@@ -3089,7 +3089,9 @@ function appHTML(){
     <nav class="sb-nav">
       ${A.user?.is_platform_admin?'':`
       <div class="sb-sec">Workspace</div>
-      ${hasPageAccess('deals')?`<div class="sb-item ${A.page==='deals'?'active':''}" onclick="${nav('deals')}"><span class="sb-icon">🤝</span>Deals</div>`:''}
+      ${sbGroupHTML('pipeline','Pipeline',[
+        hasPageAccess('deals')?`<div class="sb-item ${A.page==='deals'?'active':''}" onclick="${nav('deals')}"><span class="sb-icon">🤝</span>Deals</div>`:''
+      ])}
       ${sbGroupHTML('proposals','Proposals',[
         hasPageAccess('quotes')?`<div class="sb-item ${A.page==='dashboard'?'active':''}" onclick="${nav('dashboard')}"><span class="sb-icon">🏠</span>Quotes</div>`:'',
         hasPageAccess('reviewQueue')?`<div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>`:''
