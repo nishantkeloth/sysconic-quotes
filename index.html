@@ -918,6 +918,9 @@ function deliveryChallanDetailHTML(){
       actions.push(`<button class="idel" style="padding:8px 14px" onclick="dcDeleteChallan()">Delete draft</button>`);
     }
   }
+  if(!isNew){
+    actions.push(`<button class="btn" onclick="downloadDeliveryChallanPDF()">📄 Download PDF</button>`);
+  }
   if(!isNew&&(d.status==='draft'||d.status==='dispatched')){
     actions.push(`<button class="btn" style="color:var(--red)" onclick="dcSetStatus('cancelled')">Cancel challan</button>`);
   }
@@ -959,6 +962,122 @@ function deliveryChallanDetailHTML(){
 
     <div style="margin-top:18px;display:flex;gap:10px;flex-wrap:wrap">${actions.join('')}</div>
   </div>`;
+}
+
+// Printable PDF — same letterhead mechanism as downloadFsmPMReport (self-
+// hosted /api/pdf/render2, no new PDF backend). Deliberately no rate/tax/
+// amount columns or Sub Total/Total, same as the on-screen item table --
+// this documents WHAT moved, not what it's worth.
+function deliveryChallanPdfHTML(d){
+  const itemRows=(d.items||[]).map((it,i)=>`<tr>
+    <td>${i+1}</td>
+    <td><strong>${esc(it.item_name)}</strong>${it.brand||it.model_no?`<br><span class="muted">${esc([it.brand,it.model_no].filter(Boolean).join(' '))}</span>`:''}${it.remarks?`<br><span class="muted">${esc(it.remarks)}</span>`:''}</td>
+    <td style="text-transform:capitalize">${esc(it.condition||'new')}</td>
+    <td>${it.quantity} ${esc(it.unit||'')}</td>
+    <td>${it.serial_numbers&&it.serial_numbers.length?esc(it.serial_numbers.join(', ')):'—'}</td>
+  </tr>`).join('');
+
+  const metaRow=(label,val)=>val?`<div><label>${label}</label>${esc(String(val))}</div>`:'';
+  const project=(A.projects||[]).find(p=>p.id===d.project_id);
+  const site=(A.fsmSites||[]).find(s=>s.id===d.site_id);
+
+  const logoHTML=PRINTCO?.logo_url?`<img src="${esc(PRINTCO.logo_url)}" alt="" class="logo">`:'';
+  const addrHTML=printAddrLines().map(l=>`<div>${esc(l)}</div>`).join('');
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+    @page{size:A4;margin:12mm 10mm 15mm 10mm}
+    body{font-family:Arial,Helvetica,sans-serif;color:#1a1f2b;margin:0;padding:32px 40px;font-size:13px}
+    .letterhead{display:flex;justify-content:space-between;align-items:flex-start;gap:20px}
+    .logo{max-height:56px;max-width:180px;object-fit:contain;margin-bottom:8px}
+    .co{font-weight:700;font-size:15px}
+    .muted{color:#667085;font-size:11.5px}
+    .doctitle{text-align:right}
+    .doctitle h1{font-size:24px;margin:0 0 4px;letter-spacing:.03em}
+    .doctitle .num{font-size:14px;color:#374151}
+    .status{display:inline-block;margin-top:6px;padding:3px 12px;border-radius:12px;background:#eef4ff;color:#1e3a5f;font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+    .meta{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:24px 0;font-size:13px}
+    .meta label{display:block;color:#667085;font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;margin-bottom:2px}
+    .parties{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px}
+    .parties h3{font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.03em;margin:0 0 4px}
+    table.rt{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:6px}
+    table.rt th{background:#1e3a5f;color:#fff;text-align:left;padding:7px 8px;font-size:11.5px}
+    table.rt td{border:1px solid #d8dce3;padding:7px 8px;vertical-align:top}
+    .notice{margin-top:16px;font-size:11px;color:#667085;font-style:italic}
+    .blocks{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:20px}
+    .blocks h3{font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.03em;margin:0 0 6px}
+    .sign{display:flex;gap:40px;margin-top:36px}
+    .sign div{flex:1;border-top:1px solid #333;padding-top:6px;font-size:12px}
+    footer{margin-top:30px;font-size:10.5px;color:#888;border-top:1px solid #d8dce3;padding-top:10px}
+  </style></head><body>
+    <div class="letterhead">
+      <div>
+        ${logoHTML}
+        <div class="co">${esc(printCoName())}</div>
+        ${addrHTML}
+      </div>
+      <div class="doctitle">
+        <h1>DELIVERY CHALLAN</h1>
+        <div class="num">${esc(d.challan_number)}</div>
+        <div class="status">${esc((d.status||'').toUpperCase())}</div>
+      </div>
+    </div>
+
+    <div class="parties">
+      <div><h3>Deliver to</h3><strong>${esc(d.customer_name||'—')}</strong>${d.delivery_address?`<br>${esc(d.delivery_address)}`:''}</div>
+      <div><h3>Ship from</h3><strong>${esc(d.warehouse||printCoName())}</strong></div>
+    </div>
+
+    <div class="meta">
+      ${metaRow('Challan date',d.challan_date?new Date(d.challan_date).toLocaleDateString():'')}
+      ${metaRow('Challan type',DC_TYPE_LABELS[d.challan_type]||d.challan_type)}
+      ${metaRow('Customer PO',d.customer_po_number)}
+      ${metaRow('Project',project?.name)}
+      ${metaRow('Site',site?.name)}
+      ${metaRow('Expected return',d.challan_type==='loan_demo'&&d.expected_return_date?new Date(d.expected_return_date).toLocaleDateString():'')}
+    </div>
+
+    <table class="rt"><thead><tr><th>#</th><th>Item &amp; Description</th><th>Condition</th><th>Qty</th><th>Serial numbers</th></tr></thead>
+      <tbody>${itemRows}</tbody>
+    </table>
+    <div class="notice">This delivery challan is a record of goods movement only. It is not a tax invoice and carries no commercial value.</div>
+
+    ${(d.vehicle_number||d.driver_name||d.packages_count||d.total_weight_kg)?`<div class="blocks">
+      <div><h3>Logistics</h3>
+        ${metaRow('Vehicle',d.vehicle_number)}${metaRow('Driver',d.driver_name)}${metaRow('Packages',d.packages_count)}${metaRow('Total weight',d.total_weight_kg?d.total_weight_kg+' kg':'')}
+      </div>
+      <div>${d.customer_notes?`<h3>Notes</h3><div>${esc(d.customer_notes)}</div>`:''}</div>
+    </div>`:(d.customer_notes?`<div class="blocks"><div><h3>Notes</h3><div>${esc(d.customer_notes)}</div></div><div></div></div>`:'')}
+
+    ${d.terms_conditions?`<div style="margin-top:16px"><h3 style="font-size:11px;color:#667085;text-transform:uppercase;letter-spacing:.03em;margin:0 0 4px">Terms and conditions</h3><div style="font-size:11.5px;color:#374151">${esc(d.terms_conditions)}</div></div>`:''}
+
+    <div class="sign">
+      <div>Dispatched by<br>Name: ___________________________<br>Date: ___________________________</div>
+      <div>Received by<br>Name: ${esc(d.received_by_name||'___________________________')}${d.received_by_designation?` (${esc(d.received_by_designation)})`:''}<br>Date: ${esc(d.received_at?new Date(d.received_at).toLocaleDateString():'___________________________')}</div>
+    </div>
+
+    <footer>Generated from ${esc(printCoName())}'s Delivery Challan ${esc(d.challan_number)}${d.quote_id?' — linked quote on file':''}.</footer>
+  </body></html>`;
+}
+
+async function downloadDeliveryChallanPDF(){
+  const d=A.dcDetail;
+  if(!d||!d.id){alert('Save the challan before downloading a PDF.');return;}
+  const btn=event?.target;
+  if(btn){btn.disabled=true;btn.textContent='⏳ Generating…';}
+  try{
+    await ensurePrintCompany();
+    if(hasFeature('fsm_module')&&A.fsmSites==null)await loadFSMSites();
+    if(A.projects==null)await loadProjectsPage();
+    const html=deliveryChallanPdfHTML(d);
+    const r=await api2Blob('/api/pdf/render2',{html,filename:`${d.challan_number}.pdf`});
+    if(!r)return;
+    const {blob,filename}=r;
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);a.download=filename;
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+  }catch(e){alert('Could not generate the PDF.');}
+  finally{if(btn){btn.disabled=false;btn.textContent='📄 Download PDF';}}
 }
 
 // ══════════════════════════════════════════════════════════════════════════
