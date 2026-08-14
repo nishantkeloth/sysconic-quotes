@@ -8612,7 +8612,7 @@ function myJobsHTML(){
       <div class="card-title" style="margin-bottom:0">My Jobs</div>
       <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" ${A.myJobsShowClosed?'checked':''} onchange="A.myJobsShowClosed=this.checked;A.myJobs=null;draw()">Show closed/cancelled</label>
     </div>
-    ${list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
+    ${list==null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
       :!list.length?`<div style="padding:28px;text-align:center;color:var(--gray-500)">Nothing assigned to you right now.</div>`
       :rows}
   </div>`;
