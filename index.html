@@ -707,24 +707,28 @@ function dcItemsFromQuoteOption(opt){
   return items;
 }
 // Entry point from the Quote editor's ⋯ More menu — only enabled once the
-// quote is awarded (also enforced server-side by project-for-quote). Pre-
-// fills the quote, its line items, and — if the quote has already turned
-// into a project (projects.quotation_id) — that project, plus the
+// quote is awarded. Pre-fills the quote, its line items, and — if the
+// quote already has a linked project (quotes.project_id, set when someone
+// clicks "Create Project" on an awarded quote) — that project directly
+// off the quote object already in hand, no round trip needed, plus the
 // project's PO number as a starting point for Customer Purchase Order (a
 // coordinator can still change it — this is the customer's PO to us, not
-// a vendor PO). If the quote has more than one option, asks which one was
-// awarded (the app doesn't track that anywhere else).
+// a vendor PO). A quote can be Awarded without a project existing yet
+// (creating one is a separate, explicit step) -- in that case project
+// stays blank and can be linked manually, or later once one exists.
+// If the quote has more than one option, asks which one was awarded (the
+// app doesn't track that anywhere else).
 async function dcStartFromQuote(){
   const q=A.activeQuote;
   if(!q||q.status!=='awarded')return;
-  const ctx=await api('GET','/api/delivery_challans/project-for-quote?quote_id='+q.id);
-  if(ctx.error){alert(ctx.error);return;}
   initNewDeliveryChallan();
   A.dcDetail.quote_id=q.id;
-  A.dcDetail.customer_name=ctx.customer_name||q.customer||'';
-  if(ctx.project){
-    A.dcDetail.project_id=ctx.project.id;
-    if(ctx.project.po_number)A.dcDetail.customer_po_number=ctx.project.po_number;
+  A.dcDetail.customer_name=q.customer||'';
+  if(q.project_id){
+    A.dcDetail.project_id=q.project_id;
+    if(A.projects==null)await loadProjectsPage();
+    const project=(A.projects||[]).find(p=>p.id===q.project_id);
+    if(project&&project.po_number)A.dcDetail.customer_po_number=project.po_number;
   }
   const options=q.quote_data||[];
   let opt=options[0]||null;
@@ -859,7 +863,7 @@ function deliveryChallanDetailHTML(){
       ${field('Challan date',`<input class="iinput" type="date" value="${d.challan_date||''}" onchange="A.dcDetail.challan_date=this.value">`)}
       ${field('Customer',`<input class="iinput" value="${esc(d.customer_name||'')}" oninput="A.dcDetail.customer_name=this.value">`)}
       ${field('Linked quote',`<select class="iinput" onchange="A.dcDetail.quote_id=this.value">${A.quotes==null?'<option>Loading…</option>':'<option value="">— none —</option>'+quoteOpts}</select>`)}
-      ${field('Project',`<select class="iinput" onchange="dcOnProjectChange(this.value)">${A.projects==null?'<option>Loading…</option>':'<option value="">— none —</option>'+projectOpts}</select>`)}
+      ${field('Project',`<select class="iinput" onchange="dcOnProjectChange(this.value)">${A.projects==null?'<option>Loading…</option>':'<option value="">— none —</option>'+projectOpts}</select>${d.quote_id&&!d.project_id?`<div style="font-size:11px;color:var(--gray-500);margin-top:3px">This quote has no project yet — click Create Project on the quote first, or pick one manually.</div>`:''}`)}
       ${poField}
       ${hasFeature('fsm_module')?field('Site',`<select class="iinput" onchange="dcOnSiteChange(this.value)">${A.fsmSites==null?'<option>Loading…</option>':'<option value="">— none —</option>'+siteOpts}</select>`):field('Delivery address',`<input class="iinput" value="${esc(d.delivery_address||'')}" oninput="A.dcDetail.delivery_address=this.value">`)}
       ${field('Warehouse',`<input class="iinput" value="${esc(d.warehouse||'')}" oninput="A.dcDetail.warehouse=this.value">`)}

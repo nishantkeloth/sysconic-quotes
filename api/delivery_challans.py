@@ -206,36 +206,6 @@ def create_challan():
 
 
 # ------------------------------------------------------------------
-# Lookups for the "Create Delivery Challan" flow off an awarded quote --
-# quote -> its project (via projects.quotation_id) -> that project's
-# vendor POs (zoho_purchase_orders), so the challan form can offer them
-# for selection instead of a free-typed reference.
-# ------------------------------------------------------------------
-@app.route('/api/delivery_challans/project-for-quote', methods=['GET'])
-def project_for_quote():
-    company_id = g.claims['company_id']
-    quote_id = request.args.get('quote_id')
-    if not quote_id:
-        return jsonify({'error': 'quote_id required'}), 400
-    sb = get_sb()
-
-    quote = sb.table('quotes').select('id,status,customer').eq('id', quote_id).eq('company_id', company_id).execute()
-    if not quote.data:
-        return jsonify({'error': 'quote not found'}), 404
-    if quote.data[0]['status'] != 'awarded':
-        return jsonify({'error': 'This quote is not awarded yet — delivery challans can only be created from an awarded quote.'}), 409
-
-    # po_number here is projects.po_number -- a plain text field a coordinator
-    # can set on the project (distinct from the customer_po_number typed
-    # directly on the challan; used only to pre-fill it as a starting point).
-    project = sb.table('projects').select('id,name,po_number').eq('quotation_id', quote_id).eq('company_id', company_id).execute()
-    return jsonify({
-        'customer_name': quote.data[0].get('customer'),
-        'project': project.data[0] if project.data else None,
-    })
-
-
-# ------------------------------------------------------------------
 # Get / update / delete
 # ------------------------------------------------------------------
 @app.route('/api/delivery_challans/<cid>', methods=['GET'])
