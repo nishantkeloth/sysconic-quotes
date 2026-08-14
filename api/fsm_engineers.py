@@ -9,6 +9,7 @@ Add this file to BOTH `builds` and `routes` in vercel.json.
 
 from flask import Flask, request, jsonify, g
 import uuid
+import traceback
 from datetime import datetime
 
 from api.auth import verify_token, get_sb
@@ -97,7 +98,11 @@ def create_engineer():
     }
 
     sb = get_sb()
-    result = sb.table("fsm_engineers").insert(record).execute()
+    try:
+        result = sb.table("fsm_engineers").insert(record).execute()
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
     return jsonify(result.data[0]), 201
 
 
@@ -143,7 +148,11 @@ def update_engineer():
     update["updated_at"] = datetime.utcnow().isoformat()
 
     sb = get_sb()
-    result = sb.table("fsm_engineers").update(update).eq("id", engineer_id).eq("company_id", company_id).execute()
+    try:
+        result = sb.table("fsm_engineers").update(update).eq("id", engineer_id).eq("company_id", company_id).execute()
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
     if not result.data:
         return jsonify({"error": "not found"}), 404
     return jsonify(result.data[0])
