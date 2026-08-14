@@ -45,6 +45,7 @@ import uuid
 import bcrypt
 import jwt
 import requests
+import traceback
 import urllib.request
 import urllib.error
 from datetime import datetime, timedelta
@@ -518,74 +519,84 @@ def create_ticket(body):
 
     sb = get_sb()
 
-    if site_id:
-        site = sb.table("fsm_sites").select("id,customer_id").eq("id", site_id).execute().data
-        if not site or site[0]["customer_id"] != customer_id:
-            return jsonify({"error": "invalid site"}), 400
-    if asset_id:
-        asset = sb.table("fsm_assets").select("id,site_id").eq("id", asset_id).execute().data
-        if not asset or (site_id and asset[0]["site_id"] != site_id):
-            return jsonify({"error": "invalid asset"}), 400
+    # Everything past this point talks to Postgres/PostgREST — wrapped so a
+    # schema mismatch or constraint violation comes back as a readable JSON
+    # error instead of an opaque 500 (this endpoint previously had no
+    # try/except at all, so any DB-level failure surfaced as a bare Flask
+    # error page with no detail — this is what let the underlying bug here
+    # go undiagnosed from the browser alone).
+    try:
+        if site_id:
+            site = sb.table("fsm_sites").select("id,customer_id").eq("id", site_id).execute().data
+            if not site or site[0]["customer_id"] != customer_id:
+                return jsonify({"error": "invalid site"}), 400
+        if asset_id:
+            asset = sb.table("fsm_assets").select("id,site_id").eq("id", asset_id).execute().data
+            if not asset or (site_id and asset[0]["site_id"] != site_id):
+                return jsonify({"error": "invalid asset"}), 400
 
-    year = datetime.utcnow().year
-    result = sb.rpc("fsm_next_ticket_number", {"p_company_id": company_id, "p_year": year}).execute()
-    seq = result.data
-    if isinstance(seq, list):
-        seq = seq[0].get("fsm_next_ticket_number") if seq else 1
-    ticket_number = f"FSM-{year}-{seq:04d}"
+        year = datetime.utcnow().year
+        result = sb.rpc("fsm_next_ticket_number", {"p_company_id": company_id, "p_year": year}).execute()
+        seq = result.data
+        if isinstance(seq, list):
+            seq = seq[0].get("fsm_next_ticket_number") if seq else 1
+        ticket_number = f"FSM-{year}-{seq:04d}"
 
-    ticket_id = str(uuid.uuid4())
-    record = {
-        "id": ticket_id,
-        "company_id": company_id,
-        "ticket_number": ticket_number,
-        "site_id": site_id,
-        "asset_id": asset_id,
-        "customer_id": customer_id,
-        "ticket_type": ticket_type,
-        "priority": "medium",  # customers don't self-triage priority/critical — staff does via AI Suggest or manually
-        "status": "new",
-        "source": "customer_portal",
-        "subject": subject,
-        "description": description,
-        "created_at": datetime.utcnow().isoformat(),
-    }
+        ticket_id = str(uuid.uuid4())
+        record = {
+            "id": ticket_id,
+            "company_id": company_id,
+            "ticket_number": ticket_number,
+            "site_id": site_id,
+            "asset_id": asset_id,
+            "customer_id": customer_id,
+            "ticket_type": ticket_type,
+            "priority": "medium",  # customers don't self-triage priority/critical — staff does via AI Suggest or manually
+            "status": "new",
+            "source": "customer_portal",
+            "subject": subject,
+            "description": description,
+            "created_at": datetime.utcnow().isoformat(),
+        }
 
-    # Same contract lookup as the staff-side create_ticket (api/fsm_tickets.py)
-    # — prefer a site-specific contract, fall back to customer-wide.
-    contract = _find_applicable_contract(sb, company_id, customer_id, site_id)
-    if contract:
-        record["contract_id"] = contract["id"]
-        created_dt = datetime.utcnow()
-        if contract.get("sla_response_hours") is not None:
-            record["sla_response_due_at"] = (created_dt + timedelta(hours=float(contract["sla_response_hours"]))).isoformat()
-        if contract.get("sla_resolution_hours") is not None:
-            record["sla_resolution_due_at"] = (created_dt + timedelta(hours=float(contract["sla_resolution_hours"]))).isoformat()
-        ctype = contract.get("contract_type")
-        if ctype == "warranty":
-            record["billing_type"], record["billing_status"] = "warranty", "not_billable"
-        elif ctype in ("amc", "cmc", "fully_comprehensive"):
-            record["billing_type"], record["billing_status"] = "amc_included", "not_billable"
+        # Same contract lookup as the staff-side create_ticket (api/fsm_tickets.py)
+        # — prefer a site-specific contract, fall back to customer-wide.
+        contract = _find_applicable_contract(sb, company_id, customer_id, site_id)
+        if contract:
+            record["contract_id"] = contract["id"]
+            created_dt = datetime.utcnow()
+            if contract.get("sla_response_hours") is not None:
+                record["sla_response_due_at"] = (created_dt + timedelta(hours=float(contract["sla_response_hours"]))).isoformat()
+            if contract.get("sla_resolution_hours") is not None:
+                record["sla_resolution_due_at"] = (created_dt + timedelta(hours=float(contract["sla_resolution_hours"]))).isoformat()
+            ctype = contract.get("contract_type")
+            if ctype == "warranty":
+                record["billing_type"], record["billing_status"] = "warranty", "not_billable"
+            elif ctype in ("amc", "cmc", "fully_comprehensive"):
+                record["billing_type"], record["billing_status"] = "amc_included", "not_billable"
+            else:
+                record["billing_type"], record["billing_status"] = "time_material", "pending"
         else:
-            record["billing_type"], record["billing_status"] = "time_material", "pending"
-    else:
-        record["billing_type"], record["billing_status"] = "chargeable_visit", "pending"
+            record["billing_type"], record["billing_status"] = "chargeable_visit", "pending"
 
-    row = sb.table("fsm_tickets").insert(record).execute().data[0]
+        row = sb.table("fsm_tickets").insert(record).execute().data[0]
 
-    self_help_shown = bool(body.get("self_help_shown"))
-    note = f"Ticket opened via the Customer Portal by {g.claims.get('portal_user_id')}"
-    if self_help_shown:
-        note += " (AI self-resolution tips were shown first and didn't resolve it)"
-    sb.table("fsm_ticket_activity").insert({
-        "id": str(uuid.uuid4()),
-        "ticket_id": ticket_id,
-        "company_id": company_id,
-        "event_type": "ticket_created",
-        "note": note,
-        "metadata": {"source": "customer_portal", "self_help_shown": self_help_shown},
-        "created_at": datetime.utcnow().isoformat(),
-    }).execute()
+        self_help_shown = bool(body.get("self_help_shown"))
+        note = f"Ticket opened via the Customer Portal by {g.claims.get('portal_user_id')}"
+        if self_help_shown:
+            note += " (AI self-resolution tips were shown first and didn't resolve it)"
+        sb.table("fsm_ticket_activity").insert({
+            "id": str(uuid.uuid4()),
+            "ticket_id": ticket_id,
+            "company_id": company_id,
+            "event_type": "ticket_created",
+            "note": note,
+            "metadata": {"source": "customer_portal", "self_help_shown": self_help_shown},
+            "created_at": datetime.utcnow().isoformat(),
+        }).execute()
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"Could not create ticket: {e}"}), 500
 
     return jsonify({"ticket": row})
 
