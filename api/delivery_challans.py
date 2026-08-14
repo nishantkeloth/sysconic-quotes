@@ -113,7 +113,7 @@ def _clean_header(d, partial=False):
         out['challan_date'] = (str(d.get('challan_date') or '').strip()[:10] or None)
     if 'expected_return_date' in d:
         out['expected_return_date'] = (str(d.get('expected_return_date') or '').strip()[:10] or None)
-    for k in ('quote_id', 'project_id', 'site_id'):
+    for k in ('quote_id', 'project_id', 'site_id', 'purchase_order_id'):
         if k in d:
             out[k] = d.get(k) or None
     if 'total_weight_kg' in d:
@@ -202,6 +202,46 @@ def create_challan():
 
     challan['items'] = item_records
     return jsonify(challan), 201
+
+
+# ------------------------------------------------------------------
+# Lookups for the "Create Delivery Challan" flow off an awarded quote --
+# quote -> its project (via projects.quotation_id) -> that project's
+# vendor POs (zoho_purchase_orders), so the challan form can offer them
+# for selection instead of a free-typed reference.
+# ------------------------------------------------------------------
+@app.route('/api/delivery_challans/project-for-quote', methods=['GET'])
+def project_for_quote():
+    company_id = g.claims['company_id']
+    quote_id = request.args.get('quote_id')
+    if not quote_id:
+        return jsonify({'error': 'quote_id required'}), 400
+    sb = get_sb()
+
+    quote = sb.table('quotes').select('id,status,customer').eq('id', quote_id).eq('company_id', company_id).execute()
+    if not quote.data:
+        return jsonify({'error': 'quote not found'}), 404
+    if quote.data[0]['status'] != 'awarded':
+        return jsonify({'error': 'This quote is not awarded yet — delivery challans can only be created from an awarded quote.'}), 409
+
+    project = sb.table('projects').select('id,name').eq('quotation_id', quote_id).eq('company_id', company_id).execute()
+    return jsonify({
+        'customer_name': quote.data[0].get('customer'),
+        'project': project.data[0] if project.data else None,
+    })
+
+
+@app.route('/api/delivery_challans/purchase-orders', methods=['GET'])
+def purchase_orders_for_project():
+    company_id = g.claims['company_id']
+    project_id = request.args.get('project_id')
+    if not project_id:
+        return jsonify({'purchase_orders': []})
+    sb = get_sb()
+    rows = sb.table('zoho_purchase_orders').select('id,po_number,vendor_name,po_date,status,total')\
+        .eq('company_id', company_id).eq('project_id', project_id)\
+        .order('po_date', desc=True).execute()
+    return jsonify({'purchase_orders': rows.data or []})
 
 
 # ------------------------------------------------------------------

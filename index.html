@@ -680,13 +680,32 @@ function deliveryChallansHTML(){
 
 function initNewDeliveryChallan(){
   A.dcDetail={id:null,status:'draft',challan_type:'installation',challan_date:new Date().toISOString().slice(0,10),
-    quote_id:'',project_id:'',site_id:'',customer_name:'',delivery_address:'',warehouse:'',expected_return_date:'',
+    quote_id:'',project_id:'',site_id:'',purchase_order_id:'',customer_name:'',delivery_address:'',warehouse:'',expected_return_date:'',
     vehicle_number:'',driver_name:'',packages_count:'',total_weight_kg:'',customer_notes:'',terms_conditions:'',
     items:[{item_name:'',brand:'',model_no:'',quantity:1,unit:'pcs',condition:'new',serial_numbers:[],remarks:''}]};
+  A.dcPOs=[];
   if(A.quotes==null)loadQuotes();
   if(A.projects==null)loadProjectsPage();
   if(hasFeature('fsm_module')&&A.fsmSites==null)loadFSMSites();
   draw();
+}
+// Entry point from the Quote editor's ⋯ More menu — only enabled once the
+// quote is awarded (also enforced server-side by project-for-quote). Pre-
+// fills the quote and, if the quote has already turned into a project
+// (projects.quotation_id), that project and its vendor POs too.
+async function dcStartFromQuote(){
+  const q=A.activeQuote;
+  if(!q||q.status!=='awarded')return;
+  const ctx=await api('GET','/api/delivery_challans/project-for-quote?quote_id='+q.id);
+  if(ctx.error){alert(ctx.error);return;}
+  initNewDeliveryChallan();
+  A.dcDetail.quote_id=q.id;
+  A.dcDetail.customer_name=ctx.customer_name||q.customer||'';
+  if(ctx.project){
+    A.dcDetail.project_id=ctx.project.id;
+    loadDcProjectPOs(ctx.project.id);
+  }
+  A.dcDetailId=null;A.page='deliveryChallanDetail';draw();
 }
 async function loadDeliveryChallanDetail(id){
   const r=await api('GET','/api/delivery_challans/'+id);
@@ -695,6 +714,7 @@ async function loadDeliveryChallanDetail(id){
   if(A.quotes==null)loadQuotes();
   if(A.projects==null)loadProjectsPage();
   if(hasFeature('fsm_module')&&A.fsmSites==null)loadFSMSites();
+  if(r.project_id)loadDcProjectPOs(r.project_id);else A.dcPOs=[];
   draw();
 }
 function dcAddItemRow(){A.dcDetail.items.push({item_name:'',brand:'',model_no:'',quantity:1,unit:'pcs',condition:'new',serial_numbers:[],remarks:''});draw();}
@@ -709,6 +729,18 @@ function dcOnSiteChange(siteId){
   }
   draw();
 }
+async function loadDcProjectPOs(projectId){
+  A.dcPOs=null;draw();
+  const r=await api('GET','/api/delivery_challans/purchase-orders?project_id='+projectId);
+  A.dcPOs=r.error?[]:(r.purchase_orders||[]);
+  draw();
+}
+function dcOnProjectChange(projectId){
+  A.dcDetail.project_id=projectId;
+  A.dcDetail.purchase_order_id='';
+  if(projectId)loadDcProjectPOs(projectId);else A.dcPOs=[];
+  draw();
+}
 
 async function saveDeliveryChallan(){
   const d=A.dcDetail;
@@ -716,7 +748,7 @@ async function saveDeliveryChallan(){
   if(!items.length){alert('Add at least one item');return;}
   const body={
     challan_type:d.challan_type,challan_date:d.challan_date,
-    quote_id:d.quote_id||null,project_id:d.project_id||null,site_id:d.site_id||null,
+    quote_id:d.quote_id||null,project_id:d.project_id||null,site_id:d.site_id||null,purchase_order_id:d.purchase_order_id||null,
     customer_name:d.customer_name,delivery_address:d.delivery_address,warehouse:d.warehouse,
     expected_return_date:d.challan_type==='loan_demo'?(d.expected_return_date||null):null,
     vehicle_number:d.vehicle_number,driver_name:d.driver_name,packages_count:d.packages_count,
@@ -725,7 +757,9 @@ async function saveDeliveryChallan(){
   };
   const r=d.id?await api('PUT','/api/delivery_challans/'+d.id,body):await api('POST','/api/delivery_challans',body);
   if(r.error){alert(r.error);return;}
-  A.dcDetail=r;A.dcDetailId=r.id;A.dcList=null;draw();
+  A.dcDetail=r;A.dcDetailId=r.id;A.dcList=null;
+  if(r.project_id)loadDcProjectPOs(r.project_id);
+  draw();
 }
 async function dcSetStatus(status){
   if(status==='cancelled'&&!confirm('Cancel this delivery challan?'))return;
@@ -793,13 +827,22 @@ function deliveryChallanDetailHTML(){
 
   const field=(label,inputHtml)=>`<div><div style="font-size:12px;color:var(--gray-500);margin-bottom:4px">${label}</div>${inputHtml}</div>`;
   const readonly=(label,val)=>field(label,`<div style="padding:7px 0;font-size:14px">${val?esc(String(val)):'<span style="color:var(--gray-400)">—</span>'}</div>`);
+  const poLabelRaw=po=>`${po.po_number||po.id}${po.vendor_name?' — '+po.vendor_name:''}`;
+  const poOpts=(A.dcPOs||[]).map(po=>`<option value="${po.id}" ${d.purchase_order_id===po.id?'selected':''}>${esc(poLabelRaw(po))}</option>`).join('');
+  const poField=editable?field('Purchase order',
+      !d.project_id?`<select class="iinput" disabled><option>Select a project first</option></select>`
+      :A.dcPOs==null?`<select class="iinput" disabled><option>Loading…</option></select>`
+      :!A.dcPOs.length?`<select class="iinput" disabled><option>No POs synced for this project</option></select>`
+      :`<select class="iinput" onchange="A.dcDetail.purchase_order_id=this.value">${'<option value="">— none —</option>'+poOpts}</select>`)
+    :(d.purchase_order_id?readonly('Purchase order',(()=>{const po=(A.dcPOs||[]).find(p=>p.id===d.purchase_order_id);return po?poLabelRaw(po):null;})()):'');
 
   const headerGrid=editable?`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
       ${field('Challan type',`<select class="iinput" onchange="A.dcDetail.challan_type=this.value;draw()">${Object.entries(DC_TYPE_LABELS).map(([k,l])=>`<option value="${k}" ${d.challan_type===k?'selected':''}>${l}</option>`).join('')}</select>`)}
       ${field('Challan date',`<input class="iinput" type="date" value="${d.challan_date||''}" onchange="A.dcDetail.challan_date=this.value">`)}
       ${field('Customer',`<input class="iinput" value="${esc(d.customer_name||'')}" oninput="A.dcDetail.customer_name=this.value">`)}
       ${field('Linked quote',`<select class="iinput" onchange="A.dcDetail.quote_id=this.value">${A.quotes==null?'<option>Loading…</option>':'<option value="">— none —</option>'+quoteOpts}</select>`)}
-      ${field('Project',`<select class="iinput" onchange="A.dcDetail.project_id=this.value">${A.projects==null?'<option>Loading…</option>':'<option value="">— none —</option>'+projectOpts}</select>`)}
+      ${field('Project',`<select class="iinput" onchange="dcOnProjectChange(this.value)">${A.projects==null?'<option>Loading…</option>':'<option value="">— none —</option>'+projectOpts}</select>`)}
+      ${poField}
       ${hasFeature('fsm_module')?field('Site',`<select class="iinput" onchange="dcOnSiteChange(this.value)">${A.fsmSites==null?'<option>Loading…</option>':'<option value="">— none —</option>'+siteOpts}</select>`):field('Delivery address',`<input class="iinput" value="${esc(d.delivery_address||'')}" oninput="A.dcDetail.delivery_address=this.value">`)}
       ${field('Warehouse',`<input class="iinput" value="${esc(d.warehouse||'')}" oninput="A.dcDetail.warehouse=this.value">`)}
       ${d.challan_type==='loan_demo'?field('Expected return date',`<input class="iinput" type="date" value="${d.expected_return_date||''}" onchange="A.dcDetail.expected_return_date=this.value">`):''}
@@ -809,6 +852,7 @@ function deliveryChallanDetailHTML(){
       ${readonly('Challan date',d.challan_date?new Date(d.challan_date).toLocaleDateString():'')}
       ${readonly('Customer',d.customer_name)}
       ${readonly('Project',(A.projects||[]).find(p=>p.id===d.project_id)?.name)}
+      ${poField}
       ${readonly('Site',(A.fsmSites||[]).find(s=>s.id===d.site_id)?.name)}
       ${readonly('Warehouse',d.warehouse)}
       ${d.challan_type==='loan_demo'?readonly('Expected return date',d.expected_return_date?new Date(d.expected_return_date).toLocaleDateString():''):''}
@@ -3493,6 +3537,9 @@ function buildTopbarRight(){
         <div class="mp-divider"></div>
         <button onclick="duplicateCurrentQuote()" title="Create an editable copy of this quote">⧉ Duplicate quote</button>
         <button onclick="closeMoreMenu();downloadPDF()" title="Export this quote as a PDF">⬇ Export PDF</button>
+        ${hasFeature('delivery_challans')&&hasPageAccess('deliveryChallans')?`
+        <div class="mp-divider"></div>
+        <button ${A.activeQuote?.status==='awarded'?`onclick="closeMoreMenu();dcStartFromQuote()"`:'disabled style="color:var(--gray-400);cursor:not-allowed"'} title="${A.activeQuote?.status==='awarded'?'Create a delivery challan pre-linked to this quote':'Only available once this quote is awarded'}">🚚 Create Delivery Challan</button>`:''}
       </div>
     </div>`;
   if(A.page==='products')return`

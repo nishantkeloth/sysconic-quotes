@@ -54,6 +54,10 @@ create table if not exists delivery_challans (
   quote_id uuid references quotes(id) on delete set null,
   project_id uuid references projects(id) on delete set null,
   site_id uuid references fsm_sites(id) on delete set null,
+  -- The vendor PO this delivery fulfills, e.g. "these are the units that
+  -- arrived against PO-2026-0031" -- scoped to whichever project the
+  -- challan is linked to (see purchase-orders endpoint in the backend).
+  purchase_order_id uuid references zoho_purchase_orders(id) on delete set null,
 
   customer_name text,
   delivery_address text,
