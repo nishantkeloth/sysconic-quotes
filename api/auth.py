@@ -522,10 +522,19 @@ def invite():
         if not email:
             return jsonify({'error': 'Email required'}), 400
 
-        # Check if already a member
+        # Check if already a member of THIS company
         existing = sb.table('users').select('id').eq('email', email).eq('company_id', claims['company_id']).execute()
         if existing.data:
             return jsonify({'error': 'This email is already a team member'}), 409
+
+        # users.email is globally unique (not just per-company) -- an email
+        # already registered under a *different* company would otherwise pass
+        # the check above, then fail later at accept-invite time with a raw
+        # duplicate-key error. Catch it here instead, while it's still
+        # actionable for the person sending the invite.
+        elsewhere = sb.table('users').select('id').eq('email', email).execute()
+        if elsewhere.data:
+            return jsonify({'error': 'This email is already registered to an account on another company. Use a different email address.'}), 409
 
         token = str(uuid.uuid4())
         sb.table('invites').insert({
@@ -587,12 +596,18 @@ def accept_invite():
                 return jsonify({'error': "This company has reached its plan's user limit. Contact your administrator."}), 403
 
         pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-        user = sb.table('users').insert({
-            'company_id': invite['company_id'], 'email': invite['email'],
-            'name': name, 'role': invite['role'],
-            'can_review': invite.get('can_review', False), 'can_view_all_quotes': invite.get('can_view_all_quotes', False),
-            'password_hash': pw_hash, 'invited_by': invite['invited_by']
-        }).execute().data[0]
+        try:
+            user = sb.table('users').insert({
+                'company_id': invite['company_id'], 'email': invite['email'],
+                'name': name, 'role': invite['role'],
+                'can_review': invite.get('can_review', False), 'can_view_all_quotes': invite.get('can_view_all_quotes', False),
+                'password_hash': pw_hash, 'invited_by': invite['invited_by']
+            }).execute().data[0]
+        except Exception as e:
+            traceback.print_exc()
+            if 'users_email_key' in str(e):
+                return jsonify({'error': 'An account with this email already exists. Ask your administrator to send a new invite to a different address, or sign in instead.'}), 409
+            raise
 
         sb.table('invites').update({'accepted': True}).eq('token', token).execute()
         co  = sb.table('companies').select('*').eq('id', invite['company_id']).execute().data[0]
