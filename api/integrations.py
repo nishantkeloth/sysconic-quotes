@@ -926,6 +926,12 @@ def _estimate_line_items(option, pricing_type):
     items = []
     for s in (option.get('sections') or []):
         for it in (s.get('items') or []):
+            # TEMP DIAGNOSTIC (remove once Brand/Model-to-Zoho mapping is
+            # confirmed working) -- dumps the raw item dict's keys and its
+            # brand/model values exactly as stored in quote_data, so we can
+            # tell whether Brand/Model genuinely isn't set on these items
+            # vs. being stored under a different key than expected.
+            print(f"[zoho-item-debug] item keys={sorted(it.keys())} brand={it.get('brand')!r} model={it.get('model')!r} desc={(it.get('desc') or '')[:60]!r}")
             items.append({
                 'description': it.get('desc') or '',
                 'rate': _calc_item_sell(it, pricing_type),
