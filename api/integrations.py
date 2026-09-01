@@ -252,10 +252,13 @@ class ZohoAdapter:
             print(f"[zoho-cf-debug] code={data.get('code')!r} message={data.get('message')!r} "
                   f"raw_type={type(raw).__name__} top_keys={list(data.keys())}")
             if isinstance(raw, dict):
-                print(f"[zoho-cf-debug] customfields is a DICT, {len(raw)} keys; sample keys={list(raw.keys())[:10]}")
-                sample_items = list(raw.items())[:5]
-                print(f"[zoho-cf-debug] sample key->value pairs: {sample_items}")
-                fields = list(raw.values())
+                print(f"[zoho-cf-debug] customfields is a DICT, {len(raw)} keys; this org's entity filter is ignored "
+                      f"by Zoho and it returns ALL modules -- looking for the 'estimate' key specifically.")
+                estimate_keys = [k for k in raw.keys() if 'estimate' in k.lower()]
+                print(f"[zoho-cf-debug] keys containing 'estimate': {estimate_keys}")
+                for k in estimate_keys:
+                    print(f"[zoho-cf-debug] raw['{k}'] = {raw[k]!r}"[:2000])
+                fields = raw.get('estimate') or []
             elif isinstance(raw, list):
                 print(f"[zoho-cf-debug] customfields is a LIST, {len(raw)} entries; sample={raw[:10]}")
                 fields = raw
