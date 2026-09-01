@@ -243,6 +243,16 @@ class ZohoAdapter:
         try:
             data = self._get(creds, '/settings/customfields', {'entity': 'estimate.line_item'})
             fields = data.get('customfields') or data.get('customfieldsettings') or data.get('custom_fields') or []
+            # TEMP DIAGNOSTIC (remove once Brand/Model-to-Zoho mapping is
+            # confirmed working) -- prints to stdout, visible in Vercel
+            # function logs, so we can see exactly what this org's
+            # /settings/customfields?entity=estimate.line_item call returns
+            # without needing direct Zoho API access.
+            print(f"[zoho-cf-debug] entity=estimate.line_item raw keys={list(data.keys())} field_count={len(fields)}")
+            for f in fields:
+                print(f"[zoho-cf-debug] field label={f.get('label')!r} field_name={f.get('field_name')!r} "
+                      f"placeholder={f.get('placeholder')!r} customfield_id={f.get('customfield_id')!r} "
+                      f"field_id={f.get('field_id')!r}")
             for f in fields:
                 label = (f.get('label') or f.get('field_name') or f.get('placeholder') or '').strip().lower()
                 fid = f.get('customfield_id') or f.get('field_id') or f.get('customfield_id_formatted')
@@ -251,8 +261,9 @@ class ZohoAdapter:
                     ids['brand'] = fid
                 elif label in ('model no', 'model no.', 'model number', 'model'):
                     ids['model'] = fid
-        except Exception:
-            pass
+            print(f"[zoho-cf-debug] resolved ids={ids}")
+        except Exception as e:
+            print(f"[zoho-cf-debug] EXCEPTION discovering line-item custom fields: {e!r}")
         self._li_cf_cache = ids
         return ids
 
@@ -350,10 +361,21 @@ class ZohoAdapter:
             if header_custom_fields:
                 body['custom_fields'] = header_custom_fields
 
+        # TEMP DIAGNOSTIC (remove once Brand/Model-to-Zoho mapping is
+        # confirmed working) -- shows exactly what line-item payload we sent
+        # (cf_ids resolved, and whether each item carried custom_fields) and
+        # what Zoho echoed back for those same items, side by side.
+        print(f"[zoho-est-debug] cf_ids={cf_ids} sending {len(zoho_items)} line item(s)")
+        for it in zoho_items:
+            print(f"[zoho-est-debug] -> name={it.get('name')!r} custom_fields={it.get('custom_fields')}")
+
         r = self._post(creds, '/estimates', body)
         est = r.get('estimate') or {}
         if not est.get('estimate_id'):
             raise RuntimeError('Zoho did not return an estimate id: ' + json.dumps(r)[:200])
+        for it in (est.get('line_items') or []):
+            print(f"[zoho-est-debug] <- echoed name={it.get('name')!r} "
+                  f"custom_fields={it.get('custom_fields')} item_custom_fields={it.get('item_custom_fields')}")
         return est
 
     # ── Project Performance actuals fetch ───────────────────────────────────
