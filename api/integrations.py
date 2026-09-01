@@ -242,16 +242,26 @@ class ZohoAdapter:
         ids = {}
         try:
             data = self._get(creds, '/settings/customfields', {'entity': 'estimate.line_item'})
-            fields = data.get('customfields') or data.get('customfieldsettings') or data.get('custom_fields') or []
+            raw = data.get('customfields') or data.get('customfieldsettings') or data.get('custom_fields') or []
             # TEMP DIAGNOSTIC (remove once Brand/Model-to-Zoho mapping is
             # confirmed working) -- prints to stdout, visible in Vercel
-            # function logs, so we can see exactly what this org's
-            # /settings/customfields?entity=estimate.line_item call returns
-            # without needing direct Zoho API access.
-            print(f"[zoho-cf-debug] entity=estimate.line_item code={data.get('code')!r} message={data.get('message')!r} "
-                  f"raw keys={list(data.keys())} field_count={len(fields)}")
-            print(f"[zoho-cf-debug] first 10 raw field entries (type + value): "
-                  f"{[(type(f).__name__, f) for f in fields[:10]]}")
+            # function logs. First two runs assumed `raw` was a list of field
+            # objects; a KeyError(slice(...)) on `raw[:10]` proved it's
+            # actually a dict for this org, so this version handles both
+            # shapes and dumps real samples instead of guessing further.
+            print(f"[zoho-cf-debug] code={data.get('code')!r} message={data.get('message')!r} "
+                  f"raw_type={type(raw).__name__} top_keys={list(data.keys())}")
+            if isinstance(raw, dict):
+                print(f"[zoho-cf-debug] customfields is a DICT, {len(raw)} keys; sample keys={list(raw.keys())[:10]}")
+                sample_items = list(raw.items())[:5]
+                print(f"[zoho-cf-debug] sample key->value pairs: {sample_items}")
+                fields = list(raw.values())
+            elif isinstance(raw, list):
+                print(f"[zoho-cf-debug] customfields is a LIST, {len(raw)} entries; sample={raw[:10]}")
+                fields = raw
+            else:
+                print(f"[zoho-cf-debug] customfields is unexpected type {type(raw).__name__}: {raw!r}"[:500])
+                fields = []
             for f in fields:
                 if not isinstance(f, dict):
                     continue  # this org's response for this entity isn't field objects -- see raw dump above
@@ -926,12 +936,6 @@ def _estimate_line_items(option, pricing_type):
     items = []
     for s in (option.get('sections') or []):
         for it in (s.get('items') or []):
-            # TEMP DIAGNOSTIC (remove once Brand/Model-to-Zoho mapping is
-            # confirmed working) -- dumps the raw item dict's keys and its
-            # brand/model values exactly as stored in quote_data, so we can
-            # tell whether Brand/Model genuinely isn't set on these items
-            # vs. being stored under a different key than expected.
-            print(f"[zoho-item-debug] item keys={sorted(it.keys())} brand={it.get('brand')!r} model={it.get('model')!r} desc={(it.get('desc') or '')[:60]!r}")
             items.append({
                 'description': it.get('desc') or '',
                 'rate': _calc_item_sell(it, pricing_type),
