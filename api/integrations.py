@@ -248,12 +248,13 @@ class ZohoAdapter:
             # function logs, so we can see exactly what this org's
             # /settings/customfields?entity=estimate.line_item call returns
             # without needing direct Zoho API access.
-            print(f"[zoho-cf-debug] entity=estimate.line_item raw keys={list(data.keys())} field_count={len(fields)}")
+            print(f"[zoho-cf-debug] entity=estimate.line_item code={data.get('code')!r} message={data.get('message')!r} "
+                  f"raw keys={list(data.keys())} field_count={len(fields)}")
+            print(f"[zoho-cf-debug] first 10 raw field entries (type + value): "
+                  f"{[(type(f).__name__, f) for f in fields[:10]]}")
             for f in fields:
-                print(f"[zoho-cf-debug] field label={f.get('label')!r} field_name={f.get('field_name')!r} "
-                      f"placeholder={f.get('placeholder')!r} customfield_id={f.get('customfield_id')!r} "
-                      f"field_id={f.get('field_id')!r}")
-            for f in fields:
+                if not isinstance(f, dict):
+                    continue  # this org's response for this entity isn't field objects -- see raw dump above
                 label = (f.get('label') or f.get('field_name') or f.get('placeholder') or '').strip().lower()
                 fid = f.get('customfield_id') or f.get('field_id') or f.get('customfield_id_formatted')
                 if not fid: continue
