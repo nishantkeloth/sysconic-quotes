@@ -227,57 +227,29 @@ class ZohoAdapter:
         return None
 
     def _line_item_custom_field_ids(self, creds):
-        """Discovers this org's custom field IDs for 'Brand' and 'Model No'
-        on estimate line items, matched by label (case-insensitive) since
-        Zoho generates these IDs per-org -- they can't be hardcoded. Cached
-        on the adapter instance for the lifetime of one request (multiple
-        line items share the same lookup instead of repeating it).
-        `entity=estimate.line_item` is Zoho's documented parameter for
-        estimate-line-item-level custom fields, but hasn't been confirmed
-        against this specific org yet -- if the label match comes back
-        empty, brand/model just won't populate on the Zoho side (this never
-        blocks estimate creation either way)."""
+        """Discovers this org's custom field IDs for 'Brand' and 'Model No'.
+        CONFIRMED (2026-09-01, live diagnostic against Nish's org): these are
+        ITEM-level custom fields (Settings > Custom Fields > Items in Zoho
+        Books), not Estimate-level ones -- Zoho surfaces Item custom fields
+        as columns in every transaction's line-item table (Quotes/Estimates,
+        Invoices, etc.), which is why they show up on the New Quote screen
+        even though they're not configured under the Estimate module.
+        /settings/customfields ignores its `entity` query param entirely for
+        this org and always returns one dict keyed by module name across the
+        whole organisation (e.g. {'estimate': [...], 'item': [...], ...]});
+        Brand/Model live under raw['item']. Matched by label
+        (case-insensitive) since the IDs themselves are per-org. Cached on
+        the adapter instance for the lifetime of one request."""
         if getattr(self, '_li_cf_cache', None) is not None:
             return self._li_cf_cache
         ids = {}
         try:
-            data = self._get(creds, '/settings/customfields', {'entity': 'estimate.line_item'})
-            raw = data.get('customfields') or data.get('customfieldsettings') or data.get('custom_fields') or []
-            # TEMP DIAGNOSTIC (remove once Brand/Model-to-Zoho mapping is
-            # confirmed working) -- prints to stdout, visible in Vercel
-            # function logs. First two runs assumed `raw` was a list of field
-            # objects; a KeyError(slice(...)) on `raw[:10]` proved it's
-            # actually a dict for this org, so this version handles both
-            # shapes and dumps real samples instead of guessing further.
-            print(f"[zoho-cf-debug] code={data.get('code')!r} message={data.get('message')!r} "
-                  f"raw_type={type(raw).__name__} top_keys={list(data.keys())}")
-            if isinstance(raw, dict):
-                print(f"[zoho-cf-debug] ALL {len(raw)} keys: {sorted(raw.keys())}")
-                # 'estimate' only holds the header-level Profit Margin fields
-                # (confirmed against Nish's screenshot of the New Quote
-                # screen -- Profit Margin/% sit above the item table, Brand/
-                # Model No are columns INSIDE the item table). So Brand/Model
-                # must live under some other module key -- checking every
-                # plausible name for the line-item-scoped variant.
-                candidates = ['estimate', 'estimate_item', 'estimateitem', 'estimate_line_item',
-                              'quote', 'quote_item', 'quoteitem', 'quote_line_item',
-                              'salesorder', 'salesorder_item', 'salesorderitem', 'item',
-                              'lineitem', 'line_item', 'sales_item', 'salesitem']
-                for k in candidates:
-                    if k in raw:
-                        print(f"[zoho-cf-debug] raw[{k!r}] = {raw[k]!r}"[:2000])
-                non_empty = {k: v for k, v in raw.items() if v}
-                print(f"[zoho-cf-debug] ALL non-empty module keys (have >=1 custom field): {sorted(non_empty.keys())}")
-                fields = raw.get('estimate') or []
-            elif isinstance(raw, list):
-                print(f"[zoho-cf-debug] customfields is a LIST, {len(raw)} entries; sample={raw[:10]}")
-                fields = raw
-            else:
-                print(f"[zoho-cf-debug] customfields is unexpected type {type(raw).__name__}: {raw!r}"[:500])
-                fields = []
-            for f in fields:
+            data = self._get(creds, '/settings/customfields', {'entity': 'item'})
+            raw = data.get('customfields') or {}
+            fields = raw.get('item') if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
+            for f in (fields or []):
                 if not isinstance(f, dict):
-                    continue  # this org's response for this entity isn't field objects -- see raw dump above
+                    continue
                 label = (f.get('label') or f.get('field_name') or f.get('placeholder') or '').strip().lower()
                 fid = f.get('customfield_id') or f.get('field_id') or f.get('customfield_id_formatted')
                 if not fid: continue
@@ -285,9 +257,8 @@ class ZohoAdapter:
                     ids['brand'] = fid
                 elif label in ('model no', 'model no.', 'model number', 'model'):
                     ids['model'] = fid
-            print(f"[zoho-cf-debug] resolved ids={ids}")
-        except Exception as e:
-            print(f"[zoho-cf-debug] EXCEPTION discovering line-item custom fields: {e!r}")
+        except Exception:
+            pass
         self._li_cf_cache = ids
         return ids
 
@@ -338,7 +309,12 @@ class ZohoAdapter:
         field for exactly this (project-based billing/tracking/reporting),
         confirmed against Zoho's own API reference. Passed straight through
         (unlike Brand/Model/Profit Margin, this isn't a custom field, so no
-        org-specific discovery step is needed)."""
+        org-specific discovery step is needed).
+        Brand/Model use the `item_custom_fields` key per line item (not
+        `custom_fields`, which is for header-level fields) -- confirmed by
+        the fact that Zoho always echoes an `item_custom_fields` key back on
+        each returned line item (empty when nothing was sent), but never
+        echoes `custom_fields` there at all."""
         cf_ids = self._line_item_custom_field_ids(creds) if any(li.get('brand') or li.get('model') for li in line_items) else {}
         zoho_items = []
         for li in line_items:
@@ -349,13 +325,13 @@ class ZohoAdapter:
                 'quantity': float(li.get('quantity') or 1),
                 'discount': 0,
             }
-            custom_fields = []
+            item_custom_fields = []
             if li.get('brand') and cf_ids.get('brand'):
-                custom_fields.append({'customfield_id': cf_ids['brand'], 'value': li['brand']})
+                item_custom_fields.append({'customfield_id': cf_ids['brand'], 'value': li['brand']})
             if li.get('model') and cf_ids.get('model'):
-                custom_fields.append({'customfield_id': cf_ids['model'], 'value': li['model']})
-            if custom_fields:
-                item['custom_fields'] = custom_fields
+                item_custom_fields.append({'customfield_id': cf_ids['model'], 'value': li['model']})
+            if item_custom_fields:
+                item['item_custom_fields'] = item_custom_fields
             if li.get('tax_rate'):
                 tax_id = self._tax_id_for_rate(creds, li['tax_rate'])
                 if tax_id:
@@ -385,21 +361,10 @@ class ZohoAdapter:
             if header_custom_fields:
                 body['custom_fields'] = header_custom_fields
 
-        # TEMP DIAGNOSTIC (remove once Brand/Model-to-Zoho mapping is
-        # confirmed working) -- shows exactly what line-item payload we sent
-        # (cf_ids resolved, and whether each item carried custom_fields) and
-        # what Zoho echoed back for those same items, side by side.
-        print(f"[zoho-est-debug] cf_ids={cf_ids} sending {len(zoho_items)} line item(s)")
-        for it in zoho_items:
-            print(f"[zoho-est-debug] -> name={it.get('name')!r} custom_fields={it.get('custom_fields')}")
-
         r = self._post(creds, '/estimates', body)
         est = r.get('estimate') or {}
         if not est.get('estimate_id'):
             raise RuntimeError('Zoho did not return an estimate id: ' + json.dumps(r)[:200])
-        for it in (est.get('line_items') or []):
-            print(f"[zoho-est-debug] <- echoed name={it.get('name')!r} "
-                  f"custom_fields={it.get('custom_fields')} item_custom_fields={it.get('item_custom_fields')}")
         return est
 
     # ── Project Performance actuals fetch ───────────────────────────────────
