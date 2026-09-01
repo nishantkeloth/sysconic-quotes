@@ -252,12 +252,22 @@ class ZohoAdapter:
             print(f"[zoho-cf-debug] code={data.get('code')!r} message={data.get('message')!r} "
                   f"raw_type={type(raw).__name__} top_keys={list(data.keys())}")
             if isinstance(raw, dict):
-                print(f"[zoho-cf-debug] customfields is a DICT, {len(raw)} keys; this org's entity filter is ignored "
-                      f"by Zoho and it returns ALL modules -- looking for the 'estimate' key specifically.")
-                estimate_keys = [k for k in raw.keys() if 'estimate' in k.lower()]
-                print(f"[zoho-cf-debug] keys containing 'estimate': {estimate_keys}")
-                for k in estimate_keys:
-                    print(f"[zoho-cf-debug] raw['{k}'] = {raw[k]!r}"[:2000])
+                print(f"[zoho-cf-debug] ALL {len(raw)} keys: {sorted(raw.keys())}")
+                # 'estimate' only holds the header-level Profit Margin fields
+                # (confirmed against Nish's screenshot of the New Quote
+                # screen -- Profit Margin/% sit above the item table, Brand/
+                # Model No are columns INSIDE the item table). So Brand/Model
+                # must live under some other module key -- checking every
+                # plausible name for the line-item-scoped variant.
+                candidates = ['estimate', 'estimate_item', 'estimateitem', 'estimate_line_item',
+                              'quote', 'quote_item', 'quoteitem', 'quote_line_item',
+                              'salesorder', 'salesorder_item', 'salesorderitem', 'item',
+                              'lineitem', 'line_item', 'sales_item', 'salesitem']
+                for k in candidates:
+                    if k in raw:
+                        print(f"[zoho-cf-debug] raw[{k!r}] = {raw[k]!r}"[:2000])
+                non_empty = {k: v for k, v in raw.items() if v}
+                print(f"[zoho-cf-debug] ALL non-empty module keys (have >=1 custom field): {sorted(non_empty.keys())}")
                 fields = raw.get('estimate') or []
             elif isinstance(raw, list):
                 print(f"[zoho-cf-debug] customfields is a LIST, {len(raw)} entries; sample={raw[:10]}")
