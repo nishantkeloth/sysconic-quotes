@@ -1,10 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Stage, Layer, Rect, Line, Text } from 'react-konva';
+import { Stage, Layer, Rect, Line, Text, Arc, Circle } from 'react-konva';
 import type Konva from 'konva';
 import type { AnyRoomObject, AvRoom } from '../types';
 import { getObjectKey } from '../types';
 import { libraryEntry } from '../deviceLibrary';
 import { toMeters, fromMeters } from '../units';
+import {
+  overlayKind,
+  getCameraOverlay,
+  getMicOverlay,
+  getDisplayOverlay,
+  facingToKonvaDegrees,
+} from '../overlays';
 
 // Room floorplan convention used throughout this component: `width` is the
 // room's X-axis (left-right) extent, `length` is its Y-axis (front-back /
@@ -22,6 +29,7 @@ export default function RoomCanvas2D({
   onSelect,
   onMoveObject,
   onDropCategory,
+  showOverlays,
 }: {
   room: AvRoom;
   objects: AnyRoomObject[];
@@ -29,6 +37,7 @@ export default function RoomCanvas2D({
   onSelect: (key: string | null) => void;
   onMoveObject: (key: string, positionX: number, positionY: number) => void;
   onDropCategory: (category: string, positionX: number, positionY: number) => void;
+  showOverlays: boolean;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
@@ -124,6 +133,78 @@ export default function RoomCanvas2D({
               strokeWidth={1}
             />
           ))}
+
+          {/* Engineering overlays (camera FOV / mic pickup / display viewing
+              zone), drawn below the device shapes so devices stay clickable
+              and visually on top. listening={false} on every overlay shape
+              so they never intercept clicks meant for the device or the
+              stage's own deselect-on-empty-click handler. */}
+          {showOverlays &&
+            objects.map((obj) => {
+              const kind = overlayKind(obj.category as string);
+              if (!kind) return null;
+              const key = getObjectKey(obj);
+              const xM = toMeters(obj.position_x, room.units);
+              const yM = toMeters(obj.position_y, room.units);
+              const px = originX + xM * ppm;
+              const py = originY + yM * ppm;
+              const facing = facingToKonvaDegrees(obj.rotation_z || 0);
+
+              if (kind === 'camera') {
+                const ov = getCameraOverlay(obj, room.units);
+                const rangeM = toMeters(ov.fov_range, room.units);
+                return (
+                  <Arc
+                    key={`${key}-ov`}
+                    x={px}
+                    y={py}
+                    innerRadius={0}
+                    outerRadius={Math.max(rangeM * ppm, 1)}
+                    angle={ov.fov_h}
+                    rotation={facing - ov.fov_h / 2}
+                    fill="rgba(37, 99, 235, 0.18)"
+                    stroke="rgba(37, 99, 235, 0.4)"
+                    strokeWidth={1}
+                    listening={false}
+                  />
+                );
+              }
+              if (kind === 'mic') {
+                const ov = getMicOverlay(obj, room.units);
+                const radiusM = toMeters(ov.pickup_radius, room.units);
+                return (
+                  <Circle
+                    key={`${key}-ov`}
+                    x={px}
+                    y={py}
+                    radius={Math.max(radiusM * ppm, 1)}
+                    fill="rgba(22, 163, 74, 0.14)"
+                    stroke="rgba(22, 163, 74, 0.35)"
+                    strokeWidth={1}
+                    listening={false}
+                  />
+                );
+              }
+              // display
+              const ov = getDisplayOverlay(obj, room.units);
+              const minM = toMeters(ov.viewing_distance_min, room.units);
+              const maxM = toMeters(ov.viewing_distance_max, room.units);
+              return (
+                <Arc
+                  key={`${key}-ov`}
+                  x={px}
+                  y={py}
+                  innerRadius={Math.max(minM * ppm, 1)}
+                  outerRadius={Math.max(maxM * ppm, 2)}
+                  angle={ov.viewing_angle}
+                  rotation={facing - ov.viewing_angle / 2}
+                  fill="rgba(217, 119, 6, 0.14)"
+                  stroke="rgba(217, 119, 6, 0.35)"
+                  strokeWidth={1}
+                  listening={false}
+                />
+              );
+            })}
 
           {objects.map((obj) => {
             const key = getObjectKey(obj);

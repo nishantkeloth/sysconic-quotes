@@ -5,6 +5,7 @@ import { libraryEntry } from '../deviceLibrary';
 import { UNIT_LABELS } from '../units';
 import ProductPickerModal from './ProductPickerModal';
 import type { ProductSearchResult } from '../api/client';
+import { overlayKind, getCameraOverlay, getMicOverlay, getDisplayOverlay } from '../overlays';
 
 // Right sidebar: editable fields for whichever object is currently
 // selected on the canvas. All numeric fields are in the room's own units
@@ -61,6 +62,12 @@ export default function DevicePropertiesPanel({
     const { mapped_product, ...restMeta } = object!.metadata_json as Record<string, unknown>;
     onChange({ product_id: null, metadata_json: restMeta });
   }
+
+  function patchMeta(patch: Record<string, unknown>) {
+    onChange({ metadata_json: { ...object!.metadata_json, ...patch } });
+  }
+
+  const kind = overlayKind(object.category as string);
 
   return (
     <div className="avrd-sidebar-right">
@@ -165,6 +172,85 @@ export default function DevicePropertiesPanel({
             }
           />
         </div>
+      )}
+
+      <div className="avrd-field">
+        <label>Facing (rotation °)</label>
+        <input
+          type="number"
+          step="any"
+          value={object.rotation_z}
+          onChange={(e) => onChange({ rotation_z: Number(e.target.value) % 360 })}
+        />
+      </div>
+
+      {kind === 'camera' && (
+        <div className="avrd-modal-row">
+          <div className="avrd-field" style={{ flex: 1 }}>
+            <label>Field of view (°)</label>
+            <input
+              type="number"
+              step="any"
+              value={getCameraOverlay(object, units).fov_h}
+              onChange={(e) => patchMeta({ fov_h: Number(e.target.value) })}
+            />
+          </div>
+          <div className="avrd-field" style={{ flex: 1 }}>
+            <label>Range ({unitLabel})</label>
+            <input
+              type="number"
+              step="any"
+              value={getCameraOverlay(object, units).fov_range}
+              onChange={(e) => patchMeta({ fov_range: Number(e.target.value) })}
+            />
+          </div>
+        </div>
+      )}
+
+      {kind === 'mic' && (
+        <div className="avrd-field">
+          <label>Pickup radius ({unitLabel})</label>
+          <input
+            type="number"
+            step="any"
+            value={getMicOverlay(object, units).pickup_radius}
+            onChange={(e) => patchMeta({ pickup_radius: Number(e.target.value) })}
+          />
+        </div>
+      )}
+
+      {kind === 'display' && (
+        <>
+          <div className="avrd-modal-row">
+            <div className="avrd-field" style={{ flex: 1 }}>
+              <label>Min viewing dist. ({unitLabel})</label>
+              <input
+                type="number"
+                step="any"
+                value={getDisplayOverlay(object, units).viewing_distance_min}
+                onChange={(e) => patchMeta({ viewing_distance_min: Number(e.target.value) })}
+              />
+            </div>
+            <div className="avrd-field" style={{ flex: 1 }}>
+              <label>Max viewing dist. ({unitLabel})</label>
+              <input
+                type="number"
+                step="any"
+                value={getDisplayOverlay(object, units).viewing_distance_max}
+                onChange={(e) => patchMeta({ viewing_distance_max: Number(e.target.value) })}
+              />
+            </div>
+          </div>
+          <div className="avrd-field">
+            <label>Viewing angle (°)</label>
+            <input
+              type="number"
+              step="any"
+              value={getDisplayOverlay(object, units).viewing_angle}
+              onChange={(e) => patchMeta({ viewing_angle: Number(e.target.value) })}
+            />
+          </div>
+        </>
       )}
 
       <div className="avrd-field">

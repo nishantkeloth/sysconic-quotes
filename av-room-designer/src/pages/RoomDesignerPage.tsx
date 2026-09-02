@@ -42,6 +42,7 @@ export default function RoomDesignerPage({
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [showOverlays, setShowOverlays] = useState(true);
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipNextAutosave = useRef(true); // don't autosave on initial load
@@ -165,6 +166,13 @@ export default function RoomDesignerPage({
         <div className="avrd-canvas-toolbar">
           <button onClick={onBack}>← Back</button>
           <span style={{ padding: '6px 10px', fontWeight: 600 }}>{room.room_name}</span>
+          <button
+            className={showOverlays ? 'active' : ''}
+            onClick={() => setShowOverlays((v) => !v)}
+            title="Toggle camera FOV / mic pickup / display viewing-distance overlays"
+          >
+            {showOverlays ? 'Overlays: On' : 'Overlays: Off'}
+          </button>
         </div>
         <div
           className={`avrd-save-status ${saveStatus}`}
@@ -183,6 +191,7 @@ export default function RoomDesignerPage({
           onSelect={setSelectedKey}
           onMoveObject={handleMoveObject}
           onDropCategory={handleDropCategory}
+          showOverlays={showOverlays}
         />
       </div>
 
