@@ -1,0 +1,25 @@
+{
+  "name": "av-room-designer",
+  "private": true,
+  "version": "0.1.0",
+  "description": "QTcal AV Room Designer — standalone React micro-app (2D room canvas, device library, product mapping). Built separately from the main QTcal frontend (a vanilla-JS single-page index.html) because a real-time canvas editor needs persistent DOM/render state that the main app's full innerHTML re-render pattern would destroy on every interaction. Talks to the existing QTcal backend (api/auth.py, api/av_rooms.py) over the same JWT bearer-token API — no new backend of its own.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "konva": "^9.3.16",
+    "react-konva": "^18.2.10"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.11"
+  }
+}
