@@ -252,11 +252,14 @@ class ZohoAdapter:
                     continue
                 label = (f.get('label') or f.get('field_name') or f.get('placeholder') or '').strip().lower()
                 fid = f.get('customfield_id') or f.get('field_id') or f.get('customfield_id_formatted')
+                api_name = f.get('api_name') or f.get('placeholder')
                 if not fid: continue
                 if label == 'brand':
                     ids['brand'] = fid
+                    ids['brand_api_name'] = api_name
                 elif label in ('model no', 'model no.', 'model number', 'model'):
                     ids['model'] = fid
+                    ids['model_api_name'] = api_name
         except Exception:
             pass
         self._li_cf_cache = ids
@@ -325,16 +328,27 @@ class ZohoAdapter:
                 'quantity': float(li.get('quantity') or 1),
                 'discount': 0,
             }
+            # TEMP: trying two different write shapes at once since the
+            # formal item_custom_fields=[{customfield_id,value}] array came
+            # back empty on the last test -- also trying the api_name
+            # shorthand (cf_brand/cf_model_no as direct keys), a pattern
+            # Zoho uses elsewhere for setting custom fields. Whichever one
+            # (if either) actually survives will show up in the echoed
+            # response and we'll drop the other.
             item_custom_fields = []
             if li.get('brand') and cf_ids.get('brand'):
                 item_custom_fields.append({'customfield_id': cf_ids['brand'], 'value': li['brand']})
+                if cf_ids.get('brand_api_name'):
+                    item[cf_ids['brand_api_name']] = li['brand']
             if li.get('model') and cf_ids.get('model'):
                 item_custom_fields.append({'customfield_id': cf_ids['model'], 'value': li['model']})
+                if cf_ids.get('model_api_name'):
+                    item[cf_ids['model_api_name']] = li['model']
             if item_custom_fields:
                 item['item_custom_fields'] = item_custom_fields
-            # TEMP DIAGNOSTIC round 2 (remove once confirmed working)
+            # TEMP DIAGNOSTIC round 3 (remove once confirmed working)
             print(f"[zoho-fix-debug] cf_ids={cf_ids} li.brand={li.get('brand')!r} li.model={li.get('model')!r} "
-                  f"-> item_custom_fields={item_custom_fields}")
+                  f"-> item payload keys sent={ {k: v for k, v in item.items() if k not in ('description',)} }")
             if li.get('tax_rate'):
                 tax_id = self._tax_id_for_rate(creds, li['tax_rate'])
                 if tax_id:
@@ -368,9 +382,9 @@ class ZohoAdapter:
         est = r.get('estimate') or {}
         if not est.get('estimate_id'):
             raise RuntimeError('Zoho did not return an estimate id: ' + json.dumps(r)[:200])
-        # TEMP DIAGNOSTIC round 2 (remove once confirmed working)
+        # TEMP DIAGNOSTIC round 3 (remove once confirmed working)
         for it in (est.get('line_items') or []):
-            print(f"[zoho-fix-debug] echoed name={it.get('name')!r} item_custom_fields={it.get('item_custom_fields')}")
+            print(f"[zoho-fix-debug] echoed FULL line item = {it!r}"[:3000])
         return est
 
     # ── Project Performance actuals fetch ───────────────────────────────────
