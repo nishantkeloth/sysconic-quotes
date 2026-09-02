@@ -250,16 +250,22 @@ class ZohoAdapter:
             for f in (fields or []):
                 if not isinstance(f, dict):
                     continue
-                label = (f.get('label') or f.get('field_name') or f.get('placeholder') or '').strip().lower()
+                label_raw = (f.get('label') or f.get('field_name') or f.get('placeholder') or '')
+                label = label_raw.strip().lower()
                 fid = f.get('customfield_id') or f.get('field_id') or f.get('customfield_id_formatted')
                 api_name = f.get('api_name') or f.get('placeholder')
+                idx = f.get('index')
                 if not fid: continue
                 if label == 'brand':
                     ids['brand'] = fid
                     ids['brand_api_name'] = api_name
+                    ids['brand_label'] = label_raw
+                    ids['brand_index'] = idx
                 elif label in ('model no', 'model no.', 'model number', 'model'):
                     ids['model'] = fid
                     ids['model_api_name'] = api_name
+                    ids['model_label'] = label_raw
+                    ids['model_index'] = idx
         except Exception:
             pass
         self._li_cf_cache = ids
@@ -328,20 +334,29 @@ class ZohoAdapter:
                 'quantity': float(li.get('quantity') or 1),
                 'discount': 0,
             }
-            # TEMP: trying two different write shapes at once since the
-            # formal item_custom_fields=[{customfield_id,value}] array came
-            # back empty on the last test -- also trying the api_name
-            # shorthand (cf_brand/cf_model_no as direct keys), a pattern
-            # Zoho uses elsewhere for setting custom fields. Whichever one
-            # (if either) actually survives will show up in the echoed
-            # response and we'll drop the other.
+            # TEMP: confirmed via manual Zoho UI test that typing Brand/Model
+            # directly into an ad-hoc line (no catalog item) DOES save fine
+            # -- so this is purely a request-shape problem, not a platform
+            # constraint. customfield_id+value alone (and the cf_brand
+            # shorthand) both came back empty. Web docs describe the READ
+            # shape for item_custom_fields as {label, value} rather than
+            # {customfield_id, value} -- bundling customfield_id, label, and
+            # index together in one entry so whichever key Zoho actually
+            # reads will be present; extra unrecognized keys are normally
+            # harmless. Also still sending the cf_<api_name> shorthand.
             item_custom_fields = []
             if li.get('brand') and cf_ids.get('brand'):
-                item_custom_fields.append({'customfield_id': cf_ids['brand'], 'value': li['brand']})
+                item_custom_fields.append({
+                    'customfield_id': cf_ids['brand'], 'label': cf_ids.get('brand_label') or 'Brand',
+                    'index': cf_ids.get('brand_index'), 'value': li['brand'],
+                })
                 if cf_ids.get('brand_api_name'):
                     item[cf_ids['brand_api_name']] = li['brand']
             if li.get('model') and cf_ids.get('model'):
-                item_custom_fields.append({'customfield_id': cf_ids['model'], 'value': li['model']})
+                item_custom_fields.append({
+                    'customfield_id': cf_ids['model'], 'label': cf_ids.get('model_label') or 'Model No',
+                    'index': cf_ids.get('model_index'), 'value': li['model'],
+                })
                 if cf_ids.get('model_api_name'):
                     item[cf_ids['model_api_name']] = li['model']
             if item_custom_fields:
