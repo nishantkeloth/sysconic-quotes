@@ -332,6 +332,9 @@ class ZohoAdapter:
                 item_custom_fields.append({'customfield_id': cf_ids['model'], 'value': li['model']})
             if item_custom_fields:
                 item['item_custom_fields'] = item_custom_fields
+            # TEMP DIAGNOSTIC round 2 (remove once confirmed working)
+            print(f"[zoho-fix-debug] cf_ids={cf_ids} li.brand={li.get('brand')!r} li.model={li.get('model')!r} "
+                  f"-> item_custom_fields={item_custom_fields}")
             if li.get('tax_rate'):
                 tax_id = self._tax_id_for_rate(creds, li['tax_rate'])
                 if tax_id:
@@ -365,6 +368,9 @@ class ZohoAdapter:
         est = r.get('estimate') or {}
         if not est.get('estimate_id'):
             raise RuntimeError('Zoho did not return an estimate id: ' + json.dumps(r)[:200])
+        # TEMP DIAGNOSTIC round 2 (remove once confirmed working)
+        for it in (est.get('line_items') or []):
+            print(f"[zoho-fix-debug] echoed name={it.get('name')!r} item_custom_fields={it.get('item_custom_fields')}")
         return est
 
     # ── Project Performance actuals fetch ───────────────────────────────────
