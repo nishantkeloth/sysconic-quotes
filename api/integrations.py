@@ -135,6 +135,20 @@ class ZohoAdapter:
             detail = e.read().decode('utf-8', 'ignore')[:300]
             raise RuntimeError(f'Zoho API error {e.code}: {detail}')
 
+    def _put(self, creds, path, body):
+        params = urllib.parse.urlencode({'organization_id': creds['org_id']})
+        url = f"{ZOHO_API}{path}?{params}"
+        data = json.dumps(body).encode('utf-8')
+        req = urllib.request.Request(url, data=data, method='PUT', headers={
+            'Authorization': 'Zoho-oauthtoken ' + self._access_token(creds),
+            'Content-Type': 'application/json'})
+        try:
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode('utf-8', 'ignore')[:300]
+            raise RuntimeError(f'Zoho API error {e.code}: {detail}')
+
     def create_project(self, creds, name, customer_id, rate=None, cost_budget=None, revenue_budget=None):
         # billing_type='fixed_cost_for_project' requires Zoho's `rate` field
         # at creation time (Zoho rejects the call with "Please enter rate for
@@ -397,9 +411,41 @@ class ZohoAdapter:
         est = r.get('estimate') or {}
         if not est.get('estimate_id'):
             raise RuntimeError('Zoho did not return an estimate id: ' + json.dumps(r)[:200])
-        # TEMP DIAGNOSTIC round 3 (remove once confirmed working)
-        for it in (est.get('line_items') or []):
-            print(f"[zoho-fix-debug] echoed FULL line item = {it!r}"[:3000])
+
+        # TEMP DIAGNOSTIC round 4 (remove once confirmed working): every
+        # write shape tried on CREATE has come back with item_custom_fields
+        # still empty on the echoed response, despite manually typing
+        # Brand/Model into an ad-hoc line in Zoho's own UI working fine. So
+        # testing whether item_custom_fields is only honored on UPDATE, not
+        # CREATE -- immediately following up with a PUT that resends the
+        # same line items (matched by the line_item_id Zoho just returned)
+        # including item_custom_fields, then re-reading the estimate fresh
+        # to see if it stuck.
+        has_cf = any(it.get('item_custom_fields') for it in zoho_items)
+        if has_cf and est.get('line_items'):
+            try:
+                update_line_items = []
+                for created_it, sent_it in zip(est['line_items'], zoho_items):
+                    li_update = {'line_item_id': created_it['line_item_id']}
+                    if sent_it.get('item_custom_fields'):
+                        li_update['item_custom_fields'] = sent_it['item_custom_fields']
+                    update_line_items.append(li_update)
+                print(f"[zoho-fix-debug] attempting follow-up PUT with line_items={update_line_items}")
+                put_r = self._put(creds, f"/estimates/{est['estimate_id']}", {'line_items': update_line_items})
+                put_est = put_r.get('estimate') or {}
+                for it in (put_est.get('line_items') or []):
+                    print(f"[zoho-fix-debug] AFTER PUT echoed item_custom_fields={it.get('item_custom_fields')} for line_item_id={it.get('line_item_id')}")
+            except Exception as e:
+                print(f"[zoho-fix-debug] follow-up PUT failed: {e!r}")
+            # Re-fetch fresh from Zoho (not just trusting the PUT's own echo)
+            try:
+                fresh = self._get(creds, f"/estimates/{est['estimate_id']}", {})
+                fresh_est = fresh.get('estimate') or {}
+                for it in (fresh_est.get('line_items') or []):
+                    print(f"[zoho-fix-debug] FRESH GET item_custom_fields={it.get('item_custom_fields')} for line_item_id={it.get('line_item_id')}")
+            except Exception as e:
+                print(f"[zoho-fix-debug] fresh GET failed: {e!r}")
+
         return est
 
     # ── Project Performance actuals fetch ───────────────────────────────────
