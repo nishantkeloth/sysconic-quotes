@@ -123,3 +123,31 @@ export interface DeviceLibraryEntry {
 export function getObjectKey(o: AnyRoomObject): string {
   return 'id' in o && o.id ? o.id : (o as DraftRoomObject)._localId;
 }
+
+// ── Product mapping ──────────────────────────────────────────────────────
+// A placed device's link to a real catalog product (api/products.py's
+// `products` table). `product_id` is the FK for later BOM/costing work, but
+// the display fields below are deliberately DENORMALIZED into the object's
+// own metadata_json.mapped_product at mapping time, rather than re-fetched
+// by id on every room load -- there's no GET /api/products/<id> endpoint
+// (only search/list), and stashing a snapshot here means the canvas and
+// properties panel can render brand/model/cost immediately from the room's
+// own GET response with no extra round-trip. If the catalog price changes
+// later, this snapshot goes stale until the device is re-mapped -- fine for
+// Phase 1; BOM generation (a later phase) should re-resolve product_id
+// against the live catalog rather than trust this snapshot for final costs.
+export interface MappedProduct {
+  product_id: string;
+  brand: string;
+  model: string;
+  sku: string | null;
+  default_cost: number;
+  cost_currency: string;
+  image_url: string | null;
+  mapped_at: string;
+}
+
+export function getMappedProduct(o: AnyRoomObject): MappedProduct | null {
+  const mp = o.metadata_json?.mapped_product;
+  return mp && typeof mp === 'object' ? (mp as MappedProduct) : null;
+}

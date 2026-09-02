@@ -82,3 +82,30 @@ export async function login(email: string, password: string): Promise<LoginRespo
 export function logout() {
   setToken(null);
 }
+
+// ── Products (catalog search, for device-to-product mapping) ───────────────
+// Reuses the existing, already-live api/products.py search endpoint as-is --
+// no backend changes needed. That route only requires a valid JWT (no
+// avRoomDesigner feature/RBAC gate), so any logged-in user of this app can
+// search the shared product catalog, same as the main QTcal app does.
+export interface ProductSearchResult {
+  id: string;
+  brand: string;
+  model: string;
+  description: string | null;
+  sku: string | null;
+  category: string | null;
+  default_cost: number;
+  cost_currency: string;
+  image_url: string | null;
+}
+
+export async function searchProducts(query: string, limit = 20): Promise<ProductSearchResult[]> {
+  const params = new URLSearchParams();
+  if (query.trim()) params.set('search', query.trim());
+  params.set('limit', String(limit));
+  const res = await api.get<{ products: ProductSearchResult[]; total: number }>(
+    `/api/products?${params.toString()}`
+  );
+  return res.products || [];
+}

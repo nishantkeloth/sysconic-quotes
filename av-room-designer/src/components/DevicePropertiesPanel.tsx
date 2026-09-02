@@ -1,6 +1,10 @@
+import { useState } from 'react';
 import type { AnyRoomObject, RoomUnits } from '../types';
+import { getMappedProduct } from '../types';
 import { libraryEntry } from '../deviceLibrary';
 import { UNIT_LABELS } from '../units';
+import ProductPickerModal from './ProductPickerModal';
+import type { ProductSearchResult } from '../api/client';
 
 // Right sidebar: editable fields for whichever object is currently
 // selected on the canvas. All numeric fields are in the room's own units
@@ -17,6 +21,8 @@ export default function DevicePropertiesPanel({
   onChange: (patch: Partial<AnyRoomObject>) => void;
   onDelete: () => void;
 }) {
+  const [showPicker, setShowPicker] = useState(false);
+
   if (!object) {
     return (
       <div className="avrd-sidebar-right">
@@ -28,6 +34,33 @@ export default function DevicePropertiesPanel({
 
   const entry = libraryEntry(object.category as string);
   const unitLabel = UNIT_LABELS[units];
+  const mapped = getMappedProduct(object);
+
+  function handleSelectProduct(p: ProductSearchResult) {
+    setShowPicker(false);
+    onChange({
+      product_id: p.id,
+      object_name: `${p.brand} ${p.model}`.trim(),
+      metadata_json: {
+        ...object!.metadata_json,
+        mapped_product: {
+          product_id: p.id,
+          brand: p.brand,
+          model: p.model,
+          sku: p.sku,
+          default_cost: p.default_cost,
+          cost_currency: p.cost_currency,
+          image_url: p.image_url,
+          mapped_at: new Date().toISOString(),
+        },
+      },
+    });
+  }
+
+  function handleUnmap() {
+    const { mapped_product, ...restMeta } = object!.metadata_json as Record<string, unknown>;
+    onChange({ product_id: null, metadata_json: restMeta });
+  }
 
   return (
     <div className="avrd-sidebar-right">
@@ -40,6 +73,37 @@ export default function DevicePropertiesPanel({
           onChange={(e) => onChange({ object_name: e.target.value })}
         />
       </div>
+
+      <div className="avrd-field">
+        <label>Product</label>
+        {mapped ? (
+          <div className="avrd-card" style={{ cursor: 'default', padding: '8px 12px' }}>
+            <div className="avrd-card-title" style={{ fontSize: 13 }}>
+              {mapped.brand} {mapped.model}
+            </div>
+            <div className="avrd-card-sub">
+              {mapped.sku ? `SKU ${mapped.sku} · ` : ''}
+              {mapped.default_cost ? `${mapped.cost_currency} ${mapped.default_cost.toLocaleString()}` : 'No cost set'}
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              <button className="avrd-btn" style={{ flex: 1 }} onClick={() => setShowPicker(true)}>
+                Change
+              </button>
+              <button className="avrd-btn danger" style={{ flex: 1 }} onClick={handleUnmap}>
+                Unmap
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button className="avrd-btn primary" style={{ width: '100%' }} onClick={() => setShowPicker(true)}>
+            Map to Product
+          </button>
+        )}
+      </div>
+
+      {showPicker && (
+        <ProductPickerModal onClose={() => setShowPicker(false)} onSelect={handleSelectProduct} />
+      )}
 
       <div className="avrd-modal-row">
         <div className="avrd-field" style={{ flex: 1 }}>
