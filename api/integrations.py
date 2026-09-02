@@ -135,6 +135,20 @@ class ZohoAdapter:
             detail = e.read().decode('utf-8', 'ignore')[:300]
             raise RuntimeError(f'Zoho API error {e.code}: {detail}')
 
+    def _put(self, creds, path, body):
+        params = urllib.parse.urlencode({'organization_id': creds['org_id']})
+        url = f"{ZOHO_API}{path}?{params}"
+        data = json.dumps(body).encode('utf-8')
+        req = urllib.request.Request(url, data=data, method='PUT', headers={
+            'Authorization': 'Zoho-oauthtoken ' + self._access_token(creds),
+            'Content-Type': 'application/json'})
+        try:
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode('utf-8', 'ignore')[:300]
+            raise RuntimeError(f'Zoho API error {e.code}: {detail}')
+
     def create_project(self, creds, name, customer_id, rate=None, cost_budget=None, revenue_budget=None):
         # billing_type='fixed_cost_for_project' requires Zoho's `rate` field
         # at creation time (Zoho rejects the call with "Please enter rate for
@@ -227,30 +241,38 @@ class ZohoAdapter:
         return None
 
     def _line_item_custom_field_ids(self, creds):
-        """Discovers this org's custom field IDs for 'Brand' and 'Model No'
-        on estimate line items, matched by label (case-insensitive) since
-        Zoho generates these IDs per-org -- they can't be hardcoded. Cached
-        on the adapter instance for the lifetime of one request (multiple
-        line items share the same lookup instead of repeating it).
-        `entity=estimate.line_item` is Zoho's documented parameter for
-        estimate-line-item-level custom fields, but hasn't been confirmed
-        against this specific org yet -- if the label match comes back
-        empty, brand/model just won't populate on the Zoho side (this never
-        blocks estimate creation either way)."""
+        """Discovers this org's exact label text for the 'Brand' and 'Model
+        No' custom fields. CONFIRMED 2026-09-02 by capturing the actual
+        request Zoho's own web app sends when a user types Brand/Model
+        directly into an ad-hoc estimate/quote line item (no catalog item
+        selected): item_custom_fields entries are matched by LABEL TEXT
+        only -- {'label': 'Brand', 'value': ...} -- not by customfield_id,
+        even though these are technically Item-module custom fields
+        (Settings > Custom Fields > Items in Zoho Books; they show up in
+        every transaction's line-item table because they're configured
+        there with "Show when creating transactions" + "Include in
+        Modules: Quote" etc.). Every customfield_id-based shape tried
+        before this discovery was silently dropped by the API. This lookup
+        just gets the correctly-cased label per org (defensive against a
+        renamed field) -- falls back to the literal 'Brand'/'Model No'
+        text at the call site if not found. Cached on the adapter instance
+        for the lifetime of one request."""
         if getattr(self, '_li_cf_cache', None) is not None:
             return self._li_cf_cache
         ids = {}
         try:
-            data = self._get(creds, '/settings/customfields', {'entity': 'estimate.line_item'})
-            fields = data.get('customfields') or data.get('customfieldsettings') or data.get('custom_fields') or []
-            for f in fields:
-                label = (f.get('label') or f.get('field_name') or f.get('placeholder') or '').strip().lower()
-                fid = f.get('customfield_id') or f.get('field_id') or f.get('customfield_id_formatted')
-                if not fid: continue
+            data = self._get(creds, '/settings/customfields', {'entity': 'item'})
+            raw = data.get('customfields') or {}
+            fields = raw.get('item') if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
+            for f in (fields or []):
+                if not isinstance(f, dict):
+                    continue
+                label_raw = (f.get('label') or f.get('field_name') or f.get('placeholder') or '')
+                label = label_raw.strip().lower()
                 if label == 'brand':
-                    ids['brand'] = fid
+                    ids['brand_label'] = label_raw
                 elif label in ('model no', 'model no.', 'model number', 'model'):
-                    ids['model'] = fid
+                    ids['model_label'] = label_raw
         except Exception:
             pass
         self._li_cf_cache = ids
@@ -292,10 +314,9 @@ class ZohoAdapter:
         post-discount, so Zoho's own per-line Discount is deliberately left
         at 0 rather than trying to reverse-engineer an equivalent single
         percentage from QTcal's two-layer discount. Brand/Model are pushed
-        into the org's own Brand/Model No custom fields when a matching
-        field is found (see _line_item_custom_field_ids) -- best-effort,
-        silently omitted if the org's field labels don't match what was
-        guessed. total_gp (QTcal's "Total GP", ts-tc in AED) and margin_pct
+        into the org's Brand/Model No item-table custom fields (see below
+        for the exact request shape). total_gp (QTcal's "Total GP", ts-tc
+        in AED) and margin_pct
         (fraction, e.g. 0.167) map the same way onto the header-level
         Profit Margin / Profit Margin % custom fields when found.
         zoho_project_id links this estimate to the Zoho Project created
@@ -303,7 +324,18 @@ class ZohoAdapter:
         field for exactly this (project-based billing/tracking/reporting),
         confirmed against Zoho's own API reference. Passed straight through
         (unlike Brand/Model/Profit Margin, this isn't a custom field, so no
-        org-specific discovery step is needed)."""
+        org-specific discovery step is needed).
+        Brand/Model use the `item_custom_fields` key per line item, with
+        entries shaped as {'label': <exact field label>, 'value': ...} --
+        NOT {'customfield_id': ..., 'value': ...} the way header-level
+        `custom_fields` works. Confirmed 2026-09-02 by capturing the actual
+        request Zoho's own web app sends when a user types Brand/Model
+        directly into an ad-hoc line (no catalog item) in the browser
+        network tab -- every customfield_id-based shape tried before this
+        was silently dropped by the API even though it's individually
+        well-formed, presumably because these fields are technically owned
+        by the Items module and the estimate/quote context only recognizes
+        them by label, not by the Item module's own customfield_id."""
         cf_ids = self._line_item_custom_field_ids(creds) if any(li.get('brand') or li.get('model') for li in line_items) else {}
         zoho_items = []
         for li in line_items:
@@ -314,13 +346,13 @@ class ZohoAdapter:
                 'quantity': float(li.get('quantity') or 1),
                 'discount': 0,
             }
-            custom_fields = []
-            if li.get('brand') and cf_ids.get('brand'):
-                custom_fields.append({'customfield_id': cf_ids['brand'], 'value': li['brand']})
-            if li.get('model') and cf_ids.get('model'):
-                custom_fields.append({'customfield_id': cf_ids['model'], 'value': li['model']})
-            if custom_fields:
-                item['custom_fields'] = custom_fields
+            item_custom_fields = []
+            if li.get('brand'):
+                item_custom_fields.append({'label': cf_ids.get('brand_label') or 'Brand', 'value': li['brand']})
+            if li.get('model'):
+                item_custom_fields.append({'label': cf_ids.get('model_label') or 'Model No', 'value': li['model']})
+            if item_custom_fields:
+                item['item_custom_fields'] = item_custom_fields
             if li.get('tax_rate'):
                 tax_id = self._tax_id_for_rate(creds, li['tax_rate'])
                 if tax_id:
