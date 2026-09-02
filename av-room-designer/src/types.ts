@@ -113,6 +113,7 @@ export interface DeviceLibraryEntry {
   group: string;
   defaultWidth: number;  // meters, footprint on the 2D plan
   defaultDepth: number;
+  defaultHeight: number; // meters, box height for the 3D view (RoomViewer3D)
   color: string;
 }
 

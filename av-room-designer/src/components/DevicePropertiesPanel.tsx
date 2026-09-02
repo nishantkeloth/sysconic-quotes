@@ -133,6 +133,21 @@ export default function DevicePropertiesPanel({
         </div>
       </div>
 
+      <div className="avrd-field">
+        <label>Height off floor ({unitLabel})</label>
+        <input
+          type="number"
+          step="any"
+          value={object.position_z}
+          onChange={(e) => onChange({ position_z: Number(e.target.value) })}
+        />
+        <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 3 }}>
+          Where the device's base sits above the floor -- 0 for floor-standing items, table height for
+          table devices, wall/ceiling mount height for mounted items. Drives the 3D view's vertical
+          placement.
+        </div>
+      </div>
+
       <div className="avrd-modal-row">
         <div className="avrd-field" style={{ flex: 1 }}>
           <label>Width ({unitLabel})</label>
@@ -152,6 +167,16 @@ export default function DevicePropertiesPanel({
             value={object.depth ?? ''}
             placeholder="default"
             onChange={(e) => onChange({ depth: e.target.value ? Number(e.target.value) : null })}
+          />
+        </div>
+        <div className="avrd-field" style={{ flex: 1 }}>
+          <label>Height ({unitLabel})</label>
+          <input
+            type="number"
+            step="any"
+            value={object.height ?? ''}
+            placeholder="default"
+            onChange={(e) => onChange({ height: e.target.value ? Number(e.target.value) : null })}
           />
         </div>
       </div>

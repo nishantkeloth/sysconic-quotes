@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from '../api/client';
 import type { AvRoom, AvRoomObject, DraftRoomObject } from '../types';
 import { getObjectKey } from '../types';
@@ -7,6 +7,12 @@ import { fromMeters } from '../units';
 import DeviceLibraryPanel from '../components/DeviceLibraryPanel';
 import RoomCanvas2D from '../components/RoomCanvas2D';
 import DevicePropertiesPanel from '../components/DevicePropertiesPanel';
+
+// Lazy-loaded: three.js + @react-three/fiber + @react-three/drei add ~1MB
+// to the bundle. Most sessions will only ever use the 2D editor (per spec
+// §7, 2D is the primary design interface), so that cost should only be
+// paid the moment someone actually opens the 3D view, not on every login.
+const RoomViewer3D = lazy(() => import('../components/RoomViewer3D'));
 
 // The canvas works entirely with "draft" objects (no server id) locally,
 // even for devices loaded from the server -- see save_objects() in
@@ -43,6 +49,7 @@ export default function RoomDesignerPage({
   const [error, setError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [showOverlays, setShowOverlays] = useState(true);
+  const [viewMode, setViewMode] = useState<'2D' | '3D'>('2D');
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipNextAutosave = useRef(true); // don't autosave on initial load
@@ -117,7 +124,7 @@ export default function RoomDesignerPage({
       rotation_y: 0,
       rotation_z: 0,
       width: entry ? fromMeters(entry.defaultWidth, room.units) : null,
-      height: null,
+      height: entry ? fromMeters(entry.defaultHeight, room.units) : null,
       depth: entry ? fromMeters(entry.defaultDepth, room.units) : null,
       mounting_height: null,
       mounting_type: null,
@@ -166,13 +173,21 @@ export default function RoomDesignerPage({
         <div className="avrd-canvas-toolbar">
           <button onClick={onBack}>← Back</button>
           <span style={{ padding: '6px 10px', fontWeight: 600 }}>{room.room_name}</span>
-          <button
-            className={showOverlays ? 'active' : ''}
-            onClick={() => setShowOverlays((v) => !v)}
-            title="Toggle camera FOV / mic pickup / display viewing-distance overlays"
-          >
-            {showOverlays ? 'Overlays: On' : 'Overlays: Off'}
+          <button className={viewMode === '2D' ? 'active' : ''} onClick={() => setViewMode('2D')}>
+            2D
           </button>
+          <button className={viewMode === '3D' ? 'active' : ''} onClick={() => setViewMode('3D')}>
+            3D
+          </button>
+          {viewMode === '2D' && (
+            <button
+              className={showOverlays ? 'active' : ''}
+              onClick={() => setShowOverlays((v) => !v)}
+              title="Toggle camera FOV / mic pickup / display viewing-distance overlays"
+            >
+              {showOverlays ? 'Overlays: On' : 'Overlays: Off'}
+            </button>
+          )}
         </div>
         <div
           className={`avrd-save-status ${saveStatus}`}
@@ -184,15 +199,33 @@ export default function RoomDesignerPage({
           {saveStatus === 'error' && (error || 'Save failed')}
         </div>
 
-        <RoomCanvas2D
-          room={room}
-          objects={objects}
-          selectedKey={selectedKey}
-          onSelect={setSelectedKey}
-          onMoveObject={handleMoveObject}
-          onDropCategory={handleDropCategory}
-          showOverlays={showOverlays}
-        />
+        {viewMode === '2D' ? (
+          <RoomCanvas2D
+            room={room}
+            objects={objects}
+            selectedKey={selectedKey}
+            onSelect={setSelectedKey}
+            onMoveObject={handleMoveObject}
+            onDropCategory={handleDropCategory}
+            showOverlays={showOverlays}
+          />
+        ) : (
+          <Suspense
+            fallback={
+              <div className="avrd-canvas-wrap" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <p style={{ color: 'var(--gray-500)' }}>Loading 3D view…</p>
+              </div>
+            }
+          >
+            <RoomViewer3D
+              room={room}
+              objects={objects}
+              selectedKey={selectedKey}
+              onSelect={setSelectedKey}
+              onMoveObject={handleMoveObject}
+            />
+          </Suspense>
+        )}
       </div>
 
       <DevicePropertiesPanel
