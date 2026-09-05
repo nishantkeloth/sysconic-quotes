@@ -397,12 +397,14 @@ function DeviceBox({
   selected,
   onSelect,
   setDraggingKey,
+  onBeginEdit,
 }: {
   obj: AnyRoomObject;
   room: AvRoom;
   selected: boolean;
   onSelect: (key: string) => void;
   setDraggingKey: (key: string) => void;
+  onBeginEdit?: () => void;
 }) {
   const key = getObjectKey(obj);
   const entry = libraryEntry(obj.category as string);
@@ -445,6 +447,7 @@ function DeviceBox({
       onPointerDown={(e: ThreeEvent<PointerEvent>) => {
         e.stopPropagation();
         onSelect(key);
+        onBeginEdit?.();
         setDraggingKey(key);
       }}
     >
@@ -464,6 +467,7 @@ export default function RoomViewer3D({
   selectedKey,
   onSelect,
   onMoveObject,
+  onBeginEdit,
   showOverlays = true,
 }: {
   room: AvRoom;
@@ -471,6 +475,7 @@ export default function RoomViewer3D({
   selectedKey: string | null;
   onSelect: (key: string | null) => void;
   onMoveObject: (key: string, positionX: number, positionY: number) => void;
+  onBeginEdit?: () => void;
   showOverlays?: boolean;
 }) {
   // Drag state is purely internal to this view -- the 2D canvas has its own
@@ -582,6 +587,7 @@ export default function RoomViewer3D({
             selected={selectedKey === getObjectKey(obj)}
             onSelect={onSelect}
             setDraggingKey={setDraggingKey}
+            onBeginEdit={onBeginEdit}
           />
         ))}
 

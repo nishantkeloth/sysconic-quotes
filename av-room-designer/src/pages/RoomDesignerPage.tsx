@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import type Konva from 'konva';
 import { api, ApiError } from '../api/client';
 import type { AvRoom, AvRoomObject, DraftRoomObject } from '../types';
 import { getObjectKey } from '../types';
@@ -7,6 +8,8 @@ import { fromMeters } from '../units';
 import DeviceLibraryPanel from '../components/DeviceLibraryPanel';
 import RoomCanvas2D from '../components/RoomCanvas2D';
 import DevicePropertiesPanel from '../components/DevicePropertiesPanel';
+import ValidationPanel from '../components/ValidationPanel';
+import { exportObjectsAsCsv, exportStageAsPng } from '../exportUtils';
 
 // Lazy-loaded: three.js + @react-three/fiber + @react-three/drei add ~1MB
 // to the bundle. Most sessions will only ever use the 2D editor (per spec
@@ -33,6 +36,69 @@ function toDraft(o: AvRoomObject): DraftRoomObject {
 }
 
 const AUTOSAVE_DELAY_MS = 1200;
+const MAX_HISTORY = 50;
+const NUDGE_STEP_M = 0.05;
+const NUDGE_STEP_LARGE_M = 0.5;
+const DUPLICATE_OFFSET_M = 0.2;
+
+// Undo/redo history lives alongside the objects array itself (one reducer,
+// one atomic state) rather than as separate useState calls -- keeping them
+// separate invites exactly the stale-closure/double-update bugs this kind
+// of feature is famous for. Two dispatch shapes on purpose:
+//   'commit' -- a real edit (add/delete/duplicate/drag/nudge): snapshots the
+//               CURRENT objects into `past` before applying the new array,
+//               and clears `future` (a fresh edit invalidates old redos).
+//   'update' -- a live, in-progress change (every keystroke in a text
+//               field, every pointermove of a drag) that should NOT itself
+//               create an undo step -- callers pair this with an explicit
+//               'checkpoint' dispatched once up front (on field focus / drag
+//               start) so a whole edit session collapses into one undo step
+//               instead of one per keystroke or per drag frame.
+type HistoryState = { objects: DraftRoomObject[]; past: DraftRoomObject[][]; future: DraftRoomObject[][] };
+type HistoryAction =
+  | { type: 'set'; objects: DraftRoomObject[] }
+  | { type: 'commit'; objects: DraftRoomObject[] }
+  | { type: 'update'; objects: DraftRoomObject[] }
+  | { type: 'checkpoint' }
+  | { type: 'undo' }
+  | { type: 'redo' };
+
+function historyReducer(state: HistoryState, action: HistoryAction): HistoryState {
+  switch (action.type) {
+    case 'set':
+      return { objects: action.objects, past: [], future: [] };
+    case 'update':
+      return { ...state, objects: action.objects };
+    case 'checkpoint':
+      return { ...state, past: [...state.past, state.objects].slice(-MAX_HISTORY), future: [] };
+    case 'commit':
+      return {
+        objects: action.objects,
+        past: [...state.past, state.objects].slice(-MAX_HISTORY),
+        future: [],
+      };
+    case 'undo': {
+      if (state.past.length === 0) return state;
+      const prev = state.past[state.past.length - 1];
+      return {
+        objects: prev,
+        past: state.past.slice(0, -1),
+        future: [state.objects, ...state.future].slice(0, MAX_HISTORY),
+      };
+    }
+    case 'redo': {
+      if (state.future.length === 0) return state;
+      const next = state.future[0];
+      return {
+        objects: next,
+        past: [...state.past, state.objects].slice(-MAX_HISTORY),
+        future: state.future.slice(1),
+      };
+    }
+    default:
+      return state;
+  }
+}
 
 export default function RoomDesignerPage({
   projectId,
@@ -44,11 +110,15 @@ export default function RoomDesignerPage({
   onBack: () => void;
 }) {
   const [room, setRoom] = useState<AvRoom | null>(null);
-  const [objects, setObjects] = useState<DraftRoomObject[]>([]);
+  const [history, dispatch] = useReducer(historyReducer, { objects: [], past: [], future: [] });
+  const objects = history.objects;
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [showOverlays, setShowOverlays] = useState(true);
+  const [showDimensions, setShowDimensions] = useState(true);
+  const [snapToGrid, setSnapToGrid] = useState(true);
+  const [showValidation, setShowValidation] = useState(false);
   // Default to Split so 2D and 3D stay visible and in sync side by side
   // (matches the reference product's simultaneous-panel layout) -- users
   // can still go full-width on either view via the toolbar.
@@ -56,6 +126,23 @@ export default function RoomDesignerPage({
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipNextAutosave = useRef(true); // don't autosave on initial load
+  const stageRef = useRef<Konva.Stage | null>(null);
+
+  // Kept in sync via effects purely so the *one* global keydown listener
+  // (registered once, below) can always read current values without being
+  // torn down and re-registered on every keystroke/drag frame.
+  const objectsRef = useRef(objects);
+  const selectedKeyRef = useRef(selectedKey);
+  const roomRef = useRef(room);
+  useEffect(() => {
+    objectsRef.current = objects;
+  }, [objects]);
+  useEffect(() => {
+    selectedKeyRef.current = selectedKey;
+  }, [selectedKey]);
+  useEffect(() => {
+    roomRef.current = room;
+  }, [room]);
 
   useEffect(() => {
     let cancelled = false;
@@ -65,7 +152,7 @@ export default function RoomDesignerPage({
         if (cancelled) return;
         setRoom(r);
         skipNextAutosave.current = true;
-        setObjects((r.objects || []).map(toDraft));
+        dispatch({ type: 'set', objects: (r.objects || []).map(toDraft) });
       })
       .catch((e) => setError(e instanceof ApiError ? e.message : 'Failed to load room'));
     return () => {
@@ -107,9 +194,17 @@ export default function RoomDesignerPage({
     [objects, selectedKey]
   );
 
+  // Live, in-progress edits (typing, dragging) -- deliberately NOT an undo
+  // step on their own. Callers that want the edit undoable call beginEdit()
+  // once first (on focus / drag start); see the HistoryAction comment above.
   function updateObject(key: string, patch: Partial<DraftRoomObject>) {
-    setObjects((prev) => prev.map((o) => (getObjectKey(o) === key ? { ...o, ...patch } : o)));
+    dispatch({ type: 'update', objects: objects.map((o) => (getObjectKey(o) === key ? { ...o, ...patch } : o)) });
   }
+
+  // Snapshots the pre-edit state as a single undo step. Call once at the
+  // start of an edit session (field focus, drag start) -- not on every
+  // change within it.
+  const beginEdit = useCallback(() => dispatch({ type: 'checkpoint' }), []);
 
   function handleDropCategory(category: string, x: number, y: number) {
     if (!room) return;
@@ -135,7 +230,7 @@ export default function RoomDesignerPage({
       notes: null,
       metadata_json: {},
     };
-    setObjects((prev) => [...prev, draft]);
+    dispatch({ type: 'commit', objects: [...objects, draft] });
     setSelectedKey(draft._localId);
   }
 
@@ -145,9 +240,119 @@ export default function RoomDesignerPage({
 
   function handleDeleteSelected() {
     if (!selectedKey) return;
-    setObjects((prev) => prev.filter((o) => getObjectKey(o) !== selectedKey));
+    dispatch({ type: 'commit', objects: objects.filter((o) => getObjectKey(o) !== selectedKey) });
     setSelectedKey(null);
   }
+
+  function handleDuplicateSelected() {
+    if (!selectedObject || !room) return;
+    const nudge = fromMeters(DUPLICATE_OFFSET_M, room.units);
+    const copy: DraftRoomObject = {
+      ...selectedObject,
+      _localId: newLocalId(),
+      position_x: selectedObject.position_x + nudge,
+      position_y: selectedObject.position_y + nudge,
+    };
+    dispatch({ type: 'commit', objects: [...objects, copy] });
+    setSelectedKey(copy._localId);
+  }
+
+  function handleExportCsv() {
+    if (room) exportObjectsAsCsv(room, objects);
+  }
+
+  function handleExportPng() {
+    if (stageRef.current) exportStageAsPng(stageRef.current, room?.room_name || 'room');
+  }
+
+  // One global keydown listener, registered once (empty deps) -- it reads
+  // objects/selectedKey/room off the refs kept in sync above rather than
+  // closing over the render's own copies, so it never goes stale without
+  // needing to be torn down and re-attached on every keystroke or drag
+  // frame (which, with objects changing that often, would otherwise be
+  // effectively every frame during a drag).
+  useEffect(() => {
+    function isEditableTarget(el: EventTarget | null): boolean {
+      const t = el as HTMLElement | null;
+      if (!t) return false;
+      return t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable;
+    }
+
+    function handleKeyDown(e: KeyboardEvent) {
+      const mod = e.ctrlKey || e.metaKey;
+
+      // Undo/redo work even while a text field is focused (matches normal
+      // browser/editor expectations) -- everything else below is disabled
+      // while typing so Delete/Backspace/arrows behave normally in inputs.
+      if (mod && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        dispatch({ type: e.shiftKey ? 'redo' : 'undo' });
+        return;
+      }
+      if (mod && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        dispatch({ type: 'redo' });
+        return;
+      }
+      if (isEditableTarget(e.target)) return;
+
+      const currentRoom = roomRef.current;
+      const currentObjects = objectsRef.current;
+      const currentSelected = selectedKeyRef.current;
+      if (!currentRoom) return;
+
+      if (mod && e.key.toLowerCase() === 'd') {
+        e.preventDefault();
+        if (!currentSelected) return;
+        const src = currentObjects.find((o) => getObjectKey(o) === currentSelected);
+        if (!src) return;
+        const nudge = fromMeters(DUPLICATE_OFFSET_M, currentRoom.units);
+        const copy: DraftRoomObject = {
+          ...src,
+          _localId: newLocalId(),
+          position_x: src.position_x + nudge,
+          position_y: src.position_y + nudge,
+        };
+        dispatch({ type: 'commit', objects: [...currentObjects, copy] });
+        setSelectedKey(copy._localId);
+        return;
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && currentSelected) {
+        e.preventDefault();
+        dispatch({ type: 'commit', objects: currentObjects.filter((o) => getObjectKey(o) !== currentSelected) });
+        setSelectedKey(null);
+        return;
+      }
+      if (e.key === 'Escape') {
+        setSelectedKey(null);
+        return;
+      }
+      if (e.key.startsWith('Arrow') && currentSelected) {
+        e.preventDefault();
+        const step = fromMeters(e.shiftKey ? NUDGE_STEP_LARGE_M : NUDGE_STEP_M, currentRoom.units);
+        let dx = 0;
+        let dy = 0;
+        if (e.key === 'ArrowLeft') dx = -step;
+        if (e.key === 'ArrowRight') dx = step;
+        if (e.key === 'ArrowUp') dy = -step;
+        if (e.key === 'ArrowDown') dy = step;
+        const obj = currentObjects.find((o) => getObjectKey(o) === currentSelected);
+        if (!obj) return;
+        dispatch({ type: 'checkpoint' });
+        dispatch({
+          type: 'update',
+          objects: currentObjects.map((o) =>
+            getObjectKey(o) === currentSelected
+              ? { ...o, position_x: o.position_x + dx, position_y: o.position_y + dy }
+              : o
+          ),
+        });
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   if (error && !room) {
     return (
@@ -185,6 +390,17 @@ export default function RoomDesignerPage({
           <button className={viewMode === 'Split' ? 'active' : ''} onClick={() => setViewMode('Split')}>
             Split
           </button>
+          <span className="avrd-toolbar-sep" />
+          <button onClick={() => dispatch({ type: 'undo' })} disabled={history.past.length === 0} title="Undo (Ctrl+Z)">
+            ↶ Undo
+          </button>
+          <button onClick={() => dispatch({ type: 'redo' })} disabled={history.future.length === 0} title="Redo (Ctrl+Shift+Z)">
+            ↷ Redo
+          </button>
+          <button onClick={handleDuplicateSelected} disabled={!selectedKey} title="Duplicate (Ctrl+D)">
+            ⧉ Duplicate
+          </button>
+          <span className="avrd-toolbar-sep" />
           <button
             className={showOverlays ? 'active' : ''}
             onClick={() => setShowOverlays((v) => !v)}
@@ -192,6 +408,36 @@ export default function RoomDesignerPage({
           >
             {showOverlays ? 'Overlays: On' : 'Overlays: Off'}
           </button>
+          {viewMode !== '3D' && (
+            <>
+              <button
+                className={showDimensions ? 'active' : ''}
+                onClick={() => setShowDimensions((v) => !v)}
+                title="Show distance-to-wall dimension lines for the selected device"
+              >
+                {showDimensions ? 'Dimensions: On' : 'Dimensions: Off'}
+              </button>
+              <button
+                className={snapToGrid ? 'active' : ''}
+                onClick={() => setSnapToGrid((v) => !v)}
+                title="Snap dragged devices to a 10cm grid"
+              >
+                {snapToGrid ? 'Snap: On' : 'Snap: Off'}
+              </button>
+            </>
+          )}
+          <span className="avrd-toolbar-sep" />
+          <button onClick={() => setShowValidation(true)} title="Run engineering/coverage checks against this room">
+            ✓ Check Design
+          </button>
+          <button onClick={handleExportCsv} title="Export the device list as a CSV bill of materials">
+            ⤓ Export BOM
+          </button>
+          {viewMode !== '3D' && (
+            <button onClick={handleExportPng} title="Export the 2D floor plan as a PNG image">
+              ⤓ Export Image
+            </button>
+          )}
         </div>
         <div
           className={`avrd-save-status ${saveStatus}`}
@@ -212,7 +458,11 @@ export default function RoomDesignerPage({
               onSelect={setSelectedKey}
               onMoveObject={handleMoveObject}
               onDropCategory={handleDropCategory}
+              onBeginEdit={beginEdit}
               showOverlays={showOverlays}
+              showDimensions={showDimensions}
+              snapToGrid={snapToGrid}
+              stageRef={stageRef}
             />
           )}
           {viewMode !== '2D' && (
@@ -229,6 +479,7 @@ export default function RoomDesignerPage({
                 selectedKey={selectedKey}
                 onSelect={setSelectedKey}
                 onMoveObject={handleMoveObject}
+                onBeginEdit={beginEdit}
                 showOverlays={showOverlays}
               />
             </Suspense>
@@ -241,7 +492,13 @@ export default function RoomDesignerPage({
         units={room.units}
         onChange={(patch) => selectedKey && updateObject(selectedKey, patch as Partial<DraftRoomObject>)}
         onDelete={handleDeleteSelected}
+        onDuplicate={handleDuplicateSelected}
+        onBeginEdit={beginEdit}
       />
+
+      {showValidation && (
+        <ValidationPanel room={room} objects={objects} onClose={() => setShowValidation(false)} />
+      )}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { Stage, Layer, Rect, Line, Text, Arc, Circle } from 'react-konva';
 import type Konva from 'konva';
 import type { AnyRoomObject, AvRoom } from '../types';
@@ -21,6 +21,10 @@ import {
 // meters only internally, purely to compute a consistent pixels-per-meter
 // scale for drawing.
 const MARGIN_PX = 40;
+const SNAP_STEP_M = 0.1; // 10cm -- independent of the visual grid spacing below
+const ZOOM_MIN = 0.3;
+const ZOOM_MAX = 4;
+const ZOOM_STEP = 1.08;
 
 export default function RoomCanvas2D({
   room,
@@ -29,7 +33,11 @@ export default function RoomCanvas2D({
   onSelect,
   onMoveObject,
   onDropCategory,
+  onBeginEdit,
   showOverlays,
+  showDimensions,
+  snapToGrid,
+  stageRef,
 }: {
   room: AvRoom;
   objects: AnyRoomObject[];
@@ -37,10 +45,22 @@ export default function RoomCanvas2D({
   onSelect: (key: string | null) => void;
   onMoveObject: (key: string, positionX: number, positionY: number) => void;
   onDropCategory: (category: string, positionX: number, positionY: number) => void;
+  onBeginEdit?: () => void;
   showOverlays: boolean;
+  showDimensions?: boolean;
+  snapToGrid?: boolean;
+  stageRef?: React.MutableRefObject<Konva.Stage | null>;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
+  // Stage-level zoom/pan -- purely a view transform. Every existing
+  // px<->room-units conversion below stays in Stage-LOCAL (unscaled,
+  // unpanned) coordinates and is untouched by this; Konva applies the
+  // scale/position transform for free at render time. The one place that
+  // genuinely needs to account for it is the native HTML5 drag-and-drop
+  // handler below, since e.clientX/clientY are real screen pixels.
+  const [zoom, setZoom] = useState(1);
+  const [stagePos, setStagePos] = useState({ x: 0, y: 0 });
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -52,6 +72,38 @@ export default function RoomCanvas2D({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  function handleWheel(e: Konva.KonvaEventObject<WheelEvent>) {
+    e.evt.preventDefault();
+    const stage = e.target.getStage();
+    if (!stage) return;
+    const pointer = stage.getPointerPosition();
+    if (!pointer) return;
+    const mousePointTo = {
+      x: (pointer.x - stagePos.x) / zoom,
+      y: (pointer.y - stagePos.y) / zoom,
+    };
+    const direction = e.evt.deltaY > 0 ? -1 : 1;
+    const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, direction > 0 ? zoom * ZOOM_STEP : zoom / ZOOM_STEP));
+    setZoom(newZoom);
+    setStagePos({
+      x: pointer.x - mousePointTo.x * newZoom,
+      y: pointer.y - mousePointTo.y * newZoom,
+    });
+  }
+
+  function zoomBy(factor: number) {
+    const center = { x: size.w / 2, y: size.h / 2 };
+    const mousePointTo = { x: (center.x - stagePos.x) / zoom, y: (center.y - stagePos.y) / zoom };
+    const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom * factor));
+    setZoom(newZoom);
+    setStagePos({ x: center.x - mousePointTo.x * newZoom, y: center.y - mousePointTo.y * newZoom });
+  }
+
+  function resetView() {
+    setZoom(1);
+    setStagePos({ x: 0, y: 0 });
+  }
 
   const roomWidthM = toMeters(room.width || 4, room.units);
   const roomLengthM = toMeters(room.length || 4, room.units);
@@ -94,13 +146,30 @@ export default function RoomCanvas2D({
         const category = e.dataTransfer.getData('text/av-device-category');
         if (!category) return;
         const rect = wrapRef.current!.getBoundingClientRect();
-        const { x, y } = pxToRoomUnits(e.clientX - rect.left, e.clientY - rect.top);
+        // e.clientX/Y are real screen pixels -- undo the Stage's own
+        // zoom/pan transform first to get back to the Stage-local
+        // coordinates pxToRoomUnits expects (see its own comment above).
+        const screenX = e.clientX - rect.left;
+        const screenY = e.clientY - rect.top;
+        const localX = (screenX - stagePos.x) / zoom;
+        const localY = (screenY - stagePos.y) / zoom;
+        const { x, y } = pxToRoomUnits(localX, localY);
         onDropCategory(category, x, y);
       }}
     >
       <Stage
+        ref={stageRef}
         width={size.w}
         height={size.h}
+        scaleX={zoom}
+        scaleY={zoom}
+        x={stagePos.x}
+        y={stagePos.y}
+        draggable
+        onWheel={handleWheel}
+        onDragEnd={(e) => {
+          if (e.target === e.target.getStage()) setStagePos({ x: e.target.x(), y: e.target.y() });
+        }}
         onMouseDown={(e: Konva.KonvaEventObject<MouseEvent>) => {
           if (e.target === e.target.getStage()) onSelect(null);
         }}
@@ -232,11 +301,17 @@ export default function RoomCanvas2D({
                 draggable
                 onClick={() => onSelect(key)}
                 onTap={() => onSelect(key)}
+                onDragStart={() => onBeginEdit?.()}
                 onDragEnd={(e) => {
                   const node = e.target;
                   const centerPx = node.x() + node.width() / 2;
                   const centerPy = node.y() + node.height() / 2;
-                  const { x, y } = pxToRoomUnits(centerPx, centerPy);
+                  let { x, y } = pxToRoomUnits(centerPx, centerPy);
+                  if (snapToGrid) {
+                    const step = fromMeters(SNAP_STEP_M, room.units);
+                    x = Math.round(x / step) * step;
+                    y = Math.round(y / step) * step;
+                  }
                   onMoveObject(key, x, y);
                 }}
               />
@@ -264,8 +339,93 @@ export default function RoomCanvas2D({
               />
             );
           })}
+
+          {/* Installation dimension line (spec §15): for the selected
+              object only, the shortest distance from its footprint to the
+              nearest wall on each axis, styled like the AVIO reference's
+              red "0.84m" measurement line. Always labeled in meters
+              regardless of the room's configured units, for a single
+              consistent, at-a-glance scale. */}
+          {showDimensions &&
+            selectedKey &&
+            (() => {
+              const obj = objects.find((o) => getObjectKey(o) === selectedKey);
+              if (!obj) return null;
+              const entry = libraryEntry(obj.category as string);
+              const wM = toMeters(obj.width ?? fromMeters(entry?.defaultWidth ?? 0.3, room.units), room.units);
+              const dM = toMeters(obj.depth ?? fromMeters(entry?.defaultDepth ?? 0.3, room.units), room.units);
+              const xM = toMeters(obj.position_x, room.units);
+              const yM = toMeters(obj.position_y, room.units);
+              const left = xM - wM / 2;
+              const right = roomWidthM - (xM + wM / 2);
+              const top = yM - dM / 2;
+              const bottom = roomLengthM - (yM + dM / 2);
+
+              const segs: { axis: 'h' | 'v'; value: number; from: number; to: number; fixed: number }[] = [];
+              if (left <= right) segs.push({ axis: 'h', value: left, from: 0, to: xM - wM / 2, fixed: yM });
+              else segs.push({ axis: 'h', value: right, from: xM + wM / 2, to: roomWidthM, fixed: yM });
+              if (top <= bottom) segs.push({ axis: 'v', value: top, from: 0, to: yM - dM / 2, fixed: xM });
+              else segs.push({ axis: 'v', value: bottom, from: yM + dM / 2, to: roomLengthM, fixed: xM });
+
+              return segs.map((seg, i) => {
+                if (seg.value < 0.02) return null; // touching the wall already -- label would just clutter
+                if (seg.axis === 'h') {
+                  const py = originY + seg.fixed * ppm;
+                  const px1 = originX + seg.from * ppm;
+                  const px2 = originX + seg.to * ppm;
+                  return (
+                    <Fragment key={`dim-h-${i}`}>
+                      <Line points={[px1, py, px2, py]} stroke="#dc2626" strokeWidth={1.5} dash={[4, 3]} listening={false} />
+                      <Line points={[px1, py - 5, px1, py + 5]} stroke="#dc2626" strokeWidth={1.5} listening={false} />
+                      <Line points={[px2, py - 5, px2, py + 5]} stroke="#dc2626" strokeWidth={1.5} listening={false} />
+                      <Text
+                        x={(px1 + px2) / 2 - 20}
+                        y={py - 16}
+                        text={`${seg.value.toFixed(2)}m`}
+                        fontSize={11}
+                        fontStyle="bold"
+                        fill="#dc2626"
+                        listening={false}
+                      />
+                    </Fragment>
+                  );
+                }
+                const px = originX + seg.fixed * ppm;
+                const py1 = originY + seg.from * ppm;
+                const py2 = originY + seg.to * ppm;
+                return (
+                  <Fragment key={`dim-v-${i}`}>
+                    <Line points={[px, py1, px, py2]} stroke="#dc2626" strokeWidth={1.5} dash={[4, 3]} listening={false} />
+                    <Line points={[px - 5, py1, px + 5, py1]} stroke="#dc2626" strokeWidth={1.5} listening={false} />
+                    <Line points={[px - 5, py2, px + 5, py2]} stroke="#dc2626" strokeWidth={1.5} listening={false} />
+                    <Text
+                      x={px + 6}
+                      y={(py1 + py2) / 2 - 6}
+                      text={`${seg.value.toFixed(2)}m`}
+                      fontSize={11}
+                      fontStyle="bold"
+                      fill="#dc2626"
+                      listening={false}
+                    />
+                  </Fragment>
+                );
+              });
+            })()}
         </Layer>
       </Stage>
+
+      <div className="avrd-zoom-controls">
+        <button onClick={() => zoomBy(1 / ZOOM_STEP)} title="Zoom out">
+          −
+        </button>
+        <span className="avrd-zoom-label">{Math.round(zoom * 100)}%</span>
+        <button onClick={() => zoomBy(ZOOM_STEP)} title="Zoom in">
+          +
+        </button>
+        <button onClick={resetView} title="Reset zoom/pan">
+          ⤾
+        </button>
+      </div>
     </div>
   );
 }

@@ -16,11 +16,15 @@ export default function DevicePropertiesPanel({
   units,
   onChange,
   onDelete,
+  onDuplicate,
+  onBeginEdit,
 }: {
   object: AnyRoomObject | null;
   units: RoomUnits;
   onChange: (patch: Partial<AnyRoomObject>) => void;
   onDelete: () => void;
+  onDuplicate?: () => void;
+  onBeginEdit?: () => void;
 }) {
   const [showPicker, setShowPicker] = useState(false);
 
@@ -77,6 +81,7 @@ export default function DevicePropertiesPanel({
         <label>Name</label>
         <input
           value={object.object_name}
+          onFocus={() => onBeginEdit?.()}
           onChange={(e) => onChange({ object_name: e.target.value })}
         />
       </div>
@@ -119,6 +124,7 @@ export default function DevicePropertiesPanel({
             type="number"
             step="any"
             value={object.position_x}
+            onFocus={() => onBeginEdit?.()}
             onChange={(e) => onChange({ position_x: Number(e.target.value) })}
           />
         </div>
@@ -128,6 +134,7 @@ export default function DevicePropertiesPanel({
             type="number"
             step="any"
             value={object.position_y}
+            onFocus={() => onBeginEdit?.()}
             onChange={(e) => onChange({ position_y: Number(e.target.value) })}
           />
         </div>
@@ -139,6 +146,7 @@ export default function DevicePropertiesPanel({
           type="number"
           step="any"
           value={object.position_z}
+          onFocus={() => onBeginEdit?.()}
           onChange={(e) => onChange({ position_z: Number(e.target.value) })}
         />
         <div style={{ fontSize: 11, color: 'var(--gray-500)', marginTop: 3 }}>
@@ -156,6 +164,7 @@ export default function DevicePropertiesPanel({
             step="any"
             value={object.width ?? ''}
             placeholder="default"
+            onFocus={() => onBeginEdit?.()}
             onChange={(e) => onChange({ width: e.target.value ? Number(e.target.value) : null })}
           />
         </div>
@@ -166,6 +175,7 @@ export default function DevicePropertiesPanel({
             step="any"
             value={object.depth ?? ''}
             placeholder="default"
+            onFocus={() => onBeginEdit?.()}
             onChange={(e) => onChange({ depth: e.target.value ? Number(e.target.value) : null })}
           />
         </div>
@@ -176,6 +186,7 @@ export default function DevicePropertiesPanel({
             step="any"
             value={object.height ?? ''}
             placeholder="default"
+            onFocus={() => onBeginEdit?.()}
             onChange={(e) => onChange({ height: e.target.value ? Number(e.target.value) : null })}
           />
         </div>
@@ -192,6 +203,7 @@ export default function DevicePropertiesPanel({
             step="any"
             value={object.mounting_height ?? ''}
             placeholder="e.g. 1.5"
+            onFocus={() => onBeginEdit?.()}
             onChange={(e) =>
               onChange({ mounting_height: e.target.value ? Number(e.target.value) : null })
             }
@@ -205,6 +217,7 @@ export default function DevicePropertiesPanel({
           type="number"
           step="any"
           value={object.rotation_z}
+          onFocus={() => onBeginEdit?.()}
           onChange={(e) => onChange({ rotation_z: Number(e.target.value) % 360 })}
         />
       </div>
@@ -217,6 +230,7 @@ export default function DevicePropertiesPanel({
               type="number"
               step="any"
               value={getCameraOverlay(object, units).fov_h}
+              onFocus={() => onBeginEdit?.()}
               onChange={(e) => patchMeta({ fov_h: Number(e.target.value) })}
             />
           </div>
@@ -226,6 +240,7 @@ export default function DevicePropertiesPanel({
               type="number"
               step="any"
               value={getCameraOverlay(object, units).fov_range}
+              onFocus={() => onBeginEdit?.()}
               onChange={(e) => patchMeta({ fov_range: Number(e.target.value) })}
             />
           </div>
@@ -239,6 +254,7 @@ export default function DevicePropertiesPanel({
             type="number"
             step="any"
             value={getMicOverlay(object, units).pickup_radius}
+            onFocus={() => onBeginEdit?.()}
             onChange={(e) => patchMeta({ pickup_radius: Number(e.target.value) })}
           />
         </div>
@@ -253,6 +269,7 @@ export default function DevicePropertiesPanel({
                 type="number"
                 step="any"
                 value={getDisplayOverlay(object, units).viewing_distance_min}
+                onFocus={() => onBeginEdit?.()}
                 onChange={(e) => patchMeta({ viewing_distance_min: Number(e.target.value) })}
               />
             </div>
@@ -262,6 +279,7 @@ export default function DevicePropertiesPanel({
                 type="number"
                 step="any"
                 value={getDisplayOverlay(object, units).viewing_distance_max}
+                onFocus={() => onBeginEdit?.()}
                 onChange={(e) => patchMeta({ viewing_distance_max: Number(e.target.value) })}
               />
             </div>
@@ -272,6 +290,7 @@ export default function DevicePropertiesPanel({
               type="number"
               step="any"
               value={getDisplayOverlay(object, units).viewing_angle}
+              onFocus={() => onBeginEdit?.()}
               onChange={(e) => patchMeta({ viewing_angle: Number(e.target.value) })}
             />
           </div>
@@ -284,18 +303,30 @@ export default function DevicePropertiesPanel({
           type="number"
           min={1}
           value={object.quantity}
+          onFocus={() => onBeginEdit?.()}
           onChange={(e) => onChange({ quantity: Math.max(1, Number(e.target.value) || 1) })}
         />
       </div>
 
       <div className="avrd-field">
         <label>Notes</label>
-        <input value={object.notes ?? ''} onChange={(e) => onChange({ notes: e.target.value })} />
+        <input
+          value={object.notes ?? ''}
+          onFocus={() => onBeginEdit?.()}
+          onChange={(e) => onChange({ notes: e.target.value })}
+        />
       </div>
 
-      <button className="avrd-btn danger" style={{ width: '100%', marginTop: 8 }} onClick={onDelete}>
-        Remove device
-      </button>
+      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+        {onDuplicate && (
+          <button className="avrd-btn" style={{ flex: 1 }} onClick={onDuplicate} title="Duplicate (Ctrl+D)">
+            ⧉ Duplicate
+          </button>
+        )}
+        <button className="avrd-btn danger" style={{ flex: 1 }} onClick={onDelete} title="Delete (Del)">
+          Remove device
+        </button>
+      </div>
     </div>
   );
 }

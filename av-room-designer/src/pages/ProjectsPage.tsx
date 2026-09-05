@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError } from '../api/client';
-import type { AvDesignProject, AvRoom, RoomUnits } from '../types';
+import type { AvDesignProject, AvRoom, AvRoomObject, RoomUnits } from '../types';
+import { libraryEntry } from '../deviceLibrary';
+import { ROOM_TEMPLATES } from '../roomTemplates';
 
 // Two-level list screen: projects, then a selected project's rooms.
 // Deliberately kept as one component with local `selectedProject` state
@@ -202,8 +204,25 @@ function NewRoomModal({
   const [height, setHeight] = useState('');
   const [units, setUnits] = useState<RoomUnits>('m');
   const [quantity, setQuantity] = useState('1');
+  const [templateId, setTemplateId] = useState<string>('blank');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Picking a template pre-fills dimensions/type/units as a starting point
+  // -- all of it stays editable below before submit, and picking a
+  // different template (or "Blank Room") just re-applies its defaults.
+  function applyTemplate(id: string) {
+    setTemplateId(id);
+    if (id === 'blank') return;
+    const t = ROOM_TEMPLATES.find((tpl) => tpl.id === id);
+    if (!t) return;
+    setRoomType(t.roomType);
+    setLength(String(t.length));
+    setWidth(String(t.width));
+    setHeight(String(t.height));
+    setUnits('m');
+    if (!name.trim()) setName(t.label);
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -221,6 +240,45 @@ function NewRoomModal({
         units,
         quantity: quantity ? Number(quantity) : 1,
       });
+
+      // Seed the starter device layout, if a template (not "Blank Room")
+      // was picked -- reuses the same full-replace PUT the designer's own
+      // autosave calls, so there's nothing template-specific on the
+      // backend. Non-fatal if it fails: the room itself was created fine,
+      // so still hand off to onCreated rather than blocking on this.
+      const template = templateId !== 'blank' ? ROOM_TEMPLATES.find((t) => t.id === templateId) : null;
+      if (template && template.length === Number(length) && template.width === Number(width)) {
+        try {
+          const objects = template.devices.map((d) => {
+            const entry = libraryEntry(d.category);
+            return {
+              object_type: entry?.objectType || 'device',
+              category: d.category,
+              object_name: entry?.label || d.category,
+              product_id: null,
+              position_x: d.x,
+              position_y: d.y,
+              position_z: d.z ?? 0,
+              rotation_x: 0,
+              rotation_y: 0,
+              rotation_z: d.rotationZ ?? 0,
+              width: entry ? entry.defaultWidth : null,
+              height: entry ? entry.defaultHeight : null,
+              depth: entry ? entry.defaultDepth : null,
+              mounting_height: null,
+              mounting_type: null,
+              quantity: 1,
+              notes: null,
+              metadata_json: {},
+            };
+          });
+          await api.put<{ objects: AvRoomObject[] }>(`/api/av_rooms/rooms/${room.id}/objects`, { objects });
+        } catch {
+          // Room still created successfully -- just starts empty instead
+          // of pre-populated. Not worth blocking room creation over.
+        }
+      }
+
       onCreated(room);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to create room');
@@ -231,10 +289,32 @@ function NewRoomModal({
 
   return (
     <div className="avrd-modal-overlay" onClick={onClose}>
-      <div className="avrd-modal" onClick={(e) => e.stopPropagation()}>
+      <div className="avrd-modal" style={{ width: 480 }} onClick={(e) => e.stopPropagation()}>
         <h3>New Room</h3>
         {error && <div className="avrd-error">{error}</div>}
         <form onSubmit={submit}>
+          <div className="avrd-field">
+            <label>Start from a template (optional)</label>
+            <div className="avrd-template-grid">
+              <div
+                className={`avrd-template-card ${templateId === 'blank' ? 'selected' : ''}`}
+                onClick={() => applyTemplate('blank')}
+              >
+                <div className="avrd-template-title">Blank Room</div>
+                <div className="avrd-template-sub">Start empty, add devices yourself</div>
+              </div>
+              {ROOM_TEMPLATES.map((t) => (
+                <div
+                  key={t.id}
+                  className={`avrd-template-card ${templateId === t.id ? 'selected' : ''}`}
+                  onClick={() => applyTemplate(t.id)}
+                >
+                  <div className="avrd-template-title">{t.label}</div>
+                  <div className="avrd-template-sub">{t.description}</div>
+                </div>
+              ))}
+            </div>
+          </div>
           <div className="avrd-field">
             <label>Room name</label>
             <input value={name} onChange={(e) => setName(e.target.value)} autoFocus required />

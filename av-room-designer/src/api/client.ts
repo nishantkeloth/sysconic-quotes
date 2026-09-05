@@ -53,9 +53,32 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     const message =
       (data && typeof data === 'object' && 'error' in (data as any) && (data as any).error) ||
       `Request failed (${res.status})`;
+    // A 401 here means the JWT expired or was revoked server-side -- there's
+    // no refresh-token flow, so the only correct move is to force a clean
+    // logout rather than let the caller show a raw "unauthorized" error
+    // inline (which is what used to happen: see the "can't create a room"
+    // bug report). client.ts has no React context, so it can't navigate
+    // directly -- it clears the stored token and fires a DOM event that
+    // App.tsx listens for to drop back to the login screen with an
+    // explanatory message. Only fires once per token (SESSION_EXPIRED_FLAG)
+    // so a burst of already-in-flight requests doesn't spam the event.
+    if (res.status === 401 && token && !sessionExpiredNotified) {
+      sessionExpiredNotified = true;
+      setToken(null);
+      window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
+    }
     throw new ApiError(String(message), res.status);
   }
   return data as T;
+}
+
+export const SESSION_EXPIRED_EVENT = 'avrd:session-expired';
+let sessionExpiredNotified = false;
+
+// Reset the "already notified" guard on every successful login so a later
+// expiry (in a new session) can trigger the flow again.
+export function resetSessionExpiredGuard() {
+  sessionExpiredNotified = false;
 }
 
 export const api = {
@@ -76,6 +99,7 @@ export interface LoginResponse {
 export async function login(email: string, password: string): Promise<LoginResponse> {
   const res = await api.post<LoginResponse>('/api/auth/login', { email, password });
   setToken(res.token);
+  resetSessionExpiredGuard();
   return res;
 }
 
