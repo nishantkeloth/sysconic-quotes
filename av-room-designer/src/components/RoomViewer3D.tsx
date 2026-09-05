@@ -87,6 +87,8 @@ function FurnitureMaterial({ color, selected }: { color: string; selected: boole
   return (
     <meshStandardMaterial
       color={color}
+      roughness={0.75}
+      metalness={0.08}
       emissive={selected ? '#1a1f2b' : '#000000'}
       emissiveIntensity={selected ? 0.35 : 0}
     />
@@ -114,7 +116,7 @@ function TableShape({
 
   return (
     <>
-      <mesh position={[0, heightM - topThickness / 2, 0]}>
+      <mesh position={[0, heightM - topThickness / 2, 0]} castShadow receiveShadow>
         <boxGeometry args={[widthM, topThickness, depthM]} />
         <FurnitureMaterial color={color} selected={selected} />
       </mesh>
@@ -124,7 +126,7 @@ function TableShape({
         [-legInsetX, legInsetZ],
         [legInsetX, legInsetZ],
       ].map(([sx, sz], i) => (
-        <mesh key={i} position={[sx, legHeight / 2, sz]}>
+        <mesh key={i} position={[sx, legHeight / 2, sz]} castShadow>
           <boxGeometry args={[legSize, legHeight, legSize]} />
           <FurnitureMaterial color={color} selected={selected} />
         </mesh>
@@ -156,12 +158,12 @@ function ChairShape({
   return (
     <>
       {/* Seat */}
-      <mesh position={[0, seatH, 0]}>
+      <mesh position={[0, seatH, 0]} castShadow receiveShadow>
         <boxGeometry args={[widthM, seatThickness, depthM]} />
         <FurnitureMaterial color={color} selected={selected} />
       </mesh>
       {/* Backrest along the -Z edge (the chair's "back") */}
-      <mesh position={[0, seatH + (heightM - seatH) / 2, -depthM / 2 + backThickness / 2]}>
+      <mesh position={[0, seatH + (heightM - seatH) / 2, -depthM / 2 + backThickness / 2]} castShadow>
         <boxGeometry args={[widthM, Math.max(heightM - seatH, 0.05), backThickness]} />
         <FurnitureMaterial color={color} selected={selected} />
       </mesh>
@@ -172,7 +174,7 @@ function ChairShape({
         [-legInsetX, legInsetZ],
         [legInsetX, legInsetZ],
       ].map(([sx, sz], i) => (
-        <mesh key={i} position={[sx, seatH / 2, sz]}>
+        <mesh key={i} position={[sx, seatH / 2, sz]} castShadow>
           <boxGeometry args={[legSize, seatH, legSize]} />
           <FurnitureMaterial color={color} selected={selected} />
         </mesh>
@@ -195,7 +197,7 @@ function GenericBox({
   selected: boolean;
 }) {
   return (
-    <mesh position={[0, heightM / 2, 0]}>
+    <mesh position={[0, heightM / 2, 0]} castShadow receiveShadow>
       <boxGeometry args={[widthM, heightM, depthM]} />
       <FurnitureMaterial color={color} selected={selected} />
     </mesh>
@@ -280,27 +282,53 @@ export default function RoomViewer3D({
   const roomLengthM = toMeters(room.length || 4, room.units);
   const roomHeightM = toMeters(room.height || 2.7, room.units);
 
+  // A gentler elevated 3/4 angle than before (that camera sat almost
+  // directly overhead, which is what read as a "ceiling" in the first
+  // pass) -- height scales with room size but caps out relatively low
+  // relative to distance, closer to how real estate / room-planner tools
+  // frame a room.
+  const maxDim = Math.max(roomWidthM, roomLengthM);
   const cameraPos = useMemo<[number, number, number]>(
-    () => [
-      roomWidthM * 0.5 + roomWidthM * 0.9 + 1.5,
-      roomHeightM * 2.2 + 1.5,
-      roomLengthM * 0.5 + roomLengthM * 1.1 + 1.5,
-    ],
-    [roomWidthM, roomLengthM, roomHeightM]
+    () => [roomWidthM / 2 + maxDim * 0.95, roomHeightM * 1.15 + 1, roomLengthM + maxDim * 0.85],
+    [roomWidthM, roomLengthM, roomHeightM, maxDim]
   );
   const target = useMemo<[number, number, number]>(
-    () => [roomWidthM / 2, roomHeightM / 3, roomLengthM / 2],
+    () => [roomWidthM / 2, roomHeightM * 0.35, roomLengthM / 2],
     [roomWidthM, roomHeightM, roomLengthM]
   );
+  const shadowExtent = maxDim + 2;
 
   return (
     <div className="avrd-canvas-wrap">
       <Canvas
-        camera={{ position: cameraPos, fov: 50, near: 0.1, far: 200 }}
+        shadows
+        camera={{ position: cameraPos, fov: 45, near: 0.1, far: 200 }}
         onPointerMissed={() => onSelect(null)}
       >
-        <ambientLight intensity={0.75} />
-        <directionalLight position={[roomWidthM, roomHeightM * 3, roomLengthM]} intensity={0.5} />
+        <color attach="background" args={['#dde3ea']} />
+
+        {/* Soft sky/ground ambient fill + one shadow-casting key light --
+            the flat single ambient+directional pair from the first pass is
+            what made everything look uniformly lit and "CAD-like"; this
+            gives surfaces an actual light/shadow gradient. */}
+        <hemisphereLight args={['#ffffff', '#c7cdd6', 0.65]} />
+        <directionalLight
+          castShadow
+          position={[roomWidthM * 0.7 + 2, roomHeightM * 3 + 2, roomLengthM * 0.6 + 2]}
+          intensity={1.1}
+          shadow-mapSize-width={1536}
+          shadow-mapSize-height={1536}
+          shadow-camera-left={-shadowExtent}
+          shadow-camera-right={shadowExtent}
+          shadow-camera-top={shadowExtent}
+          shadow-camera-bottom={-shadowExtent}
+          shadow-camera-near={0.5}
+          shadow-camera-far={shadowExtent * 4}
+          shadow-bias={-0.0015}
+        />
+        {/* Low-intensity fill light from the opposite side so shadow-side
+            faces aren't pure black. */}
+        <directionalLight position={[-roomWidthM * 0.5 - 1, roomHeightM + 1, -roomLengthM * 0.4 - 1]} intensity={0.25} />
 
         {/* Floor -- padded slightly beyond the room footprint so dragging
             near the walls stays smooth; also the click target for
@@ -309,32 +337,38 @@ export default function RoomViewer3D({
           rotation={[-Math.PI / 2, 0, 0]}
           position={[roomWidthM / 2, 0, roomLengthM / 2]}
           onPointerDown={() => onSelect(null)}
+          receiveShadow
         >
           <planeGeometry args={[roomWidthM + 2, roomLengthM + 2]} />
-          <meshStandardMaterial color="#eef1f5" />
+          <meshStandardMaterial color="#e4e0d6" roughness={0.95} metalness={0} />
         </mesh>
 
         <gridHelper
-          args={[Math.max(roomWidthM, roomLengthM) + 2, Math.max(1, Math.round(Math.max(roomWidthM, roomLengthM) + 2))]}
-          position={[roomWidthM / 2, 0.005, roomLengthM / 2]}
+          args={[
+            Math.max(roomWidthM, roomLengthM) + 2,
+            Math.max(1, Math.round(Math.max(roomWidthM, roomLengthM) + 2)),
+            '#c3cad2',
+            '#d3d9e0',
+          ]}
+          position={[roomWidthM / 2, 0.004, roomLengthM / 2]}
         />
 
-        {/* Walls -- semi-transparent so the room stays readable from any angle */}
-        <mesh position={[roomWidthM / 2, roomHeightM / 2, 0]}>
+        {/* Walls -- an "open box" (3 of 4 walls; the wall nearest the
+            default camera angle, +Z / "front", is omitted) so the room is
+            always readable without relying on transparency, which renders
+            unpredictably once walls overlap in view. Opaque, light,
+            architectural-model style rather than a saturated brand color. */}
+        <mesh position={[roomWidthM / 2, roomHeightM / 2, 0]} receiveShadow>
           <boxGeometry args={[roomWidthM, roomHeightM, WALL_THICKNESS_M]} />
-          <meshStandardMaterial color="#0f2544" transparent opacity={0.12} side={THREE.DoubleSide} />
+          <meshStandardMaterial color="#f4f5f7" roughness={0.92} metalness={0} />
         </mesh>
-        <mesh position={[roomWidthM / 2, roomHeightM / 2, roomLengthM]}>
-          <boxGeometry args={[roomWidthM, roomHeightM, WALL_THICKNESS_M]} />
-          <meshStandardMaterial color="#0f2544" transparent opacity={0.12} side={THREE.DoubleSide} />
-        </mesh>
-        <mesh position={[0, roomHeightM / 2, roomLengthM / 2]}>
+        <mesh position={[0, roomHeightM / 2, roomLengthM / 2]} receiveShadow>
           <boxGeometry args={[WALL_THICKNESS_M, roomHeightM, roomLengthM]} />
-          <meshStandardMaterial color="#0f2544" transparent opacity={0.12} side={THREE.DoubleSide} />
+          <meshStandardMaterial color="#eef0f2" roughness={0.92} metalness={0} />
         </mesh>
-        <mesh position={[roomWidthM, roomHeightM / 2, roomLengthM / 2]}>
+        <mesh position={[roomWidthM, roomHeightM / 2, roomLengthM / 2]} receiveShadow>
           <boxGeometry args={[WALL_THICKNESS_M, roomHeightM, roomLengthM]} />
-          <meshStandardMaterial color="#0f2544" transparent opacity={0.12} side={THREE.DoubleSide} />
+          <meshStandardMaterial color="#eef0f2" roughness={0.92} metalness={0} />
         </mesh>
 
         {objects.map((obj) => (
