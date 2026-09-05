@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Component, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber';
-import { OrbitControls, Text, Billboard } from '@react-three/drei';
+import { OrbitControls, Text, Billboard, useGLTF } from '@react-three/drei';
 import * as THREE from 'three';
 import type { AnyRoomObject, AvRoom } from '../types';
 import { getObjectKey } from '../types';
@@ -289,6 +289,108 @@ function Overlay3D({ obj, room }: { obj: AnyRoomObject; room: AvRoom }) {
   return null;
 }
 
+// Real furniture models: Kenney's "Furniture Kit" (kenney.nl), CC0-licensed,
+// mirrored with stable per-file URLs at github.com/shorepine/kenney (see
+// that repo's LICENSE.txt). Loaded straight from that URL at runtime via
+// drei's useGLTF -- no local copy checked into this repo, so there's
+// nothing extra to build/ship, at the cost of depending on that mirror
+// staying up. There is no free CC0 kit for conference-room AV gear
+// (cameras, mounted displays, ceiling mics, racks, control panels, etc.),
+// so those categories -- and any furniture category not listed here --
+// keep the procedural shapes below.
+const KENNEY_FURNITURE_BASE = 'https://raw.githubusercontent.com/shorepine/kenney/main/3d/furniture';
+const REAL_MODEL_URL: Partial<Record<string, string>> = {
+  table: `${KENNEY_FURNITURE_BASE}/tableCross.glb`,
+  chair: `${KENNEY_FURNITURE_BASE}/chairDesk.glb`,
+  credenza: `${KENNEY_FURNITURE_BASE}/cabinetTelevision.glb`,
+  cabinet: `${KENNEY_FURNITURE_BASE}/cabinetTelevision.glb`,
+};
+Object.values(REAL_MODEL_URL).forEach((u) => {
+  if (u) useGLTF.preload(u);
+});
+
+// Catches a *rejected* load (network error, 404, CORS) -- Suspense alone
+// only handles the *pending* case (a thrown promise); an actual thrown
+// Error from the GLTFLoader needs a real error boundary or it takes down
+// the whole 3D view instead of just this one device falling back to its
+// procedural shape.
+class ModelErrorBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
+// Loads and normalizes a real glTF model to this file's local-space
+// convention (y=0 at the object's own base, centered on X/Z) and to
+// whatever width/depth/height the object currently has -- so a model built
+// at some arbitrary real-world scale still respects the properties panel's
+// dimensions exactly like the procedural shapes do. Materials are cloned
+// per-instance (drei caches and reuses the same THREE.Object3D/materials
+// across every device using the same URL) so selecting one chair doesn't
+// highlight every chair sharing that model.
+function GLTFFurniture({
+  url,
+  widthM,
+  depthM,
+  heightM,
+  selected,
+}: {
+  url: string;
+  widthM: number;
+  depthM: number;
+  heightM: number;
+  selected: boolean;
+}) {
+  const { scene } = useGLTF(url);
+
+  const cloned = useMemo(() => {
+    const root = scene.clone(true);
+    root.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.material = Array.isArray(mesh.material)
+        ? mesh.material.map((m) => m.clone())
+        : (mesh.material as THREE.Material).clone();
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      mats.forEach((m) => {
+        const std = m as THREE.MeshStandardMaterial;
+        if ('emissive' in std) {
+          std.emissive = new THREE.Color(selected ? '#1a1f2b' : '#000000');
+          std.emissiveIntensity = selected ? 0.35 : 0;
+        }
+      });
+    });
+    return root;
+  }, [scene, selected]);
+
+  const { scale, offset } = useMemo(() => {
+    const box = new THREE.Box3().setFromObject(cloned);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const center = new THREE.Vector3();
+    box.getCenter(center);
+    const sx = size.x > 1e-4 ? widthM / size.x : 1;
+    const sy = size.y > 1e-4 ? heightM / size.y : 1;
+    const sz = size.z > 1e-4 ? depthM / size.z : 1;
+    return {
+      scale: [sx, sy, sz] as [number, number, number],
+      offset: [-center.x * sx, -box.min.y * sy, -center.z * sz] as [number, number, number],
+    };
+  }, [cloned, widthM, depthM, heightM]);
+
+  return (
+    <group scale={scale} position={offset}>
+      <primitive object={cloned} />
+    </group>
+  );
+}
+
 function DeviceBox({
   obj,
   room,
@@ -320,10 +422,21 @@ function DeviceBox({
   const category = obj.category as string;
 
   const shapeProps = { widthM, depthM, heightM, color, selected };
-  let shape;
-  if (category === 'table') shape = <TableShape {...shapeProps} />;
-  else if (category === 'chair') shape = <ChairShape {...shapeProps} />;
-  else shape = <GenericBox {...shapeProps} />;
+  let fallbackShape;
+  if (category === 'table') fallbackShape = <TableShape {...shapeProps} />;
+  else if (category === 'chair') fallbackShape = <ChairShape {...shapeProps} />;
+  else fallbackShape = <GenericBox {...shapeProps} />;
+
+  const modelUrl = REAL_MODEL_URL[category];
+  const shape = modelUrl ? (
+    <ModelErrorBoundary fallback={fallbackShape}>
+      <Suspense fallback={fallbackShape}>
+        <GLTFFurniture url={modelUrl} widthM={widthM} depthM={depthM} heightM={heightM} selected={selected} />
+      </Suspense>
+    </ModelErrorBoundary>
+  ) : (
+    fallbackShape
+  );
 
   return (
     <group
