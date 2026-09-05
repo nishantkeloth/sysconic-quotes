@@ -171,6 +171,23 @@ input, select {
   background: #d7dde6;
   overflow: hidden;
 }
+
+/* Split view: 2D and 3D panels rendered side by side, both driven by the
+   same room/objects state so they stay live-synced as you edit -- matches
+   the reference product's simultaneous dual-pane layout instead of a
+   single toggled view. */
+.avrd-split-view {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+}
+.avrd-split-view .avrd-canvas-wrap {
+  min-width: 0;
+}
+.avrd-split-view:not(.single) > *:first-child {
+  border-right: 1px solid var(--gray-200);
+}
 .avrd-canvas-toolbar {
   position: absolute; top: 10px; left: 10px; z-index: 5;
   background: white; border-radius: 8px; box-shadow: var(--shadow-sm);

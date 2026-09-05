@@ -49,7 +49,10 @@ export default function RoomDesignerPage({
   const [error, setError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [showOverlays, setShowOverlays] = useState(true);
-  const [viewMode, setViewMode] = useState<'2D' | '3D'>('2D');
+  // Default to Split so 2D and 3D stay visible and in sync side by side
+  // (matches the reference product's simultaneous-panel layout) -- users
+  // can still go full-width on either view via the toolbar.
+  const [viewMode, setViewMode] = useState<'2D' | '3D' | 'Split'>('Split');
 
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipNextAutosave = useRef(true); // don't autosave on initial load
@@ -179,7 +182,10 @@ export default function RoomDesignerPage({
           <button className={viewMode === '3D' ? 'active' : ''} onClick={() => setViewMode('3D')}>
             3D
           </button>
-          {viewMode === '2D' && (
+          <button className={viewMode === 'Split' ? 'active' : ''} onClick={() => setViewMode('Split')}>
+            Split
+          </button>
+          {viewMode !== '3D' && (
             <button
               className={showOverlays ? 'active' : ''}
               onClick={() => setShowOverlays((v) => !v)}
@@ -199,33 +205,36 @@ export default function RoomDesignerPage({
           {saveStatus === 'error' && (error || 'Save failed')}
         </div>
 
-        {viewMode === '2D' ? (
-          <RoomCanvas2D
-            room={room}
-            objects={objects}
-            selectedKey={selectedKey}
-            onSelect={setSelectedKey}
-            onMoveObject={handleMoveObject}
-            onDropCategory={handleDropCategory}
-            showOverlays={showOverlays}
-          />
-        ) : (
-          <Suspense
-            fallback={
-              <div className="avrd-canvas-wrap" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <p style={{ color: 'var(--gray-500)' }}>Loading 3D view…</p>
-              </div>
-            }
-          >
-            <RoomViewer3D
+        <div className={viewMode === 'Split' ? 'avrd-split-view' : 'avrd-split-view single'}>
+          {viewMode !== '3D' && (
+            <RoomCanvas2D
               room={room}
               objects={objects}
               selectedKey={selectedKey}
               onSelect={setSelectedKey}
               onMoveObject={handleMoveObject}
+              onDropCategory={handleDropCategory}
+              showOverlays={showOverlays}
             />
-          </Suspense>
-        )}
+          )}
+          {viewMode !== '2D' && (
+            <Suspense
+              fallback={
+                <div className="avrd-canvas-wrap" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <p style={{ color: 'var(--gray-500)' }}>Loading 3D view…</p>
+                </div>
+              }
+            >
+              <RoomViewer3D
+                room={room}
+                objects={objects}
+                selectedKey={selectedKey}
+                onSelect={setSelectedKey}
+                onMoveObject={handleMoveObject}
+              />
+            </Suspense>
+          )}
+        </div>
       </div>
 
       <DevicePropertiesPanel

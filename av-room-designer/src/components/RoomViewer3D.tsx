@@ -74,6 +74,134 @@ function DragController({
   return null;
 }
 
+// Per spec §43, models are generic (not manufacturer-specific), but "generic
+// box for everything" reads as unrecognizable clutter for the two shapes
+// people notice most -- tables and chairs. These two get a composite
+// silhouette (tabletop+legs, seat+backrest) instead of one solid block;
+// everything else stays a simple box, which is a fine generic stand-in for
+// compact equipment (cameras, panels, speakers, etc.). All local coordinates
+// here have y=0 at the object's OWN BASE (floor/mount-surface contact
+// point) -- the parent group in DeviceBox translates that up to
+// baseM = position_z before any of this is placed in room space.
+function FurnitureMaterial({ color, selected }: { color: string; selected: boolean }) {
+  return (
+    <meshStandardMaterial
+      color={color}
+      emissive={selected ? '#1a1f2b' : '#000000'}
+      emissiveIntensity={selected ? 0.35 : 0}
+    />
+  );
+}
+
+function TableShape({
+  widthM,
+  depthM,
+  heightM,
+  color,
+  selected,
+}: {
+  widthM: number;
+  depthM: number;
+  heightM: number;
+  color: string;
+  selected: boolean;
+}) {
+  const topThickness = Math.min(0.05, heightM * 0.2) || 0.03;
+  const legSize = Math.max(0.03, Math.min(widthM, depthM) * 0.05);
+  const legHeight = Math.max(heightM - topThickness, 0.05);
+  const legInsetX = Math.max(widthM / 2 - legSize, 0.02);
+  const legInsetZ = Math.max(depthM / 2 - legSize, 0.02);
+
+  return (
+    <>
+      <mesh position={[0, heightM - topThickness / 2, 0]}>
+        <boxGeometry args={[widthM, topThickness, depthM]} />
+        <FurnitureMaterial color={color} selected={selected} />
+      </mesh>
+      {[
+        [-legInsetX, -legInsetZ],
+        [legInsetX, -legInsetZ],
+        [-legInsetX, legInsetZ],
+        [legInsetX, legInsetZ],
+      ].map(([sx, sz], i) => (
+        <mesh key={i} position={[sx, legHeight / 2, sz]}>
+          <boxGeometry args={[legSize, legHeight, legSize]} />
+          <FurnitureMaterial color={color} selected={selected} />
+        </mesh>
+      ))}
+    </>
+  );
+}
+
+function ChairShape({
+  widthM,
+  depthM,
+  heightM,
+  color,
+  selected,
+}: {
+  widthM: number;
+  depthM: number;
+  heightM: number;
+  color: string;
+  selected: boolean;
+}) {
+  const seatH = heightM * 0.5;
+  const seatThickness = Math.min(0.05, seatH * 0.3) || 0.03;
+  const backThickness = Math.min(0.05, widthM * 0.15) || 0.03;
+  const legSize = Math.max(0.02, Math.min(widthM, depthM) * 0.06);
+  const legInsetX = Math.max(widthM / 2 - legSize, 0.02);
+  const legInsetZ = Math.max(depthM / 2 - legSize, 0.02);
+
+  return (
+    <>
+      {/* Seat */}
+      <mesh position={[0, seatH, 0]}>
+        <boxGeometry args={[widthM, seatThickness, depthM]} />
+        <FurnitureMaterial color={color} selected={selected} />
+      </mesh>
+      {/* Backrest along the -Z edge (the chair's "back") */}
+      <mesh position={[0, seatH + (heightM - seatH) / 2, -depthM / 2 + backThickness / 2]}>
+        <boxGeometry args={[widthM, Math.max(heightM - seatH, 0.05), backThickness]} />
+        <FurnitureMaterial color={color} selected={selected} />
+      </mesh>
+      {/* Legs */}
+      {[
+        [-legInsetX, -legInsetZ],
+        [legInsetX, -legInsetZ],
+        [-legInsetX, legInsetZ],
+        [legInsetX, legInsetZ],
+      ].map(([sx, sz], i) => (
+        <mesh key={i} position={[sx, seatH / 2, sz]}>
+          <boxGeometry args={[legSize, seatH, legSize]} />
+          <FurnitureMaterial color={color} selected={selected} />
+        </mesh>
+      ))}
+    </>
+  );
+}
+
+function GenericBox({
+  widthM,
+  depthM,
+  heightM,
+  color,
+  selected,
+}: {
+  widthM: number;
+  depthM: number;
+  heightM: number;
+  color: string;
+  selected: boolean;
+}) {
+  return (
+    <mesh position={[0, heightM / 2, 0]}>
+      <boxGeometry args={[widthM, heightM, depthM]} />
+      <FurnitureMaterial color={color} selected={selected} />
+    </mesh>
+  );
+}
+
 function DeviceBox({
   obj,
   room,
@@ -102,26 +230,26 @@ function DeviceBox({
   const rotY = THREE.MathUtils.degToRad(-(obj.rotation_z || 0));
 
   const color = entry?.color || '#64748b';
+  const category = obj.category as string;
+
+  const shapeProps = { widthM, depthM, heightM, color, selected };
+  let shape;
+  if (category === 'table') shape = <TableShape {...shapeProps} />;
+  else if (category === 'chair') shape = <ChairShape {...shapeProps} />;
+  else shape = <GenericBox {...shapeProps} />;
 
   return (
-    <group>
-      <mesh
-        position={[xM, baseM + heightM / 2, zM]}
-        rotation={[0, rotY, 0]}
-        onPointerDown={(e: ThreeEvent<PointerEvent>) => {
-          e.stopPropagation();
-          onSelect(key);
-          setDraggingKey(key);
-        }}
-      >
-        <boxGeometry args={[widthM, heightM, depthM]} />
-        <meshStandardMaterial
-          color={color}
-          emissive={selected ? '#1a1f2b' : '#000000'}
-          emissiveIntensity={selected ? 0.35 : 0}
-        />
-      </mesh>
-      <Billboard position={[xM, baseM + heightM + 0.18, zM]}>
+    <group
+      position={[xM, baseM, zM]}
+      rotation={[0, rotY, 0]}
+      onPointerDown={(e: ThreeEvent<PointerEvent>) => {
+        e.stopPropagation();
+        onSelect(key);
+        setDraggingKey(key);
+      }}
+    >
+      {shape}
+      <Billboard position={[0, heightM + 0.18, 0]}>
         <Text fontSize={0.13} color="#1a1f2b" anchorX="center" anchorY="bottom">
           {obj.object_name || entry?.label || obj.category}
         </Text>
