@@ -6,6 +6,7 @@ import type { AnyRoomObject, AvRoom } from '../types';
 import { getObjectKey } from '../types';
 import { libraryEntry } from '../deviceLibrary';
 import { toMeters, fromMeters } from '../units';
+import { overlayKind, getCameraOverlay, getMicOverlay, getDisplayOverlay } from '../overlays';
 
 // Synchronized 3D room view (spec §17/§18: one shared room object model
 // feeds both the 2D canvas and this view -- no separate 3D-only data).
@@ -204,6 +205,90 @@ function GenericBox({
   );
 }
 
+// Floor-projected engineering overlays (camera FOV / mic pickup / display
+// viewing zone) -- the 3D counterpart of RoomCanvas2D's Konva Arc/Circle
+// overlays, built from the exact same overlays.ts data so a change to one
+// view's numbers always shows up in the other.
+//
+// These are rendered as independent, absolutely-positioned floor meshes
+// (siblings of DeviceBox, not nested inside its rotated <group>) rather than
+// children of the source device: a ceiling mic's coverage patch belongs on
+// the floor, not floating up at the mic's own mount height, so projecting
+// straight onto y~0 from the object's xM/zM is simpler and more correct
+// than un-doing DeviceBox's height offset.
+//
+// Angle convention: authored like the floor plane -- a shape drawn in local
+// XY (standard math angle, counterclockwise from +X) then laid flat via
+// rotation-x=-90deg, which maps local Y to world -Z. That Z-flip is what
+// turns the app's clockwise-from-"+Y-is-facing-0" convention (see
+// overlays.ts's facingToKonvaDegrees) into the counterclockwise-from-+X
+// convention Ring/CircleGeometry's thetaStart expects here: the Three-space
+// center angle is simply the negation of the Konva facing angle.
+function floorAngleRad(rotationZ: number): number {
+  const facingKonvaDeg = (rotationZ || 0) + 90;
+  return THREE.MathUtils.degToRad(-facingKonvaDeg);
+}
+
+// R3F assigns whatever we pass as `raycast` onto the mesh's raycast method;
+// returning nothing means "never report an intersection," so clicks pass
+// straight through these overlays to the device or floor underneath instead
+// of being swallowed by a transparent coverage patch.
+function disableRaycast() {
+  return null;
+}
+
+function CameraOverlay3D({ obj, room }: { obj: AnyRoomObject; room: AvRoom }) {
+  const ov = getCameraOverlay(obj, room.units);
+  const xM = toMeters(obj.position_x, room.units);
+  const zM = toMeters(obj.position_y, room.units);
+  const rangeM = Math.max(toMeters(ov.fov_range, room.units), 0.05);
+  const fovRad = THREE.MathUtils.degToRad(Math.max(ov.fov_h, 1));
+  const thetaStart = floorAngleRad(obj.rotation_z) - fovRad / 2;
+  return (
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[xM, 0.012, zM]} raycast={disableRaycast}>
+      <ringGeometry args={[0, rangeM, 48, 1, thetaStart, fovRad]} />
+      <meshBasicMaterial color="#2563eb" transparent opacity={0.18} side={THREE.DoubleSide} depthWrite={false} />
+    </mesh>
+  );
+}
+
+function MicOverlay3D({ obj, room }: { obj: AnyRoomObject; room: AvRoom }) {
+  const ov = getMicOverlay(obj, room.units);
+  const xM = toMeters(obj.position_x, room.units);
+  const zM = toMeters(obj.position_y, room.units);
+  const radiusM = Math.max(toMeters(ov.pickup_radius, room.units), 0.05);
+  return (
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[xM, 0.012, zM]} raycast={disableRaycast}>
+      <circleGeometry args={[radiusM, 48]} />
+      <meshBasicMaterial color="#16a34a" transparent opacity={0.14} side={THREE.DoubleSide} depthWrite={false} />
+    </mesh>
+  );
+}
+
+function DisplayOverlay3D({ obj, room }: { obj: AnyRoomObject; room: AvRoom }) {
+  const ov = getDisplayOverlay(obj, room.units);
+  const xM = toMeters(obj.position_x, room.units);
+  const zM = toMeters(obj.position_y, room.units);
+  const minM = Math.max(toMeters(ov.viewing_distance_min, room.units), 0.05);
+  const maxM = Math.max(toMeters(ov.viewing_distance_max, room.units), minM + 0.1);
+  const angleRad = THREE.MathUtils.degToRad(Math.max(ov.viewing_angle, 1));
+  const thetaStart = floorAngleRad(obj.rotation_z) - angleRad / 2;
+  return (
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[xM, 0.014, zM]} raycast={disableRaycast}>
+      <ringGeometry args={[minM, maxM, 48, 1, thetaStart, angleRad]} />
+      <meshBasicMaterial color="#d97706" transparent opacity={0.14} side={THREE.DoubleSide} depthWrite={false} />
+    </mesh>
+  );
+}
+
+function Overlay3D({ obj, room }: { obj: AnyRoomObject; room: AvRoom }) {
+  const kind = overlayKind(obj.category as string);
+  if (kind === 'camera') return <CameraOverlay3D obj={obj} room={room} />;
+  if (kind === 'mic') return <MicOverlay3D obj={obj} room={room} />;
+  if (kind === 'display') return <DisplayOverlay3D obj={obj} room={room} />;
+  return null;
+}
+
 function DeviceBox({
   obj,
   room,
@@ -266,12 +351,14 @@ export default function RoomViewer3D({
   selectedKey,
   onSelect,
   onMoveObject,
+  showOverlays = true,
 }: {
   room: AvRoom;
   objects: AnyRoomObject[];
   selectedKey: string | null;
   onSelect: (key: string | null) => void;
   onMoveObject: (key: string, positionX: number, positionY: number) => void;
+  showOverlays?: boolean;
 }) {
   // Drag state is purely internal to this view -- the 2D canvas has its own
   // independent drag mechanism (Konva's built-in draggable), so there's
@@ -370,6 +457,9 @@ export default function RoomViewer3D({
           <boxGeometry args={[WALL_THICKNESS_M, roomHeightM, roomLengthM]} />
           <meshStandardMaterial color="#eef0f2" roughness={0.92} metalness={0} />
         </mesh>
+
+        {showOverlays &&
+          objects.map((obj) => <Overlay3D key={`${getObjectKey(obj)}-ov3d`} obj={obj} room={room} />)}
 
         {objects.map((obj) => (
           <DeviceBox

@@ -185,15 +185,13 @@ export default function RoomDesignerPage({
           <button className={viewMode === 'Split' ? 'active' : ''} onClick={() => setViewMode('Split')}>
             Split
           </button>
-          {viewMode !== '3D' && (
-            <button
-              className={showOverlays ? 'active' : ''}
-              onClick={() => setShowOverlays((v) => !v)}
-              title="Toggle camera FOV / mic pickup / display viewing-distance overlays"
-            >
-              {showOverlays ? 'Overlays: On' : 'Overlays: Off'}
-            </button>
-          )}
+          <button
+            className={showOverlays ? 'active' : ''}
+            onClick={() => setShowOverlays((v) => !v)}
+            title="Toggle camera FOV / mic pickup / display viewing-distance overlays"
+          >
+            {showOverlays ? 'Overlays: On' : 'Overlays: Off'}
+          </button>
         </div>
         <div
           className={`avrd-save-status ${saveStatus}`}
@@ -231,6 +229,7 @@ export default function RoomDesignerPage({
                 selectedKey={selectedKey}
                 onSelect={setSelectedKey}
                 onMoveObject={handleMoveObject}
+                showOverlays={showOverlays}
               />
             </Suspense>
           )}
