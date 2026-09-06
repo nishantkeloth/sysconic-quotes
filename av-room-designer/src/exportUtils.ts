@@ -8,7 +8,7 @@ import { libraryEntry } from './deviceLibrary';
 // a PNG snapshot of whatever the Konva Stage is currently showing. Neither
 // needs a server endpoint, so neither is wired into api/av_rooms.py.
 
-function triggerDownload(blob: Blob, filename: string) {
+export function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -79,7 +79,40 @@ export function exportStageAsPng(stage: Konva.Stage, roomName: string) {
   triggerDownload(blob, `${safeName}-floorplan.png`);
 }
 
-function dataUrlToBlob(dataUrl: string): Blob {
+// Composites a captured WebGL frame with a title bar so a 3D "hero shot"
+// reads as a presentation image handed to a client, not a raw screenshot
+// of the interactive editor.
+export function composeHeroImage(dataUrl: string, title: string): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const barH = Math.max(56, Math.round(img.height * 0.06));
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height + barH;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('2D canvas context unavailable'));
+        return;
+      }
+      ctx.fillStyle = '#0f2544';
+      ctx.fillRect(0, 0, canvas.width, barH);
+      ctx.drawImage(img, 0, barH);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = `600 ${Math.max(18, Math.round(barH * 0.42))}px "Segoe UI", system-ui, sans-serif`;
+      ctx.textBaseline = 'middle';
+      ctx.fillText(title, 28, barH / 2 + 1);
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error('Canvas toBlob failed'));
+      }, 'image/png');
+    };
+    img.onerror = () => reject(new Error('Failed to load captured 3D frame'));
+    img.src = dataUrl;
+  });
+}
+
+export function dataUrlToBlob(dataUrl: string): Blob {
   const [header, base64] = dataUrl.split(',');
   const mimeMatch = /data:(.*);base64/.exec(header);
   const mime = mimeMatch ? mimeMatch[1] : 'image/png';

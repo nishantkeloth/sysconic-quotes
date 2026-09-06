@@ -1,12 +1,13 @@
-import { Component, Suspense, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Component, Suspense, useEffect, useMemo, useState, type MutableRefObject, type ReactNode } from 'react';
 import { Canvas, useThree, type ThreeEvent } from '@react-three/fiber';
-import { OrbitControls, Text, Billboard, useGLTF } from '@react-three/drei';
+import { OrbitControls, Text, Billboard, useGLTF, Environment } from '@react-three/drei';
 import * as THREE from 'three';
 import type { AnyRoomObject, AvRoom } from '../types';
 import { getObjectKey } from '../types';
 import { libraryEntry } from '../deviceLibrary';
 import { toMeters, fromMeters } from '../units';
 import { overlayKind, getCameraOverlay, getMicOverlay, getDisplayOverlay } from '../overlays';
+import { woodTexture, fabricTexture, plankFloorTexture } from '../proceduralTextures';
 
 // Synchronized 3D room view (spec §17/§18: one shared room object model
 // feeds both the 2D canvas and this view -- no separate 3D-only data).
@@ -84,10 +85,24 @@ function DragController({
 // here have y=0 at the object's OWN BASE (floor/mount-surface contact
 // point) -- the parent group in DeviceBox translates that up to
 // baseM = position_z before any of this is placed in room space.
-function FurnitureMaterial({ color, selected }: { color: string; selected: boolean }) {
+function FurnitureMaterial({
+  color,
+  selected,
+  map,
+}: {
+  color: string;
+  selected: boolean;
+  map?: THREE.Texture;
+}) {
+  // When a procedural texture is supplied it already bakes the base color
+  // into its pixels (see proceduralTextures.ts) -- tinting on top of that
+  // with the same `color` would double-apply it (map color * material
+  // color), so the material color only does the tinting when there's no
+  // map to tint instead.
   return (
     <meshStandardMaterial
-      color={color}
+      color={map ? '#ffffff' : color}
+      map={map}
       roughness={0.75}
       metalness={0.08}
       emissive={selected ? '#1a1f2b' : '#000000'}
@@ -114,12 +129,14 @@ function TableShape({
   const legHeight = Math.max(heightM - topThickness, 0.05);
   const legInsetX = Math.max(widthM / 2 - legSize, 0.02);
   const legInsetZ = Math.max(depthM / 2 - legSize, 0.02);
+  const topMap = useMemo(() => woodTexture(color, Math.max(1, Math.round((widthM + depthM) / 1.5))), [color, widthM, depthM]);
+  const legMap = useMemo(() => woodTexture(color, 1), [color]);
 
   return (
     <>
       <mesh position={[0, heightM - topThickness / 2, 0]} castShadow receiveShadow>
         <boxGeometry args={[widthM, topThickness, depthM]} />
-        <FurnitureMaterial color={color} selected={selected} />
+        <FurnitureMaterial color={color} selected={selected} map={topMap} />
       </mesh>
       {[
         [-legInsetX, -legInsetZ],
@@ -129,7 +146,7 @@ function TableShape({
       ].map(([sx, sz], i) => (
         <mesh key={i} position={[sx, legHeight / 2, sz]} castShadow>
           <boxGeometry args={[legSize, legHeight, legSize]} />
-          <FurnitureMaterial color={color} selected={selected} />
+          <FurnitureMaterial color={color} selected={selected} map={legMap} />
         </mesh>
       ))}
     </>
@@ -155,18 +172,20 @@ function ChairShape({
   const legSize = Math.max(0.02, Math.min(widthM, depthM) * 0.06);
   const legInsetX = Math.max(widthM / 2 - legSize, 0.02);
   const legInsetZ = Math.max(depthM / 2 - legSize, 0.02);
+  const upholsteryMap = useMemo(() => fabricTexture(color, 2), [color]);
+  const frameMap = useMemo(() => woodTexture(color, 1), [color]);
 
   return (
     <>
       {/* Seat */}
       <mesh position={[0, seatH, 0]} castShadow receiveShadow>
         <boxGeometry args={[widthM, seatThickness, depthM]} />
-        <FurnitureMaterial color={color} selected={selected} />
+        <FurnitureMaterial color={color} selected={selected} map={upholsteryMap} />
       </mesh>
       {/* Backrest along the -Z edge (the chair's "back") */}
       <mesh position={[0, seatH + (heightM - seatH) / 2, -depthM / 2 + backThickness / 2]} castShadow>
         <boxGeometry args={[widthM, Math.max(heightM - seatH, 0.05), backThickness]} />
-        <FurnitureMaterial color={color} selected={selected} />
+        <FurnitureMaterial color={color} selected={selected} map={upholsteryMap} />
       </mesh>
       {/* Legs */}
       {[
@@ -177,7 +196,7 @@ function ChairShape({
       ].map(([sx, sz], i) => (
         <mesh key={i} position={[sx, seatH / 2, sz]} castShadow>
           <boxGeometry args={[legSize, seatH, legSize]} />
-          <FurnitureMaterial color={color} selected={selected} />
+          <FurnitureMaterial color={color} selected={selected} map={frameMap} />
         </mesh>
       ))}
     </>
@@ -391,6 +410,33 @@ function GLTFFurniture({
   );
 }
 
+// Exposes an imperative "capture the current frame at higher resolution"
+// function via a ref, for the "Export Image" hero shot -- rendered inside
+// the Canvas (only useThree() has access to the live gl/scene/camera).
+// Temporarily bumps the renderer's pixel ratio for one extra render pass
+// so the exported PNG is sharper than the on-screen canvas's own CSS size
+// (which shrinks in Split view), then restores it and re-renders once more
+// so the live view isn't left at the wrong resolution.
+function ExportCapture({ captureRef }: { captureRef?: MutableRefObject<(() => string) | null> }) {
+  const { gl, scene, camera } = useThree();
+  useEffect(() => {
+    if (!captureRef) return;
+    captureRef.current = () => {
+      const prevRatio = gl.getPixelRatio();
+      gl.setPixelRatio(Math.min(3, prevRatio * 2));
+      gl.render(scene, camera);
+      const dataUrl = gl.domElement.toDataURL('image/png');
+      gl.setPixelRatio(prevRatio);
+      gl.render(scene, camera);
+      return dataUrl;
+    };
+    return () => {
+      if (captureRef) captureRef.current = null;
+    };
+  }, [captureRef, gl, scene, camera]);
+  return null;
+}
+
 function DeviceBox({
   obj,
   room,
@@ -469,6 +515,7 @@ export default function RoomViewer3D({
   onMoveObject,
   onBeginEdit,
   showOverlays = true,
+  captureRef,
 }: {
   room: AvRoom;
   objects: AnyRoomObject[];
@@ -477,6 +524,7 @@ export default function RoomViewer3D({
   onMoveObject: (key: string, positionX: number, positionY: number) => void;
   onBeginEdit?: () => void;
   showOverlays?: boolean;
+  captureRef?: MutableRefObject<(() => string) | null>;
 }) {
   // Drag state is purely internal to this view -- the 2D canvas has its own
   // independent drag mechanism (Konva's built-in draggable), so there's
@@ -502,6 +550,7 @@ export default function RoomViewer3D({
     [roomWidthM, roomHeightM, roomLengthM]
   );
   const shadowExtent = maxDim + 2;
+  const floorMap = useMemo(() => plankFloorTexture('#c9b896', Math.max(2, Math.round(maxDim))), [maxDim]);
 
   return (
     <div className="avrd-canvas-wrap">
@@ -509,8 +558,20 @@ export default function RoomViewer3D({
         shadows
         camera={{ position: cameraPos, fov: 45, near: 0.1, far: 200 }}
         onPointerMissed={() => onSelect(null)}
+        gl={{ toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.05 }}
       >
         <color attach="background" args={['#dde3ea']} />
+
+        {/* Image-based lighting: gives every material (procedural shapes
+            and the loaded glTF furniture alike) real ambient reflections
+            and color bounce instead of the flat, uniformly-lit look a
+            couple of directional lights alone produce -- the single
+            biggest lever for "looks like a real render" that doesn't
+            require licensed assets. Loaded from drei's public, free HDRI
+            bucket at runtime; background=false so it only lights the
+            scene without replacing the flat sky color above. */}
+        <Environment preset="apartment" background={false} />
+        <ExportCapture captureRef={captureRef} />
 
         {/* Soft sky/ground ambient fill + one shadow-casting key light --
             the flat single ambient+directional pair from the first pass is
@@ -545,7 +606,7 @@ export default function RoomViewer3D({
           receiveShadow
         >
           <planeGeometry args={[roomWidthM + 2, roomLengthM + 2]} />
-          <meshStandardMaterial color="#e4e0d6" roughness={0.95} metalness={0} />
+          <meshStandardMaterial map={floorMap} color="#ffffff" roughness={0.85} metalness={0} />
         </mesh>
 
         <gridHelper

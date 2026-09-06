@@ -9,7 +9,8 @@ import DeviceLibraryPanel from '../components/DeviceLibraryPanel';
 import RoomCanvas2D from '../components/RoomCanvas2D';
 import DevicePropertiesPanel from '../components/DevicePropertiesPanel';
 import ValidationPanel from '../components/ValidationPanel';
-import { exportObjectsAsCsv, exportStageAsPng } from '../exportUtils';
+import { exportObjectsAsCsv, exportStageAsPng, composeHeroImage, triggerDownload } from '../exportUtils';
+import { exportClientFloorPlan } from '../clientExport';
 
 // Lazy-loaded: three.js + @react-three/fiber + @react-three/drei add ~1MB
 // to the bundle. Most sessions will only ever use the 2D editor (per spec
@@ -127,6 +128,7 @@ export default function RoomDesignerPage({
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipNextAutosave = useRef(true); // don't autosave on initial load
   const stageRef = useRef<Konva.Stage | null>(null);
+  const hero3dCaptureRef = useRef<(() => string) | null>(null);
 
   // Kept in sync via effects purely so the *one* global keydown listener
   // (registered once, below) can always read current values without being
@@ -263,6 +265,27 @@ export default function RoomDesignerPage({
 
   function handleExportPng() {
     if (stageRef.current) exportStageAsPng(stageRef.current, room?.room_name || 'room');
+  }
+
+  function handleExportClientPlan() {
+    if (room) exportClientFloorPlan(room, objects);
+  }
+
+  async function handleExportHero3D() {
+    if (!hero3dCaptureRef.current || !room) return;
+    try {
+      // toDataURL() on the WebGL canvas can throw a SecurityError if any
+      // texture in the scene came from a cross-origin source without CORS
+      // headers (the environment lighting's HDRI is fetched from a public
+      // CDN) -- guarded end-to-end so a bad response there degrades to
+      // "export didn't produce a file" instead of an unhandled error.
+      const dataUrl = hero3dCaptureRef.current();
+      const blob = await composeHeroImage(dataUrl, room.room_name);
+      const safeName = (room.room_name || 'room').replace(/[^a-z0-9-_]+/gi, '_');
+      triggerDownload(blob, `${safeName}-3d-view.png`);
+    } catch (e) {
+      setError('Could not export the 3D view as an image. Try the 2D client export instead.');
+    }
   }
 
   // One global keydown listener, registered once (empty deps) -- it reads
@@ -434,8 +457,21 @@ export default function RoomDesignerPage({
             ⤓ Export BOM
           </button>
           {viewMode !== '3D' && (
-            <button onClick={handleExportPng} title="Export the 2D floor plan as a PNG image">
+            <button onClick={handleExportPng} title="Export the current 2D canvas view as-is (editor screenshot)">
               ⤓ Export Image
+            </button>
+          )}
+          {viewMode !== '3D' && (
+            <button
+              onClick={handleExportClientPlan}
+              title="Export a client-ready floor plan: title block, equipment schedule, dimensions"
+            >
+              ⤓ Export for Client (2D)
+            </button>
+          )}
+          {viewMode !== '2D' && (
+            <button onClick={handleExportHero3D} title="Export a high-res, titled 3D presentation image">
+              ⤓ Export for Client (3D)
             </button>
           )}
         </div>
@@ -481,6 +517,7 @@ export default function RoomDesignerPage({
                 onMoveObject={handleMoveObject}
                 onBeginEdit={beginEdit}
                 showOverlays={showOverlays}
+                captureRef={hero3dCaptureRef}
               />
             </Suspense>
           )}
