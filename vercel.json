@@ -26,6 +26,7 @@
 { "src": "api/fsm_portal.py", "use": "@vercel/python" },
 { "src": "api/delivery_challans.py", "use": "@vercel/python" },
 { "src": "api/vouchers.py", "use": "@vercel/python" },
+{ "src": "api/workflows.py", "use": "@vercel/python" },
     { "src": "api/pdf-render.js", "use": "@vercel/node", "config": { "maxLambdaSize": "250mb", "maxDuration": 30, "memory": 3009 } },
         { "src": "index.html",    "use": "@vercel/static" }
   ],
@@ -87,6 +88,8 @@
 { "src": "/api/delivery_challans",      "dest": "api/delivery_challans.py" },
 { "src": "/api/vouchers/(.*)", "dest": "api/vouchers.py" },
 { "src": "/api/vouchers",      "dest": "api/vouchers.py" },
+{ "src": "/api/workflows/(.*)", "dest": "api/workflows.py" },
+{ "src": "/api/workflows",      "dest": "api/workflows.py" },
 { "src": "/(.*)",            "dest": "index.html" }
   ],
   "crons": [

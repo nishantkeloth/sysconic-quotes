@@ -3076,6 +3076,7 @@ function draw(){
   if(A.page==='myJobs'&&A.myJobs==null)setTimeout(loadMyJobs,50);
   if(A.page==='myJobDetail'&&A.myJobDetail==null)setTimeout(function(){loadMyJobDetail(A.myJobDetailId);},50);
   if(A.page==='deliveryChallans'&&A.dcList==null)setTimeout(loadDeliveryChallans,50);
+  if(A.page==='workflowSettings')setTimeout(loadWorkflowSettingsPage,50);
   if(A.page==='deliveryChallanDetail'&&A.dcDetail==null){
     if(A.dcDetailId)setTimeout(function(){loadDeliveryChallanDetail(A.dcDetailId);},50);
     else setTimeout(initNewDeliveryChallan,50);
@@ -3588,7 +3589,8 @@ function appHTML(){
       <div class="sb-item ${A.page==='team'?'active':''}" onclick="${nav('team')}"><span class="sb-icon">👥</span>Team</div>
       <div class="sb-item ${A.page==='integrations'?'active':''}" onclick="${nav('integrations')}"><span class="sb-icon">🔌</span>Integrations</div>
       <div class="sb-item ${A.page==='companyProfile'?'active':''}" onclick="${nav('companyProfile')}"><span class="sb-icon">🏢</span>Company Profile</div>
-      <div class="sb-item ${A.page==='rolesPermissions'?'active':''}" onclick="${nav('rolesPermissions')}"><span class="sb-icon">🔐</span>Roles & Permissions</div>`:''}
+      <div class="sb-item ${A.page==='rolesPermissions'?'active':''}" onclick="${nav('rolesPermissions')}"><span class="sb-icon">🔐</span>Roles & Permissions</div>
+      ${hasFeature('workflowEngine')?`<div class="sb-item ${A.page==='workflowSettings'?'active':''}" onclick="${nav('workflowSettings')}"><span class="sb-icon">🔀</span>Workflow Settings</div>`:''}`:''}
       ${A.user?.is_platform_admin?`<div class="sb-sec">Platform</div><div class="sb-item ${A.page==='platform'?'active':''}" onclick="${nav('platform')}"><span class="sb-icon">🌐</span>All Companies</div>`:''}
     </nav>
     <div class="sb-foot">
@@ -3634,6 +3636,7 @@ function appHTML(){
   else if(A.page==='platform')pageContent=platformHTML();
   else if(A.page==='companyProfile')pageContent=companyProfileHTML();
   else if(A.page==='rolesPermissions')pageContent=rolesPermissionsHTML();
+  else if(A.page==='workflowSettings')pageContent=workflowSettingsHTML();
   else if(A.page==='reviewQueue')pageContent=reviewQueueHTML();
   else if(A.page==='testimonials')pageContent=testimonialsHTML();
 
@@ -5952,7 +5955,10 @@ async function loadVouchersPage(){
   const cols='1fr 110px 130px 130px 150px 130px';
   el.innerHTML=`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Payee</div><div>Amount</div><div>Category</div><div>Project</div><div>Approvals</div><div>Status</div></div>`+
     VOUCHERS.list.map(v=>{
-      const approvals=v.voucher_approvals||[];
+      // Approvals come from the Workflow Engine now (workflow_stage_approvals,
+      // via api/vouchers.py's get_workflow_instances_bulk) instead of the old
+      // per-voucher voucher_approvals table.
+      const approvals=v.workflow_approvals||[];
       const mine=approvals.find(a=>a.approver_user_id===A.user?.id);
       const approvalSummary=approvals.length?approvals.map(a=>a.status==='approved'?'✓':(a.status==='rejected'?'✗':'…')).join(' '):'—';
       const canRespond=mine&&mine.status==='pending';
@@ -5965,16 +5971,16 @@ async function loadVouchersPage(){
         <div data-label="Approvals" title="${approvals.length} approver(s)">${approvalSummary}</div>
         <div data-label="Status" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="color:${VOUCHER_STATUS_COLOR[v.status]||'inherit'};font-weight:600;text-transform:capitalize">${esc(v.status)}</span>
-          ${canRespond?`<button class="btn btn-sm" style="background:var(--green);color:#fff" onclick="respondVoucher('${v.id}','approve')">Approve</button><button class="btn btn-sm btn-red" onclick="respondVoucher('${v.id}','reject')">Reject</button>`:''}
+          ${canRespond?`<button class="btn btn-sm" style="background:var(--green);color:#fff" onclick="respondVoucher('${mine.id}','approve')">Approve</button><button class="btn btn-sm btn-red" onclick="respondVoucher('${mine.id}','reject')">Reject</button>`:''}
           ${canForce?`<button class="btn btn-sm" onclick="forceVoucher('${v.id}','approve')">Force approve</button>`:''}
           ${A.user?.role==='admin'?`<button class="btn btn-sm btn-red" onclick="delVoucher('${v.id}')">×</button>`:''}
         </div>
       </div>`;
     }).join('');
 }
-async function respondVoucher(vid,decision){
+async function respondVoucher(approvalId,decision){
   if(!confirm(decision==='approve'?'Approve this voucher?':'Reject this voucher?'))return;
-  const r=await api('POST','/api/vouchers/'+vid+'/respond',{decision});
+  const r=await api('POST','/api/workflows/approvals/'+approvalId+'/respond',{decision});
   if(r.error){alert(r.error);return;}
   loadVouchersPage();
 }
@@ -6027,6 +6033,7 @@ async function saveVoucherModal(){
   const r=await api('POST','/api/vouchers',body);
   if(r.error){const e=document.getElementById('vchModalErr');e.textContent=r.error;e.style.display='block';return;}
   document.getElementById('vchModalOverlay').remove();loadVouchersPage();
+  if(r.warning)alert(r.warning);
 }
 
 // ── Deals (lightweight CRM pipeline that feeds into Quotes) ───────────────────
@@ -6307,6 +6314,181 @@ async function deleteDealStage(id){
   renderDealStagesModal();
 }
 
+// ── Workflow Settings (configurable approval pipeline per document type) ─────
+// Admin-only settings page. Each document type (Quotes, Delivery Challans,
+// FSM Tickets, Payment Vouchers, plus whatever else gets added to
+// workflow_document_types later) can be turned on/off; turning one on
+// auto-creates a two-stage default definition that the admin then edits
+// here (add/reorder/rename stages, require approval + pick approvers, or
+// notify someone by email when a non-approval stage is entered). See
+// api/workflows.py for the runtime engine that actually drives a document
+// through these stages once a document module starts creating instances.
+let WF={docTypes:[],currentDef:null,users:[]};
+
+function workflowSettingsHTML(){return`<div class="card">
+  <div class="card-title" style="margin-bottom:4px">Workflow Settings</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Turn on a configurable approval pipeline for a document type, then define its stages.</div>
+  <div id="wfDocTypeList"><div style="color:var(--gray-500)">Loading…</div></div>
+</div>`;}
+
+async function loadWorkflowSettingsPage(){
+  const el=document.getElementById('wfDocTypeList');if(!el)return;
+  const r=await api('GET','/api/workflows/document-types');
+  if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  WF.docTypes=r.document_types||[];
+  el.innerHTML=WF.docTypes.length?WF.docTypes.map(dt=>`<div style="display:flex;align-items:center;gap:12px;border:1px solid var(--gray-200);border-radius:8px;padding:12px 14px;margin-bottom:8px">
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;flex:1">
+      <input type="checkbox" ${dt.enabled?'checked':''} onchange="toggleWorkflowDocType('${dt.id}',this.checked)">
+      <span style="font-weight:600">${esc(dt.label)}</span>
+    </label>
+    ${dt.enabled?`<button class="btn btn-sm" onclick="showWorkflowStagesModal('${dt.id}')">⚙ Configure stages</button>`:''}
+  </div>`).join(''):`<div style="padding:20px;text-align:center;color:var(--gray-500)">No document types available yet.</div>`;
+}
+
+async function toggleWorkflowDocType(id,checked){
+  const r=await api('PUT','/api/workflows/document-types/'+id,{enabled:checked});
+  if(r.error){alert(r.error);}
+  loadWorkflowSettingsPage();
+}
+
+async function showWorkflowStagesModal(dtId){
+  const dt=WF.docTypes.find(d=>d.id===dtId);
+  if(!dt||!dt.definition_id){alert('Enable this document type first.');return;}
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="wfStagesOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('wfStagesOverlay').remove()">
+    <div class="modal" style="max-width:640px" id="wfStagesBox">Loading…</div></div>`);
+  const [defR,usersR]=await Promise.all([
+    api('GET','/api/workflows/definitions/'+dt.definition_id),
+    api('GET','/api/workflows/company-users'),
+  ]);
+  if(defR.error){const b=document.getElementById('wfStagesBox');if(b)b.innerHTML=`<div class="auth-err">${esc(defR.error)}</div>`;return;}
+  WF.currentDef=defR.definition;WF.users=usersR.users||[];
+  renderWorkflowStagesModal(dt.label);
+}
+
+function renderWorkflowStagesModal(label){
+  const box=document.getElementById('wfStagesBox');if(!box)return;
+  const stages=(WF.currentDef.stages||[]).slice().sort((a,b)=>a.seq-b.seq);
+  box.innerHTML=`
+    <div class="modal-title">${esc(label)} — stages</div>
+    <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px">Reorder stages, require approval where needed, and pick approvers. A document moves through these in order.</div>
+    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:14px;max-height:50vh;overflow:auto">
+      ${stages.map((s,i)=>renderWorkflowStageCard(s,i,stages.length)).join('')}
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <input id="wfNewStageLabel" placeholder="New stage name" style="flex:1">
+      <button class="btn btn-navy" onclick="addWorkflowStage()">+ Add stage</button>
+    </div>
+    <div class="modal-actions"><button class="btn" onclick="document.getElementById('wfStagesOverlay').remove();loadWorkflowSettingsPage()">Done</button></div>`;
+}
+
+function renderWorkflowStageCard(s,i,total){
+  const approverOptions=WF.users.filter(u=>!(s.approvers||[]).some(a=>a.approver_user_id===u.id))
+    .map(u=>`<option value="${u.id}">${esc(u.name||u.email)}</option>`).join('');
+  const approverChips=(s.approvers||[]).map(a=>`<span style="display:inline-flex;align-items:center;gap:4px;background:var(--gray-100);border-radius:12px;padding:3px 8px 3px 10px;font-size:12px;margin:2px 4px 2px 0">
+    ${a.approver_role?('Role: '+esc(a.approver_role)):esc((a.users&&(a.users.name||a.users.email))||'user')}
+    <span style="cursor:pointer;color:var(--red)" onclick="removeStageApprover('${a.id}')">×</span>
+  </span>`).join('');
+  const notifyAction=(s.actions||[]).find(a=>a.action_type==='notify_email');
+  const notifyTo=notifyAction&&notifyAction.config&&notifyAction.config.to||'';
+  return `<div style="border:1px solid var(--gray-200);border-radius:8px;padding:10px">
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+      <div style="display:flex;flex-direction:column">
+        <button class="btn btn-sm" style="padding:1px 6px" ${i===0?'disabled':''} onclick="moveWorkflowStage('${s.id}',-1)">↑</button>
+        <button class="btn btn-sm" style="padding:1px 6px" ${i===total-1?'disabled':''} onclick="moveWorkflowStage('${s.id}',1)">↓</button>
+      </div>
+      <input value="${esc(s.label)}" style="flex:1;font-weight:600" onchange="renameWorkflowStage('${s.id}',this.value)">
+      <button class="btn btn-sm" style="color:var(--red)" onclick="deleteWorkflowStage('${s.id}')">✕</button>
+    </div>
+    <label style="font-size:12px;display:flex;align-items:center;gap:6px;margin-bottom:6px">
+      <input type="checkbox" ${s.requires_approval?'checked':''} onchange="toggleStageApproval('${s.id}',this.checked)">Requires approval
+    </label>
+    ${s.requires_approval?`
+      <div style="margin-bottom:6px">
+        <select style="font-size:12px" onchange="setStageApprovalMode('${s.id}',this.value)">
+          <option value="all" ${s.approval_mode==='all'?'selected':''}>All approvers must approve</option>
+          <option value="any" ${s.approval_mode==='any'?'selected':''}>Any one approver</option>
+          <option value="sequential" ${s.approval_mode==='sequential'?'selected':''}>Sequential</option>
+        </select>
+      </div>
+      <div style="margin-bottom:6px">${approverChips||'<span style="font-size:12px;color:var(--gray-500)">No approvers yet</span>'}</div>
+      <div style="display:flex;gap:6px">
+        <select id="wfApproverPick-${s.id}" style="flex:1;font-size:12px"><option value="">Add approver…</option>${approverOptions}<option value="__admin__">Role: Admin</option></select>
+        <button class="btn btn-sm" onclick="addStageApprover('${s.id}')">+</button>
+      </div>
+    `:`
+      <div style="display:flex;gap:6px;align-items:center">
+        <select id="wfNotifyPick-${s.id}" style="flex:1;font-size:12px">
+          <option value="">No email notification</option>
+          ${WF.users.map(u=>`<option value="${u.id}" ${notifyTo==='user:'+u.id?'selected':''}>${esc(u.name||u.email)}</option>`).join('')}
+        </select>
+        <button class="btn btn-sm" onclick="setStageNotify('${s.id}','${notifyAction?notifyAction.id:''}')">Save</button>
+      </div>
+    `}
+  </div>`;
+}
+
+async function addWorkflowStage(){
+  const inp=document.getElementById('wfNewStageLabel');
+  const label=(inp&&inp.value||'').trim();if(!label)return;
+  const r=await api('POST','/api/workflows/definitions/'+WF.currentDef.id+'/stages',{label});
+  if(r.error){alert(r.error);return;}
+  await reloadCurrentWorkflowDef();
+}
+async function renameWorkflowStage(id,label){
+  if(!label.trim())return;
+  await api('PUT','/api/workflows/stages/'+id,{label:label.trim()});
+  const s=(WF.currentDef.stages||[]).find(x=>x.id===id);if(s)s.label=label.trim();
+}
+async function moveWorkflowStage(id,dir){
+  const stages=(WF.currentDef.stages||[]).slice().sort((a,b)=>a.seq-b.seq);
+  const i=stages.findIndex(s=>s.id===id),j=i+dir;
+  if(i<0||j<0||j>=stages.length)return;
+  [stages[i],stages[j]]=[stages[j],stages[i]];
+  await Promise.all(stages.map((s,idx)=>api('PUT','/api/workflows/stages/'+s.id,{seq:idx})));
+  await reloadCurrentWorkflowDef();
+}
+async function toggleStageApproval(id,checked){
+  await api('PUT','/api/workflows/stages/'+id,{requires_approval:checked});
+  await reloadCurrentWorkflowDef();
+}
+async function setStageApprovalMode(id,mode){
+  await api('PUT','/api/workflows/stages/'+id,{approval_mode:mode});
+  const s=(WF.currentDef.stages||[]).find(x=>x.id===id);if(s)s.approval_mode=mode;
+}
+async function deleteWorkflowStage(id){
+  if(!confirm('Delete this stage?'))return;
+  const r=await api('DELETE','/api/workflows/stages/'+id);
+  if(r.error){alert(r.error);return;}
+  await reloadCurrentWorkflowDef();
+}
+async function addStageApprover(stageId){
+  const sel=document.getElementById('wfApproverPick-'+stageId);
+  const val=sel&&sel.value;if(!val)return;
+  const body=val==='__admin__'?{approver_role:'admin'}:{approver_user_id:val};
+  const r=await api('POST','/api/workflows/stages/'+stageId+'/approvers',body);
+  if(r.error){alert(r.error);return;}
+  await reloadCurrentWorkflowDef();
+}
+async function removeStageApprover(approverId){
+  const r=await api('DELETE','/api/workflows/stage-approvers/'+approverId);
+  if(r.error){alert(r.error);return;}
+  await reloadCurrentWorkflowDef();
+}
+async function setStageNotify(stageId,existingActionId){
+  const sel=document.getElementById('wfNotifyPick-'+stageId);
+  const val=sel&&sel.value;
+  if(existingActionId)await api('DELETE','/api/workflows/stage-actions/'+existingActionId);
+  if(val)await api('POST','/api/workflows/stages/'+stageId+'/actions',{trigger:'on_enter',action_type:'notify_email',config:{to:'user:'+val}});
+  await reloadCurrentWorkflowDef();
+}
+async function reloadCurrentWorkflowDef(){
+  const r=await api('GET','/api/workflows/definitions/'+WF.currentDef.id);
+  if(r.error){alert(r.error);return;}
+  WF.currentDef=r.definition;
+  const dt=WF.docTypes.find(d=>d.definition_id===WF.currentDef.id);
+  renderWorkflowStagesModal(dt?dt.label:'Workflow');
+}
+
 // ── Vendor Master (standalone reference list) ─────────────────────────────────
 let VENDS={list:[],total:0,search:'',t:null};
 
@@ -6412,7 +6594,7 @@ function importVendorsMaster(event){
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────
-const RBAC_PAGE_LABELS = {insights:'Insights',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service',myJobs:'My Jobs (Engineer)',deliveryChallans:'Delivery Challans'};
+const RBAC_PAGE_LABELS = {insights:'Insights',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service',myJobs:'My Jobs (Engineer)',deliveryChallans:'Delivery Challans',vouchers:'Payment Vouchers',workflowSettings:'Workflow Settings'};
 let RBAC_PAGE_KEYS_FE = [];
 let RBAC_ROLES_CACHE = [];
 
