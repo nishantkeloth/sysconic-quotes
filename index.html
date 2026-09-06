@@ -85,6 +85,23 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .fld label{font-size:12px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.04em}
 .fld input{padding:10px 12px;font-size:15px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit;transition:border .15s}
 .fld input:focus{outline:none;border-color:var(--navy);box-shadow:0 0 0 3px rgba(26,60,110,.1)}
+.fld select{padding:10px 12px;font-size:15px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit;transition:border .15s;width:100%;background:var(--white);cursor:pointer}
+.fld select:focus{outline:none;border-color:var(--navy);box-shadow:0 0 0 3px rgba(26,60,110,.1)}
+/* Payment Voucher form -- dark sectioned card, scoped to this form only */
+.vch-card{background:var(--navy-dark);border-radius:14px;padding:28px 28px 24px;box-shadow:var(--shadow-lg)}
+.vch-sec-label{font-size:11px;font-weight:700;color:var(--navy-mid);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;margin-top:22px}
+.vch-sec-label:first-child{margin-top:0}
+.vch-sec-line{height:1px;background:rgba(255,255,255,.15);margin-bottom:16px}
+.vch-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:14px}
+.vch-fld label{display:block;font-size:11px;font-weight:600;color:var(--navy-mid);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
+.vch-fld input,.vch-fld select,.vch-fld textarea{width:100%;padding:10px 12px;font-size:14px;border:1.5px solid rgba(255,255,255,.15);border-radius:8px;font-family:inherit;background:rgba(255,255,255,.06);color:#fff;transition:border .15s}
+.vch-fld input::placeholder,.vch-fld textarea::placeholder{color:rgba(255,255,255,.35)}
+.vch-fld input:focus,.vch-fld select:focus,.vch-fld textarea:focus{outline:none;border-color:#eab308}
+.vch-fld input:disabled{color:rgba(255,255,255,.6);background:rgba(255,255,255,.03);cursor:not-allowed}
+.vch-fld select option{color:#000}
+.vch-fld textarea{resize:vertical;min-height:64px;font-family:inherit}
+.vch-radio{display:flex;align-items:center;gap:7px;font-size:14px;color:#e2e8f5;cursor:pointer}
+.vch-radio input[type=radio]{accent-color:#eab308;width:16px;height:16px;cursor:pointer}
 .auth-btn{width:100%;padding:12px;font-size:15px;font-weight:700;border-radius:var(--radius);border:none;background:var(--navy);color:#fff;cursor:pointer;font-family:inherit;transition:background .15s}
 .auth-btn:hover{background:var(--navy-dark)}
 .auth-link{text-align:center;margin-top:18px;font-size:14px;color:var(--gray-500)}
@@ -98,6 +115,8 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .btn-navy:hover{background:var(--navy-dark)}
 .btn-red{background:var(--red-light);color:var(--red);border-color:#fca5a5}
 .btn-red:hover{background:#fee2e2}
+.btn-gold{background:#eab308;color:#1a1400;border-color:#eab308;font-weight:700}
+.btn-gold:hover{background:#ca8a04;border-color:#ca8a04}
 .btn-green{background:var(--green-light);color:var(--green);border-color:var(--green-bright)}
 .btn-sm{padding:5px 12px;font-size:13px}
 
@@ -5997,26 +6016,65 @@ async function delVoucher(vid){
   loadVouchersPage();
 }
 function showVoucherModal(){
+  const todayStr=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="vchModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('vchModalOverlay').remove()">
-    <div class="modal">
-      <div class="modal-title">New payment voucher</div>
-      <div id="vchModalErr" class="auth-err" style="display:none"></div>
-      <div class="fld"><label>Payee</label><input id="vfPayee" placeholder="Vendor or person being paid"></div>
-      <div class="fld" style="display:flex;gap:8px">
-        <div style="flex:2"><label>Amount</label><input id="vfAmount" type="number" step="0.01" placeholder="0.00"></div>
-        <div style="flex:1"><label>Currency</label><select id="vfCurrency"><option>AED</option><option>USD</option><option>EUR</option><option>GBP</option><option>INR</option></select></div>
+    <div style="max-width:640px;width:100%">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="font-size:19px;font-weight:700;color:var(--gray-900)">Submit Payment Voucher</div>
+        <span style="cursor:pointer;color:var(--gray-500);font-size:22px;line-height:1;padding:4px" onclick="document.getElementById('vchModalOverlay').remove()">×</span>
       </div>
-      <div class="fld"><label>Payment method</label><select id="vfMethod"><option>Bank Transfer</option><option>Cheque</option><option>Cash</option><option>Online</option></select></div>
-      <div class="fld"><label>Category / cost center</label><select id="vfCategory"><option>Office</option><option>HR</option><option>IT</option><option>Marketing</option><option>Finance</option><option>Operations</option></select></div>
-      <div class="fld"><label>Project</label><input id="vfProject" placeholder="Project name"></div>
-      <div class="fld"><label>Invoice no.</label><input id="vfInvoice"></div>
-      <div class="fld"><label>Due date</label><input id="vfDueDate" type="date"></div>
-      <div class="fld"><label>Remarks</label><input id="vfRemarks"></div>
-      <div class="modal-actions">
-        <button class="btn" onclick="document.getElementById('vchModalOverlay').remove()">Cancel</button>
-        <button class="btn btn-navy" onclick="saveVoucherModal()">Submit for approval</button>
+      <div class="vch-card">
+        <div id="vchModalErr" class="auth-err" style="display:none"></div>
+
+        <div class="vch-sec-label">Payment Type</div>
+        <div class="vch-sec-line"></div>
+        <div style="display:flex;gap:28px;margin-bottom:8px;flex-wrap:wrap">
+          <label class="vch-radio"><input type="radio" name="vfPayType" value="project" checked>Project Payment</label>
+          <label class="vch-radio"><input type="radio" name="vfPayType" value="general">General / Admin Payment</label>
+          <label class="vch-radio"><input type="radio" name="vfPayType" value="other">Other</label>
+        </div>
+
+        <div class="vch-sec-label">Payee Information</div>
+        <div class="vch-sec-line"></div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Payee Name *</label><input id="vfPayee" placeholder="e.g. Al Futtaim Electric"></div>
+          <div class="vch-fld"><label>Amount *</label><input id="vfAmount" type="number" step="0.01" placeholder="0.00"></div>
+        </div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Currency</label><select id="vfCurrency"><option>AED</option><option>USD</option><option>EUR</option><option>GBP</option><option>INR</option></select></div>
+          <div class="vch-fld"><label>Payment Method</label><select id="vfMethod"><option>Bank Transfer</option><option>Cheque</option><option>Cash</option><option>Online</option></select></div>
+        </div>
+
+        <div class="vch-sec-label">Invoice Details</div>
+        <div class="vch-sec-line"></div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Invoice Number</label><input id="vfInvoice" placeholder="INV-XXXX"></div>
+          <div class="vch-fld"><label>Payment Due Date</label><input id="vfDueDate" type="date"></div>
+        </div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Category</label><select id="vfCategory"><option>Office</option><option>HR</option><option>IT</option><option>Marketing</option><option>Finance</option><option>Operations</option><option>Equipment</option></select></div>
+          <div class="vch-fld"><label>Project</label><input id="vfProject" placeholder="Project name"></div>
+        </div>
+
+        <div class="vch-sec-label">Submission Details</div>
+        <div class="vch-sec-line"></div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Submitted By *</label><input value="${esc(A.user?.name||'')}" disabled></div>
+          <div class="vch-fld"><label>Submission Date</label><input value="${todayStr}" disabled></div>
+        </div>
+        <div class="vch-fld" style="margin-bottom:0"><label>Description / Remarks</label><textarea id="vfRemarks" rows="3" placeholder="Brief description of what this payment is for…"></textarea></div>
+      </div>
+
+      <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px">
+        <button class="btn" onclick="clearVoucherModal()">Clear</button>
+        <button class="btn btn-gold" onclick="saveVoucherModal()">Submit for Approval →</button>
       </div>
     </div></div>`);
+}
+function clearVoucherModal(){
+  ['vfPayee','vfAmount','vfInvoice','vfDueDate','vfProject','vfRemarks'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  ['vfCurrency','vfMethod','vfCategory'].forEach(id=>{const el=document.getElementById(id);if(el)el.selectedIndex=0;});
+  const err=document.getElementById('vchModalErr');if(err)err.style.display='none';
 }
 async function saveVoucherModal(){
   const body={
