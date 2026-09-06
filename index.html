@@ -6046,7 +6046,7 @@ async function showVoucherModal(){
           <div class="vch-fld"><label>Currency</label><select id="vfCurrency">
             <option value="AED">AED – UAE Dirham</option><option value="USD">USD – US Dollar</option><option value="EUR">EUR – Euro</option><option value="GBP">GBP – British Pound</option><option value="INR">INR – Indian Rupee</option>
           </select></div>
-          <div class="vch-fld"><label>Payment Method</label><select id="vfMethod"><option>Bank Transfer</option><option>Cheque</option><option>Cash</option><option>Online</option></select></div>
+          <div class="vch-fld"><label>Payment Method</label><select id="vfMethod"><option>Bank Transfer</option><option>Cheque</option><option>Cash</option><option>Online Payment</option></select></div>
         </div>
 
         <div class="vch-sec-label">Invoice Details</div>
@@ -6056,7 +6056,7 @@ async function showVoucherModal(){
           <div class="vch-fld"><label>Payment Due Date</label><input id="vfDueDate" type="date"></div>
         </div>
         <div class="vch-row" id="vchCatProjRow">
-          <div class="vch-fld"><label>Category</label><select id="vfCategory"><option>Office</option><option>HR</option><option>IT</option><option>Marketing</option><option>Finance</option><option>Operations</option><option>Equipment</option></select></div>
+          <div class="vch-fld"><label>Category</label><select id="vfCategory"><option>Equipment</option><option>Materials</option><option>Subcontract</option><option>Utilities</option><option>Travel</option><option>Professional Services</option><option>Maintenance</option><option>Other</option></select></div>
           <div class="vch-fld" id="vfProjectWrap"><label>Project</label><select id="vfProject">
             <option value="">— No specific project —</option>
             ${projects.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
