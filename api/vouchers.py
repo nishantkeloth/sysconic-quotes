@@ -83,8 +83,15 @@ def _rbac_page_gate():
 def clean_voucher(d):
     out = {}
     for k in ('payee', 'currency', 'payment_method', 'category', 'invoice_no', 'remarks', 'project_id', 'project_name_freeform'):
+        if k == 'project_id':
+            # Comes from a <select> of real projects now -- an empty string
+            # means "no project selected", which must be None, not '', or
+            # the insert fails against the uuid column.
+            if d.get(k):
+                out[k] = d[k]
+            continue
         if k in d and d[k] is not None:
-            out[k] = str(d[k]).strip()[:500] if k != 'project_id' else d[k]
+            out[k] = str(d[k]).strip()[:500]
     if 'amount' in d:
         try:
             out['amount'] = float(d['amount'])
@@ -102,7 +109,7 @@ def list_vouchers():
     if not claims:
         return jsonify({'error': 'Unauthorized'}), 401
     status = request.args.get('status')
-    q = sb.table('vouchers').select('*').eq('company_id', claims['company_id'])
+    q = sb.table('vouchers').select('*,projects(name)').eq('company_id', claims['company_id'])
     if status:
         q = q.eq('status', status)
     vouchers = q.order('created_at', desc=True).execute().data

@@ -5986,7 +5986,7 @@ async function loadVouchersPage(){
         <div data-label="Payee">${esc(v.payee)}</div>
         <div data-label="Amount">${esc(v.currency||'AED')} ${Number(v.amount||0).toLocaleString()}</div>
         <div data-label="Category" style="color:var(--gray-500);font-size:13px">${esc(v.category||'')}</div>
-        <div data-label="Project" style="color:var(--gray-500);font-size:13px">${esc(v.project_name_freeform||'')}</div>
+        <div data-label="Project" style="color:var(--gray-500);font-size:13px">${esc((v.projects&&v.projects.name)||v.project_name_freeform||'')}</div>
         <div data-label="Approvals" title="${approvals.length} approver(s)">${approvalSummary}</div>
         <div data-label="Status" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="color:${VOUCHER_STATUS_COLOR[v.status]||'inherit'};font-weight:600;text-transform:capitalize">${esc(v.status)}</span>
@@ -6015,8 +6015,10 @@ async function delVoucher(vid){
   if(r.error){alert(r.error);return;}
   loadVouchersPage();
 }
-function showVoucherModal(){
+async function showVoucherModal(){
   const todayStr=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+  const projR=await api('GET','/api/projects');
+  const projects=projR.projects||[];
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="vchModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('vchModalOverlay').remove()">
     <div style="max-width:640px;width:100%">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
@@ -6041,7 +6043,9 @@ function showVoucherModal(){
           <div class="vch-fld"><label>Amount *</label><input id="vfAmount" type="number" step="0.01" placeholder="0.00"></div>
         </div>
         <div class="vch-row">
-          <div class="vch-fld"><label>Currency</label><select id="vfCurrency"><option>AED</option><option>USD</option><option>EUR</option><option>GBP</option><option>INR</option></select></div>
+          <div class="vch-fld"><label>Currency</label><select id="vfCurrency">
+            <option value="AED">AED – UAE Dirham</option><option value="USD">USD – US Dollar</option><option value="EUR">EUR – Euro</option><option value="GBP">GBP – British Pound</option><option value="INR">INR – Indian Rupee</option>
+          </select></div>
           <div class="vch-fld"><label>Payment Method</label><select id="vfMethod"><option>Bank Transfer</option><option>Cheque</option><option>Cash</option><option>Online</option></select></div>
         </div>
 
@@ -6053,7 +6057,10 @@ function showVoucherModal(){
         </div>
         <div class="vch-row">
           <div class="vch-fld"><label>Category</label><select id="vfCategory"><option>Office</option><option>HR</option><option>IT</option><option>Marketing</option><option>Finance</option><option>Operations</option><option>Equipment</option></select></div>
-          <div class="vch-fld"><label>Project</label><input id="vfProject" placeholder="Project name"></div>
+          <div class="vch-fld"><label>Project</label><select id="vfProject">
+            <option value="">— No specific project —</option>
+            ${projects.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
+          </select></div>
         </div>
 
         <div class="vch-sec-label">Submission Details</div>
@@ -6083,7 +6090,7 @@ async function saveVoucherModal(){
     currency:document.getElementById('vfCurrency').value,
     payment_method:document.getElementById('vfMethod').value,
     category:document.getElementById('vfCategory').value,
-    project_name_freeform:document.getElementById('vfProject').value,
+    project_id:document.getElementById('vfProject').value,
     invoice_no:document.getElementById('vfInvoice').value,
     due_date:document.getElementById('vfDueDate').value,
     remarks:document.getElementById('vfRemarks').value,
