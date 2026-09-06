@@ -80,15 +80,21 @@ def _rbac_page_gate():
     return None
 
 
+PAYMENT_TYPES = {'project', 'general', 'other'}
+
+
 def clean_voucher(d):
     out = {}
-    for k in ('payee', 'currency', 'payment_method', 'category', 'invoice_no', 'remarks', 'project_id', 'project_name_freeform'):
+    for k in ('payee', 'currency', 'payment_method', 'category', 'invoice_no', 'remarks', 'project_id', 'project_name_freeform', 'payment_type'):
         if k == 'project_id':
             # Comes from a <select> of real projects now -- an empty string
             # means "no project selected", which must be None, not '', or
             # the insert fails against the uuid column.
             if d.get(k):
                 out[k] = d[k]
+            continue
+        if k == 'payment_type':
+            out[k] = d[k] if d.get(k) in PAYMENT_TYPES else 'project'
             continue
         if k in d and d[k] is not None:
             out[k] = str(d[k]).strip()[:500]
@@ -99,6 +105,11 @@ def clean_voucher(d):
             pass
     if d.get('due_date'):
         out['due_date'] = d['due_date']  # expects 'YYYY-MM-DD' from the date input
+    if out.get('payment_type') != 'project':
+        # A General/Admin or Other payment has no project -- ignore any
+        # project_id that came through regardless (defense in depth; the
+        # form already hides/clears the Project field for these types).
+        out.pop('project_id', None)
     return out
 
 
@@ -138,11 +149,18 @@ def create_voucher():
     d['status'] = 'pending'
     voucher = sb.table('vouchers').insert(d).execute().data[0]
 
+    project_name = voucher.get('project_name_freeform') or ''
+    if not project_name and voucher.get('project_id'):
+        # The New Voucher form now sends a real project_id (a <select> of
+        # actual projects, not free text), so the human-readable name has to
+        # be looked up separately for the approval email.
+        proj = sb.table('projects').select('name').eq('id', voucher['project_id']).execute().data
+        project_name = proj[0]['name'] if proj else ''
     meta = {
         'Payee': voucher.get('payee', ''),
         'Amount': f"{voucher.get('currency', 'AED')} {voucher.get('amount', '')}",
         'Category': voucher.get('category', ''),
-        'Project': voucher.get('project_name_freeform', '') or '',
+        'Project': project_name,
     }
     result = start_workflow_instance(sb, claims['company_id'], 'vouchers', voucher['id'], meta)
     warning = None

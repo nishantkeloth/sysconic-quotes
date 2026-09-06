@@ -5986,7 +5986,7 @@ async function loadVouchersPage(){
         <div data-label="Payee">${esc(v.payee)}</div>
         <div data-label="Amount">${esc(v.currency||'AED')} ${Number(v.amount||0).toLocaleString()}</div>
         <div data-label="Category" style="color:var(--gray-500);font-size:13px">${esc(v.category||'')}</div>
-        <div data-label="Project" style="color:var(--gray-500);font-size:13px">${esc((v.projects&&v.projects.name)||v.project_name_freeform||'')}</div>
+        <div data-label="Project" style="color:var(--gray-500);font-size:13px">${v.payment_type&&v.payment_type!=='project'?`<em>${v.payment_type==='general'?'General/Admin':'Other'}</em>`:esc((v.projects&&v.projects.name)||v.project_name_freeform||'')}</div>
         <div data-label="Approvals" title="${approvals.length} approver(s)">${approvalSummary}</div>
         <div data-label="Status" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="color:${VOUCHER_STATUS_COLOR[v.status]||'inherit'};font-weight:600;text-transform:capitalize">${esc(v.status)}</span>
@@ -6031,9 +6031,9 @@ async function showVoucherModal(){
         <div class="vch-sec-label">Payment Type</div>
         <div class="vch-sec-line"></div>
         <div style="display:flex;gap:28px;margin-bottom:8px;flex-wrap:wrap">
-          <label class="vch-radio"><input type="radio" name="vfPayType" value="project" checked>Project Payment</label>
-          <label class="vch-radio"><input type="radio" name="vfPayType" value="general">General / Admin Payment</label>
-          <label class="vch-radio"><input type="radio" name="vfPayType" value="other">Other</label>
+          <label class="vch-radio"><input type="radio" name="vfPayType" value="project" checked onchange="toggleVoucherPayType()">Project Payment</label>
+          <label class="vch-radio"><input type="radio" name="vfPayType" value="general" onchange="toggleVoucherPayType()">General / Admin Payment</label>
+          <label class="vch-radio"><input type="radio" name="vfPayType" value="other" onchange="toggleVoucherPayType()">Other</label>
         </div>
 
         <div class="vch-sec-label">Payee Information</div>
@@ -6055,9 +6055,9 @@ async function showVoucherModal(){
           <div class="vch-fld"><label>Invoice Number</label><input id="vfInvoice" placeholder="INV-XXXX"></div>
           <div class="vch-fld"><label>Payment Due Date</label><input id="vfDueDate" type="date"></div>
         </div>
-        <div class="vch-row">
+        <div class="vch-row" id="vchCatProjRow">
           <div class="vch-fld"><label>Category</label><select id="vfCategory"><option>Office</option><option>HR</option><option>IT</option><option>Marketing</option><option>Finance</option><option>Operations</option><option>Equipment</option></select></div>
-          <div class="vch-fld"><label>Project</label><select id="vfProject">
+          <div class="vch-fld" id="vfProjectWrap"><label>Project</label><select id="vfProject">
             <option value="">— No specific project —</option>
             ${projects.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
           </select></div>
@@ -6077,10 +6077,29 @@ async function showVoucherModal(){
         <button class="btn btn-gold" onclick="saveVoucherModal()">Submit for Approval →</button>
       </div>
     </div></div>`);
+  toggleVoucherPayType();
+}
+function toggleVoucherPayType(){
+  // "Project Payment" is the only type that has a linked project -- General/
+  // Admin and Other are plain expenses, so the Project field collapses away
+  // (and its value is cleared) rather than sitting there unused.
+  const val=document.querySelector('input[name="vfPayType"]:checked')?.value||'project';
+  const wrap=document.getElementById('vfProjectWrap');
+  const row=document.getElementById('vchCatProjRow');
+  if(val==='project'){
+    if(wrap)wrap.style.display='';
+    if(row)row.style.gridTemplateColumns='1fr 1fr';
+  }else{
+    if(wrap)wrap.style.display='none';
+    if(row)row.style.gridTemplateColumns='1fr';
+    const sel=document.getElementById('vfProject');if(sel)sel.value='';
+  }
 }
 function clearVoucherModal(){
   ['vfPayee','vfAmount','vfInvoice','vfDueDate','vfProject','vfRemarks'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   ['vfCurrency','vfMethod','vfCategory'].forEach(id=>{const el=document.getElementById(id);if(el)el.selectedIndex=0;});
+  const firstRadio=document.querySelector('input[name="vfPayType"][value="project"]');if(firstRadio)firstRadio.checked=true;
+  toggleVoucherPayType();
   const err=document.getElementById('vchModalErr');if(err)err.style.display='none';
 }
 async function saveVoucherModal(){
@@ -6090,6 +6109,7 @@ async function saveVoucherModal(){
     currency:document.getElementById('vfCurrency').value,
     payment_method:document.getElementById('vfMethod').value,
     category:document.getElementById('vfCategory').value,
+    payment_type:document.querySelector('input[name="vfPayType"]:checked')?.value||'project',
     project_id:document.getElementById('vfProject').value,
     invoice_no:document.getElementById('vfInvoice').value,
     due_date:document.getElementById('vfDueDate').value,
