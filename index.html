@@ -3052,9 +3052,9 @@ function draw(){
   if(A.screen==='feedbackForm'){document.getElementById('app').innerHTML=feedbackFormHTML();return;}if(A.screen==='acceptInvite'){document.getElementById('app').innerHTML=acceptInviteHTML();return;}
   if(A.screen==='forgotPassword'){document.getElementById('app').innerHTML=forgotPasswordHTML();return;}
   if(A.screen==='resetPassword'){document.getElementById('app').innerHTML=resetPasswordHTML();return;}
-  const PAGE_KEY_MAP={insights:'insights',dashboard:'quotes',deals:'deals',products:'products',customers:'customers',vendorMaster:'vendors',projects:'projects',projectPerformance:'projectPerformance',projectPerformanceDetail:'projectPerformance',reviewQueue:'reviewQueue',testimonials:'testimonials'};
+  const PAGE_KEY_MAP={insights:'insights',dashboard:'quotes',deals:'deals',products:'products',customers:'customers',vendorMaster:'vendors',projects:'projects',projectPerformance:'projectPerformance',projectPerformanceDetail:'projectPerformance',reviewQueue:'reviewQueue',testimonials:'testimonials',vouchers:'vouchers'};
   if(PAGE_KEY_MAP[A.page]&&!hasPageAccess(PAGE_KEY_MAP[A.page])){
-    const fallbackOrder=['insights','dashboard','deals','products','customers','vendorMaster','projects','projectPerformance','reviewQueue','testimonials'];
+    const fallbackOrder=['insights','dashboard','deals','products','customers','vendorMaster','projects','projectPerformance','reviewQueue','testimonials','vouchers'];
     A.page=fallbackOrder.find(p=>hasPageAccess(PAGE_KEY_MAP[p]))||'dashboard';
   }
   document.getElementById('app').innerHTML=appHTML();
@@ -3069,6 +3069,7 @@ function draw(){
   if(A.page==='deals')setTimeout(loadDealsPage,50);
   if(A.page==='products')setTimeout(loadProducts,50);
   if(A.page==='customers')setTimeout(loadCustomersPage,50);
+  if(A.page==='vouchers')setTimeout(loadVouchersPage,50);
   if(A.page==='projects'&&A.projects==null)setTimeout(loadProjectsPage,50);
   if(A.page==='fsm'&&A.fsmTickets==null)setTimeout(loadFSMPage,50);
   if(A.page==='fsmDetail'&&A.fsmDetail==null)setTimeout(function(){loadFSMDetail(A.fsmDetailId);},50);
@@ -3568,6 +3569,9 @@ function appHTML(){
       ${sbGroupHTML('delivery','Delivery',[
         hasFeature('delivery_challans')&&hasPageAccess('deliveryChallans')?`<div class="sb-item ${(A.page==='deliveryChallans'||A.page==='deliveryChallanDetail')?'active':''}" onclick="${nav('deliveryChallans')}"><span class="sb-icon">🚚</span>Delivery Challans</div>`:''
       ])}
+      ${sbGroupHTML('finance','Finance',[
+        hasFeature('vouchers')&&hasPageAccess('vouchers')?`<div class="sb-item ${A.page==='vouchers'?'active':''}" onclick="${nav('vouchers')}"><span class="sb-icon">🧾</span>Payment Vouchers</div>`:''
+      ])}
       ${sbGroupHTML('projects','Projects',[
         hasFeature('projects')&&hasPageAccess('projects')?`<div class="sb-item ${A.page==='projects'?'active':''}" onclick="${nav('projects')}"><span class="sb-icon">📁</span>Projects</div>`:'',
         hasFeature('project_performance')&&hasPageAccess('projectPerformance')?`<div class="sb-item ${(A.page==='projectPerformance'||A.page==='projectPerformanceDetail')?'active':''}" onclick="${nav('projectPerformance')}"><span class="sb-icon">📊</span>Project Performance</div>`:''
@@ -3614,6 +3618,7 @@ function appHTML(){
   else if(A.page==='deals')pageContent=dealsHTML();
   else if(A.page==='products')pageContent=productsHTML();
   else if(A.page==='customers')pageContent=customersHTML();
+  else if(A.page==='vouchers')pageContent=vouchersHTML();
   else if(A.page==='projects')pageContent=projectsHTML();
   else if(A.page==='fsm')pageContent=fsmHTML();
   else if(A.page==='fsmDetail')pageContent=fsmDetailHTML();
@@ -5919,6 +5924,109 @@ function importCustomers(event){
     }catch(err){alert('Could not read that Excel file.');}
   };
   reader.readAsBinaryString(file);
+}
+
+// ── Payment Vouchers (merged in from the standalone sysconic-pv app) ──────────
+let VOUCHERS={list:[],statusFilter:''};
+const VOUCHER_STATUS_COLOR={pending:'var(--amber, #b8860b)',approved:'var(--green)',rejected:'var(--red, #a33)'};
+function vouchersHTML(){return`<div class="card">
+  <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
+    <select id="vchStatusFilter" onchange="VOUCHERS.statusFilter=this.value;loadVouchersPage()" style="padding:10px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit">
+      <option value="">All statuses</option>
+      <option value="pending">Pending</option>
+      <option value="approved">Approved</option>
+      <option value="rejected">Rejected</option>
+    </select>
+    <div style="flex:1"></div>
+    <button class="btn btn-navy" onclick="showVoucherModal()">+ New Voucher</button>
+  </div>
+  <div id="voucherList"><div style="color:var(--gray-500)">Loading…</div></div>
+</div>`;}
+async function loadVouchersPage(){
+  const q=VOUCHERS.statusFilter?('?status='+encodeURIComponent(VOUCHERS.statusFilter)):'';
+  const r=await api('GET','/api/vouchers'+q);
+  const el=document.getElementById('voucherList');if(!el)return;
+  if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  VOUCHERS.list=r.vouchers||[];
+  if(!VOUCHERS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No vouchers yet. Click + New Voucher to submit one for approval.</div>`;return;}
+  const cols='1fr 110px 130px 130px 150px 130px';
+  el.innerHTML=`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Payee</div><div>Amount</div><div>Category</div><div>Project</div><div>Approvals</div><div>Status</div></div>`+
+    VOUCHERS.list.map(v=>{
+      const approvals=v.voucher_approvals||[];
+      const mine=approvals.find(a=>a.approver_user_id===A.user?.id);
+      const approvalSummary=approvals.length?approvals.map(a=>a.status==='approved'?'✓':(a.status==='rejected'?'✗':'…')).join(' '):'—';
+      const canRespond=mine&&mine.status==='pending';
+      const canForce=A.user?.role==='admin'&&v.status==='pending';
+      return `<div class="prod-row" style="grid-template-columns:${cols}">
+        <div data-label="Payee">${esc(v.payee)}</div>
+        <div data-label="Amount">${esc(v.currency||'AED')} ${Number(v.amount||0).toLocaleString()}</div>
+        <div data-label="Category" style="color:var(--gray-500);font-size:13px">${esc(v.category||'')}</div>
+        <div data-label="Project" style="color:var(--gray-500);font-size:13px">${esc(v.project_name_freeform||'')}</div>
+        <div data-label="Approvals" title="${approvals.length} approver(s)">${approvalSummary}</div>
+        <div data-label="Status" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="color:${VOUCHER_STATUS_COLOR[v.status]||'inherit'};font-weight:600;text-transform:capitalize">${esc(v.status)}</span>
+          ${canRespond?`<button class="btn btn-sm" style="background:var(--green);color:#fff" onclick="respondVoucher('${v.id}','approve')">Approve</button><button class="btn btn-sm btn-red" onclick="respondVoucher('${v.id}','reject')">Reject</button>`:''}
+          ${canForce?`<button class="btn btn-sm" onclick="forceVoucher('${v.id}','approve')">Force approve</button>`:''}
+          ${A.user?.role==='admin'?`<button class="btn btn-sm btn-red" onclick="delVoucher('${v.id}')">×</button>`:''}
+        </div>
+      </div>`;
+    }).join('');
+}
+async function respondVoucher(vid,decision){
+  if(!confirm(decision==='approve'?'Approve this voucher?':'Reject this voucher?'))return;
+  const r=await api('POST','/api/vouchers/'+vid+'/respond',{decision});
+  if(r.error){alert(r.error);return;}
+  loadVouchersPage();
+}
+async function forceVoucher(vid,decision){
+  if(!confirm('Admin override: force this voucher to '+decision+'d? This bypasses the remaining approvers.'))return;
+  const r=await api('POST','/api/vouchers/'+vid+'/force',{decision});
+  if(r.error){alert(r.error);return;}
+  loadVouchersPage();
+}
+async function delVoucher(vid){
+  if(!confirm('Delete this voucher permanently?'))return;
+  const r=await api('DELETE','/api/vouchers/'+vid);
+  if(r.error){alert(r.error);return;}
+  loadVouchersPage();
+}
+function showVoucherModal(){
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="vchModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('vchModalOverlay').remove()">
+    <div class="modal">
+      <div class="modal-title">New payment voucher</div>
+      <div id="vchModalErr" class="auth-err" style="display:none"></div>
+      <div class="fld"><label>Payee</label><input id="vfPayee" placeholder="Vendor or person being paid"></div>
+      <div class="fld" style="display:flex;gap:8px">
+        <div style="flex:2"><label>Amount</label><input id="vfAmount" type="number" step="0.01" placeholder="0.00"></div>
+        <div style="flex:1"><label>Currency</label><select id="vfCurrency"><option>AED</option><option>USD</option><option>EUR</option><option>GBP</option><option>INR</option></select></div>
+      </div>
+      <div class="fld"><label>Payment method</label><select id="vfMethod"><option>Bank Transfer</option><option>Cheque</option><option>Cash</option><option>Online</option></select></div>
+      <div class="fld"><label>Category / cost center</label><select id="vfCategory"><option>Office</option><option>HR</option><option>IT</option><option>Marketing</option><option>Finance</option><option>Operations</option></select></div>
+      <div class="fld"><label>Project</label><input id="vfProject" placeholder="Project name"></div>
+      <div class="fld"><label>Invoice no.</label><input id="vfInvoice"></div>
+      <div class="fld"><label>Due date</label><input id="vfDueDate" type="date"></div>
+      <div class="fld"><label>Remarks</label><input id="vfRemarks"></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="document.getElementById('vchModalOverlay').remove()">Cancel</button>
+        <button class="btn btn-navy" onclick="saveVoucherModal()">Submit for approval</button>
+      </div>
+    </div></div>`);
+}
+async function saveVoucherModal(){
+  const body={
+    payee:document.getElementById('vfPayee').value,
+    amount:document.getElementById('vfAmount').value,
+    currency:document.getElementById('vfCurrency').value,
+    payment_method:document.getElementById('vfMethod').value,
+    category:document.getElementById('vfCategory').value,
+    project_name_freeform:document.getElementById('vfProject').value,
+    invoice_no:document.getElementById('vfInvoice').value,
+    due_date:document.getElementById('vfDueDate').value,
+    remarks:document.getElementById('vfRemarks').value,
+  };
+  const r=await api('POST','/api/vouchers',body);
+  if(r.error){const e=document.getElementById('vchModalErr');e.textContent=r.error;e.style.display='block';return;}
+  document.getElementById('vchModalOverlay').remove();loadVouchersPage();
 }
 
 // ── Deals (lightweight CRM pipeline that feeds into Quotes) ───────────────────
