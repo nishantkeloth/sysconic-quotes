@@ -6454,63 +6454,89 @@ async function showWorkflowStagesModal(dtId){
 function renderWorkflowStagesModal(label){
   const box=document.getElementById('wfStagesBox');if(!box)return;
   const stages=(WF.currentDef.stages||[]).slice().sort((a,b)=>a.seq-b.seq);
+  const single=stages.length<=1;
   box.innerHTML=`
-    <div class="modal-title">${esc(label)} — stages</div>
-    <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px">Reorder stages, require approval where needed, and pick approvers. A document moves through these in order.</div>
-    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:14px;max-height:50vh;overflow:auto">
-      ${stages.map((s,i)=>renderWorkflowStageCard(s,i,stages.length)).join('')}
+    <div class="modal-title">${esc(label)} — Approval</div>
+    <div style="font-size:13px;color:var(--gray-500);margin-bottom:18px">Choose who needs to sign off before a ${esc(label.toLowerCase())} record is finalized.</div>
+    <div style="display:flex;flex-direction:column;gap:14px;margin-bottom:16px;max-height:55vh;overflow:auto">
+      ${stages.map((s,i)=>renderWorkflowStageCard(s,i,stages.length,single)).join('')}
     </div>
-    <div style="display:flex;gap:8px;margin-bottom:14px">
-      <input id="wfNewStageLabel" placeholder="New stage name" style="flex:1">
-      <button class="btn btn-navy" onclick="addWorkflowStage()">+ Add stage</button>
-    </div>
-    <div class="modal-actions"><button class="btn" onclick="document.getElementById('wfStagesOverlay').remove();loadWorkflowSettingsPage()">Done</button></div>`;
+    ${single
+      ?`<button class="btn btn-sm" style="margin-bottom:16px" onclick="addWorkflowStageQuick()">+ Add another approval step</button>`
+      :`<div style="display:flex;gap:8px;margin-bottom:16px">
+          <input id="wfNewStageLabel" placeholder="New step name" style="flex:1">
+          <button class="btn btn-navy" onclick="addWorkflowStage()">+ Add step</button>
+        </div>`}
+    <div class="modal-actions"><button class="btn btn-navy" onclick="document.getElementById('wfStagesOverlay').remove();loadWorkflowSettingsPage()">Done</button></div>`;
 }
 
-function renderWorkflowStageCard(s,i,total){
+const WF_APPROVAL_MODE_LABELS={all:'Everyone below must approve',any:'Just one approval is enough',sequential:'One at a time, in the order listed'};
+
+function renderWorkflowStageCard(s,i,total,single){
   const approverOptions=WF.users.filter(u=>!(s.approvers||[]).some(a=>a.approver_user_id===u.id))
     .map(u=>`<option value="${u.id}">${esc(u.name||u.email)}</option>`).join('');
-  const approverChips=(s.approvers||[]).map(a=>`<span style="display:inline-flex;align-items:center;gap:4px;background:var(--gray-100);border-radius:12px;padding:3px 8px 3px 10px;font-size:12px;margin:2px 4px 2px 0">
+  const approverChips=(s.approvers||[]).map(a=>`<span style="display:inline-flex;align-items:center;gap:6px;background:var(--navy-light);color:var(--navy);border-radius:14px;padding:5px 6px 5px 12px;font-size:12.5px;font-weight:600;margin:0 6px 6px 0">
     ${a.approver_role?('Role: '+esc(a.approver_role)):esc((a.users&&(a.users.name||a.users.email))||'user')}
-    <span style="cursor:pointer;color:var(--red)" onclick="removeStageApprover('${a.id}')">×</span>
+    <span style="cursor:pointer;color:var(--navy);opacity:.6;font-weight:700" onclick="removeStageApprover('${a.id}')" title="Remove">×</span>
   </span>`).join('');
   const notifyAction=(s.actions||[]).find(a=>a.action_type==='notify_email');
   const notifyTo=notifyAction&&notifyAction.config&&notifyAction.config.to||'';
-  return `<div style="border:1px solid var(--gray-200);border-radius:8px;padding:10px">
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
+
+  const header=single?`
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+      <input value="${esc(s.label)}" style="flex:1;font-weight:700;font-size:15px;border:none;border-bottom:1.5px solid transparent;padding:2px 0;background:transparent" onfocus="this.style.borderBottomColor='var(--gray-200)'" onblur="this.style.borderBottomColor='transparent'" onchange="renameWorkflowStage('${s.id}',this.value)">
+    </div>`:`
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
       <div style="display:flex;flex-direction:column">
         <button class="btn btn-sm" style="padding:1px 6px" ${i===0?'disabled':''} onclick="moveWorkflowStage('${s.id}',-1)">↑</button>
         <button class="btn btn-sm" style="padding:1px 6px" ${i===total-1?'disabled':''} onclick="moveWorkflowStage('${s.id}',1)">↓</button>
       </div>
-      <input value="${esc(s.label)}" style="flex:1;font-weight:600" onchange="renameWorkflowStage('${s.id}',this.value)">
-      <button class="btn btn-sm" style="color:var(--red)" onclick="deleteWorkflowStage('${s.id}')">✕</button>
-    </div>
-    <label style="font-size:12px;display:flex;align-items:center;gap:6px;margin-bottom:6px">
-      <input type="checkbox" ${s.requires_approval?'checked':''} onchange="toggleStageApproval('${s.id}',this.checked)">Requires approval
-    </label>
-    ${s.requires_approval?`
-      <div style="margin-bottom:6px">
-        <select style="font-size:12px" onchange="setStageApprovalMode('${s.id}',this.value)">
-          <option value="all" ${s.approval_mode==='all'?'selected':''}>All approvers must approve</option>
-          <option value="any" ${s.approval_mode==='any'?'selected':''}>Any one approver</option>
-          <option value="sequential" ${s.approval_mode==='sequential'?'selected':''}>Sequential</option>
-        </select>
-      </div>
-      <div style="margin-bottom:6px">${approverChips||'<span style="font-size:12px;color:var(--gray-500)">No approvers yet</span>'}</div>
+      <input value="${esc(s.label)}" style="flex:1;font-weight:700" onchange="renameWorkflowStage('${s.id}',this.value)">
+      <button class="btn btn-sm" style="color:var(--red)" onclick="deleteWorkflowStage('${s.id}')" title="Delete this step">✕</button>
+    </div>`;
+
+  const approvalToggle=single?'':`
+    <label style="font-size:12px;display:flex;align-items:center;gap:6px;margin-bottom:10px;color:var(--gray-700)">
+      <input type="checkbox" ${s.requires_approval?'checked':''} onchange="toggleStageApproval('${s.id}',this.checked)">This step requires approval before moving on
+    </label>`;
+
+  const approvalBody=s.requires_approval?`
+      <div style="font-size:11px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Approval rule</div>
+      <select style="font-size:13px;margin-bottom:12px;width:100%" onchange="setStageApprovalMode('${s.id}',this.value)">
+        <option value="all" ${s.approval_mode==='all'?'selected':''}>${WF_APPROVAL_MODE_LABELS.all}</option>
+        <option value="any" ${s.approval_mode==='any'?'selected':''}>${WF_APPROVAL_MODE_LABELS.any}</option>
+        <option value="sequential" ${s.approval_mode==='sequential'?'selected':''}>${WF_APPROVAL_MODE_LABELS.sequential}</option>
+      </select>
+      <div style="font-size:11px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Approvers</div>
+      <div style="margin-bottom:8px">${approverChips||'<span style="font-size:13px;color:var(--gray-500)">No approvers added yet — add at least one below.</span>'}</div>
       <div style="display:flex;gap:6px">
-        <select id="wfApproverPick-${s.id}" style="flex:1;font-size:12px"><option value="">Add approver…</option>${approverOptions}<option value="__admin__">Role: Admin</option></select>
-        <button class="btn btn-sm" onclick="addStageApprover('${s.id}')">+</button>
+        <select id="wfApproverPick-${s.id}" style="flex:1;font-size:13px"><option value="">Add approver…</option>${approverOptions}<option value="__admin__">Role: Admin</option></select>
+        <button class="btn btn-sm btn-navy" onclick="addStageApprover('${s.id}')">+ Add</button>
       </div>
-    `:`
+  `:`
+      <div style="font-size:11px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Notify someone (optional)</div>
       <div style="display:flex;gap:6px;align-items:center">
-        <select id="wfNotifyPick-${s.id}" style="flex:1;font-size:12px">
+        <select id="wfNotifyPick-${s.id}" style="flex:1;font-size:13px">
           <option value="">No email notification</option>
           ${WF.users.map(u=>`<option value="${u.id}" ${notifyTo==='user:'+u.id?'selected':''}>${esc(u.name||u.email)}</option>`).join('')}
         </select>
         <button class="btn btn-sm" onclick="setStageNotify('${s.id}','${notifyAction?notifyAction.id:''}')">Save</button>
       </div>
-    `}
+  `;
+
+  return `<div style="border:1px solid var(--gray-200);border-radius:10px;padding:16px;background:var(--gray-50)">
+    ${header}
+    ${approvalToggle}
+    ${approvalBody}
   </div>`;
+}
+
+async function addWorkflowStageQuick(){
+  const label=prompt('Name for this approval step:','Second Approval');
+  if(!label||!label.trim())return;
+  const r=await api('POST','/api/workflows/definitions/'+WF.currentDef.id+'/stages',{label:label.trim(),requires_approval:true});
+  if(r.error){alert(r.error);return;}
+  await reloadCurrentWorkflowDef();
 }
 
 async function addWorkflowStage(){
