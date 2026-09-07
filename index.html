@@ -85,6 +85,24 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .fld label{font-size:12px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.04em}
 .fld input{padding:10px 12px;font-size:15px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit;transition:border .15s}
 .fld input:focus{outline:none;border-color:var(--navy);box-shadow:0 0 0 3px rgba(26,60,110,.1)}
+.fld select{padding:10px 12px;font-size:15px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit;transition:border .15s;width:100%;background:var(--white);cursor:pointer}
+.fld select:focus{outline:none;border-color:var(--navy);box-shadow:0 0 0 3px rgba(26,60,110,.1)}
+/* Payment Voucher form -- sectioned card, styled to match the rest of the
+   app (white card, navy accents) rather than a one-off palette */
+.vch-card{background:#fff;border:1px solid var(--gray-200);border-radius:14px;padding:28px 28px 24px;box-shadow:var(--shadow-lg)}
+.vch-sec-label{font-size:11px;font-weight:700;color:var(--navy);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;margin-top:22px}
+.vch-sec-label:first-child{margin-top:0}
+.vch-sec-line{height:1px;background:var(--gray-200);margin-bottom:16px}
+.vch-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:14px}
+.vch-fld label{display:block;font-size:11px;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
+.vch-fld input,.vch-fld select,.vch-fld textarea{width:100%;padding:10px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:8px;font-family:inherit;background:#fff;color:var(--gray-900);transition:border .15s}
+.vch-fld input::placeholder,.vch-fld textarea::placeholder{color:var(--gray-300)}
+.vch-fld input:focus,.vch-fld select:focus,.vch-fld textarea:focus{outline:none;border-color:var(--navy);box-shadow:0 0 0 3px rgba(26,60,110,.1)}
+.vch-fld input:disabled{color:var(--gray-500);background:var(--gray-50);cursor:not-allowed}
+.vch-fld select option{color:var(--gray-900)}
+.vch-fld textarea{resize:vertical;min-height:64px;font-family:inherit}
+.vch-radio{display:flex;align-items:center;gap:7px;font-size:14px;color:var(--gray-700);cursor:pointer}
+.vch-radio input[type=radio]{accent-color:var(--navy);width:16px;height:16px;cursor:pointer}
 .auth-btn{width:100%;padding:12px;font-size:15px;font-weight:700;border-radius:var(--radius);border:none;background:var(--navy);color:#fff;cursor:pointer;font-family:inherit;transition:background .15s}
 .auth-btn:hover{background:var(--navy-dark)}
 .auth-link{text-align:center;margin-top:18px;font-size:14px;color:var(--gray-500)}
@@ -98,6 +116,8 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .btn-navy:hover{background:var(--navy-dark)}
 .btn-red{background:var(--red-light);color:var(--red);border-color:#fca5a5}
 .btn-red:hover{background:#fee2e2}
+.btn-gold{background:#eab308;color:#1a1400;border-color:#eab308;font-weight:700}
+.btn-gold:hover{background:#ca8a04;border-color:#ca8a04}
 .btn-green{background:var(--green-light);color:var(--green);border-color:var(--green-bright)}
 .btn-sm{padding:5px 12px;font-size:13px}
 
@@ -3052,9 +3072,9 @@ function draw(){
   if(A.screen==='feedbackForm'){document.getElementById('app').innerHTML=feedbackFormHTML();return;}if(A.screen==='acceptInvite'){document.getElementById('app').innerHTML=acceptInviteHTML();return;}
   if(A.screen==='forgotPassword'){document.getElementById('app').innerHTML=forgotPasswordHTML();return;}
   if(A.screen==='resetPassword'){document.getElementById('app').innerHTML=resetPasswordHTML();return;}
-  const PAGE_KEY_MAP={insights:'insights',dashboard:'quotes',deals:'deals',products:'products',customers:'customers',vendorMaster:'vendors',projects:'projects',projectPerformance:'projectPerformance',projectPerformanceDetail:'projectPerformance',reviewQueue:'reviewQueue',testimonials:'testimonials'};
+  const PAGE_KEY_MAP={insights:'insights',dashboard:'quotes',deals:'deals',products:'products',customers:'customers',vendorMaster:'vendors',projects:'projects',projectPerformance:'projectPerformance',projectPerformanceDetail:'projectPerformance',reviewQueue:'reviewQueue',testimonials:'testimonials',vouchers:'vouchers'};
   if(PAGE_KEY_MAP[A.page]&&!hasPageAccess(PAGE_KEY_MAP[A.page])){
-    const fallbackOrder=['insights','dashboard','deals','products','customers','vendorMaster','projects','projectPerformance','reviewQueue','testimonials'];
+    const fallbackOrder=['insights','dashboard','deals','products','customers','vendorMaster','projects','projectPerformance','reviewQueue','testimonials','vouchers'];
     A.page=fallbackOrder.find(p=>hasPageAccess(PAGE_KEY_MAP[p]))||'dashboard';
   }
   document.getElementById('app').innerHTML=appHTML();
@@ -3069,12 +3089,14 @@ function draw(){
   if(A.page==='deals')setTimeout(loadDealsPage,50);
   if(A.page==='products')setTimeout(loadProducts,50);
   if(A.page==='customers')setTimeout(loadCustomersPage,50);
+  if(A.page==='vouchers')setTimeout(loadVouchersPage,50);
   if(A.page==='projects'&&A.projects==null)setTimeout(loadProjectsPage,50);
   if(A.page==='fsm'&&A.fsmTickets==null)setTimeout(loadFSMPage,50);
   if(A.page==='fsmDetail'&&A.fsmDetail==null)setTimeout(function(){loadFSMDetail(A.fsmDetailId);},50);
   if(A.page==='myJobs'&&A.myJobs==null)setTimeout(loadMyJobs,50);
   if(A.page==='myJobDetail'&&A.myJobDetail==null)setTimeout(function(){loadMyJobDetail(A.myJobDetailId);},50);
   if(A.page==='deliveryChallans'&&A.dcList==null)setTimeout(loadDeliveryChallans,50);
+  if(A.page==='workflowSettings')setTimeout(loadWorkflowSettingsPage,50);
   if(A.page==='deliveryChallanDetail'&&A.dcDetail==null){
     if(A.dcDetailId)setTimeout(function(){loadDeliveryChallanDetail(A.dcDetailId);},50);
     else setTimeout(initNewDeliveryChallan,50);
@@ -3568,6 +3590,9 @@ function appHTML(){
       ${sbGroupHTML('delivery','Delivery',[
         hasFeature('delivery_challans')&&hasPageAccess('deliveryChallans')?`<div class="sb-item ${(A.page==='deliveryChallans'||A.page==='deliveryChallanDetail')?'active':''}" onclick="${nav('deliveryChallans')}"><span class="sb-icon">🚚</span>Delivery Challans</div>`:''
       ])}
+      ${sbGroupHTML('finance','Finance',[
+        hasFeature('vouchers')&&hasPageAccess('vouchers')?`<div class="sb-item ${A.page==='vouchers'?'active':''}" onclick="${nav('vouchers')}"><span class="sb-icon">🧾</span>Payment Vouchers</div>`:''
+      ])}
       ${sbGroupHTML('projects','Projects',[
         hasFeature('projects')&&hasPageAccess('projects')?`<div class="sb-item ${A.page==='projects'?'active':''}" onclick="${nav('projects')}"><span class="sb-icon">📁</span>Projects</div>`:'',
         hasFeature('project_performance')&&hasPageAccess('projectPerformance')?`<div class="sb-item ${(A.page==='projectPerformance'||A.page==='projectPerformanceDetail')?'active':''}" onclick="${nav('projectPerformance')}"><span class="sb-icon">📊</span>Project Performance</div>`:''
@@ -3584,7 +3609,8 @@ function appHTML(){
       <div class="sb-item ${A.page==='team'?'active':''}" onclick="${nav('team')}"><span class="sb-icon">👥</span>Team</div>
       <div class="sb-item ${A.page==='integrations'?'active':''}" onclick="${nav('integrations')}"><span class="sb-icon">🔌</span>Integrations</div>
       <div class="sb-item ${A.page==='companyProfile'?'active':''}" onclick="${nav('companyProfile')}"><span class="sb-icon">🏢</span>Company Profile</div>
-      <div class="sb-item ${A.page==='rolesPermissions'?'active':''}" onclick="${nav('rolesPermissions')}"><span class="sb-icon">🔐</span>Roles & Permissions</div>`:''}
+      <div class="sb-item ${A.page==='rolesPermissions'?'active':''}" onclick="${nav('rolesPermissions')}"><span class="sb-icon">🔐</span>Roles & Permissions</div>
+      ${hasFeature('workflowEngine')?`<div class="sb-item ${A.page==='workflowSettings'?'active':''}" onclick="${nav('workflowSettings')}"><span class="sb-icon">🔀</span>Workflow Settings</div>`:''}`:''}
       ${A.user?.is_platform_admin?`<div class="sb-sec">Platform</div><div class="sb-item ${A.page==='platform'?'active':''}" onclick="${nav('platform')}"><span class="sb-icon">🌐</span>All Companies</div>`:''}
     </nav>
     <div class="sb-foot">
@@ -3614,6 +3640,7 @@ function appHTML(){
   else if(A.page==='deals')pageContent=dealsHTML();
   else if(A.page==='products')pageContent=productsHTML();
   else if(A.page==='customers')pageContent=customersHTML();
+  else if(A.page==='vouchers')pageContent=vouchersHTML();
   else if(A.page==='projects')pageContent=projectsHTML();
   else if(A.page==='fsm')pageContent=fsmHTML();
   else if(A.page==='fsmDetail')pageContent=fsmDetailHTML();
@@ -3629,6 +3656,7 @@ function appHTML(){
   else if(A.page==='platform')pageContent=platformHTML();
   else if(A.page==='companyProfile')pageContent=companyProfileHTML();
   else if(A.page==='rolesPermissions')pageContent=rolesPermissionsHTML();
+  else if(A.page==='workflowSettings')pageContent=workflowSettingsHTML();
   else if(A.page==='reviewQueue')pageContent=reviewQueueHTML();
   else if(A.page==='testimonials')pageContent=testimonialsHTML();
 
@@ -5921,6 +5949,207 @@ function importCustomers(event){
   reader.readAsBinaryString(file);
 }
 
+// ── Payment Vouchers (merged in from the standalone sysconic-pv app) ──────────
+let VOUCHERS={list:[],statusFilter:''};
+const VOUCHER_STATUS_COLOR={pending:'var(--amber, #b8860b)',approved:'var(--green)',rejected:'var(--red, #a33)'};
+const WF_APPROVAL_STATUS_COLOR={pending:'#92400e',approved:'#065f46',rejected:'#991b1b'};
+function vouchersHTML(){return`<div class="card">
+  <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
+    <select id="vchStatusFilter" onchange="VOUCHERS.statusFilter=this.value;loadVouchersPage()" style="padding:10px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit">
+      <option value="">All statuses</option>
+      <option value="pending">Pending</option>
+      <option value="approved">Approved</option>
+      <option value="rejected">Rejected</option>
+    </select>
+    <div style="flex:1"></div>
+    <button class="btn btn-navy" onclick="showVoucherModal()">+ New Voucher</button>
+  </div>
+  <div id="voucherList"><div style="color:var(--gray-500)">Loading…</div></div>
+</div>`;}
+async function loadVouchersPage(){
+  const q=VOUCHERS.statusFilter?('?status='+encodeURIComponent(VOUCHERS.statusFilter)):'';
+  const r=await api('GET','/api/vouchers'+q);
+  const el=document.getElementById('voucherList');if(!el)return;
+  if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  VOUCHERS.list=r.vouchers||[];
+  if(!VOUCHERS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No vouchers yet. Click + New Voucher to submit one for approval.</div>`;return;}
+  const cols='1fr 110px 120px 120px 210px 130px';
+  el.innerHTML=`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Payee</div><div>Amount</div><div>Category</div><div>Project</div><div>Approvals</div><div>Status</div></div>`+
+    VOUCHERS.list.map(v=>{
+      // Approvals come from the Workflow Engine now (workflow_stage_approvals,
+      // via api/vouchers.py's get_workflow_instances_bulk) instead of the old
+      // per-voucher voucher_approvals table.
+      const approvals=v.workflow_approvals||[];
+      const mine=approvals.find(a=>a.approver_user_id===A.user?.id);
+      const isAdmin=A.user?.role==='admin';
+      const canRespond=mine&&mine.status==='pending';
+      const canForce=isAdmin&&v.status==='pending';
+      // Per-approver rows: name + status. An admin can act on anyone else's
+      // still-pending approval via the same respondVoucher() call the
+      // approver themselves would use -- the backend records it as an
+      // admin override (responded_by_user_id) and this label reflects that.
+      const approvalsHTML=approvals.length?approvals.map(a=>{
+        const name=esc((a.users&&a.users.name)||(a.users&&a.users.email)||'Approver');
+        const onBehalf=a.responded_by_user_id&&a.responded_by_user_id!==a.approver_user_id;
+        const label=onBehalf?(a.status==='approved'?'Approved by ADMIN':'Rejected by ADMIN'):(a.status==='pending'?'Pending':(a.status==='approved'?'Approved':'Rejected'));
+        const title=onBehalf?`On behalf of ${name}`+((a.responder&&a.responder.name)?` — actioned by ${esc(a.responder.name)}`:''):name;
+        const canOverride=isAdmin&&a.status==='pending'&&a.approver_user_id!==A.user?.id;
+        return `<div style="font-size:11px;line-height:1.6" title="${title}">
+          ${name}: <span style="color:${WF_APPROVAL_STATUS_COLOR[a.status]||'#555'};font-weight:700">${label}</span>
+          ${canOverride?`<a href="#" onclick="event.preventDefault();respondVoucher('${a.id}','approve')" title="Approve on behalf of ${name} (logged as ADMIN)" style="color:var(--green);font-weight:700;text-decoration:none;margin-left:5px">✓</a><a href="#" onclick="event.preventDefault();respondVoucher('${a.id}','reject')" title="Reject on behalf of ${name} (logged as ADMIN)" style="color:#a33;font-weight:700;text-decoration:none;margin-left:3px">✗</a>`:''}
+        </div>`;
+      }).join(''):'<span style="color:var(--gray-500)">—</span>';
+      // Budget context (only present for pending, project-linked vouchers --
+      // see api/vouchers.py's list_vouchers()) shown right next to the
+      // approve/reject controls, so whoever's about to approve sees it
+      // before they click.
+      const bs=v.budget_snapshot;
+      const budgetHTML=(bs&&bs.budget!=null)?(()=>{
+        const over=bs.over_budget;
+        const remain=bs.currency_mismatch?bs.remaining_before:bs.remaining_after;
+        const remainTxt=remain==null?'n/a':('AED '+Number(remain).toLocaleString(undefined,{maximumFractionDigits:0}));
+        const tip=`Project budget: AED ${Number(bs.budget).toLocaleString()} · Already committed: AED ${Number(bs.total_committed).toLocaleString()}${bs.has_zoho_data?' (incl. Zoho actuals/POs)':' (approved+pending vouchers)'}${bs.currency_mismatch?' · this voucher\'s currency differs, not netted in':''}`;
+        return `<div style="font-size:10.5px;margin-bottom:4px;padding:3px 6px;border-radius:4px;background:${over?'#fee2e2':'#f3f4f6'};color:${over?'#991b1b':'var(--gray-600)'};font-weight:${over?700:400}" title="${esc(tip)}">${over?'⚠ Over budget — ':'Remaining after: '}${remainTxt}</div>`;
+      })():'';
+      return `<div class="prod-row" style="grid-template-columns:${cols}">
+        <div data-label="Payee">${esc(v.payee)}</div>
+        <div data-label="Amount">${esc(v.currency||'AED')} ${Number(v.amount||0).toLocaleString()}</div>
+        <div data-label="Category" style="color:var(--gray-500);font-size:13px">${esc(v.category||'')}</div>
+        <div data-label="Project" style="color:var(--gray-500);font-size:13px">${v.payment_type&&v.payment_type!=='project'?`<em>${v.payment_type==='general'?'General/Admin':'Other'}</em>`:esc((v.projects&&v.projects.name)||v.project_name_freeform||'')}</div>
+        <div data-label="Approvals">${budgetHTML}${approvalsHTML}</div>
+        <div data-label="Status" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="color:${VOUCHER_STATUS_COLOR[v.status]||'inherit'};font-weight:600;text-transform:capitalize">${esc(v.status)}</span>
+          ${canRespond?`<button class="btn btn-sm" style="background:var(--green);color:#fff" onclick="respondVoucher('${mine.id}','approve')">Approve</button><button class="btn btn-sm btn-red" onclick="respondVoucher('${mine.id}','reject')">Reject</button>`:''}
+          ${canForce?`<button class="btn btn-sm" onclick="forceVoucher('${v.id}','approve')">Force approve</button>`:''}
+          ${isAdmin?`<button class="btn btn-sm btn-red" onclick="delVoucher('${v.id}')">×</button>`:''}
+        </div>
+      </div>`;
+    }).join('');
+}
+async function respondVoucher(approvalId,decision){
+  if(!confirm(decision==='approve'?'Approve this voucher?':'Reject this voucher?'))return;
+  const r=await api('POST','/api/workflows/approvals/'+approvalId+'/respond',{decision});
+  if(r.error){alert(r.error);return;}
+  loadVouchersPage();
+}
+async function forceVoucher(vid,decision){
+  if(!confirm('Admin override: force this voucher to '+decision+'d? This bypasses the remaining approvers.'))return;
+  const r=await api('POST','/api/vouchers/'+vid+'/force',{decision});
+  if(r.error){alert(r.error);return;}
+  loadVouchersPage();
+}
+async function delVoucher(vid){
+  if(!confirm('Delete this voucher permanently?'))return;
+  const r=await api('DELETE','/api/vouchers/'+vid);
+  if(r.error){alert(r.error);return;}
+  loadVouchersPage();
+}
+async function showVoucherModal(){
+  const todayStr=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+  const projR=await api('GET','/api/projects');
+  const projects=projR.projects||[];
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="vchModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('vchModalOverlay').remove()">
+    <div style="max-width:640px;width:100%">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="font-size:19px;font-weight:700;color:var(--gray-900)">Submit Payment Voucher</div>
+        <span style="cursor:pointer;color:var(--gray-500);font-size:22px;line-height:1;padding:4px" onclick="document.getElementById('vchModalOverlay').remove()">×</span>
+      </div>
+      <div class="vch-card">
+        <div id="vchModalErr" class="auth-err" style="display:none"></div>
+
+        <div class="vch-sec-label">Payment Type</div>
+        <div class="vch-sec-line"></div>
+        <div style="display:flex;gap:28px;margin-bottom:8px;flex-wrap:wrap">
+          <label class="vch-radio"><input type="radio" name="vfPayType" value="project" checked onchange="toggleVoucherPayType()">Project Payment</label>
+          <label class="vch-radio"><input type="radio" name="vfPayType" value="general" onchange="toggleVoucherPayType()">General / Admin Payment</label>
+          <label class="vch-radio"><input type="radio" name="vfPayType" value="other" onchange="toggleVoucherPayType()">Other</label>
+        </div>
+
+        <div class="vch-sec-label">Payee Information</div>
+        <div class="vch-sec-line"></div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Payee Name *</label><input id="vfPayee" placeholder="e.g. Al Futtaim Electric"></div>
+          <div class="vch-fld"><label>Amount *</label><input id="vfAmount" type="number" step="0.01" placeholder="0.00"></div>
+        </div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Currency</label><select id="vfCurrency">
+            <option value="AED">AED – UAE Dirham</option><option value="USD">USD – US Dollar</option><option value="EUR">EUR – Euro</option><option value="GBP">GBP – British Pound</option><option value="INR">INR – Indian Rupee</option>
+          </select></div>
+          <div class="vch-fld"><label>Payment Method</label><select id="vfMethod"><option>Bank Transfer</option><option>Cheque</option><option>Cash</option><option>Online Payment</option></select></div>
+        </div>
+
+        <div class="vch-sec-label">Invoice Details</div>
+        <div class="vch-sec-line"></div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Invoice Number</label><input id="vfInvoice" placeholder="INV-XXXX"></div>
+          <div class="vch-fld"><label>Payment Due Date</label><input id="vfDueDate" type="date"></div>
+        </div>
+        <div class="vch-row" id="vchCatProjRow">
+          <div class="vch-fld"><label>Category</label><select id="vfCategory"><option>Equipment</option><option>Materials</option><option>Subcontract</option><option>Utilities</option><option>Travel</option><option>Professional Services</option><option>Maintenance</option><option>Other</option></select></div>
+          <div class="vch-fld" id="vfProjectWrap"><label>Project</label><select id="vfProject">
+            <option value="">— No specific project —</option>
+            ${projects.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
+          </select></div>
+        </div>
+
+        <div class="vch-sec-label">Submission Details</div>
+        <div class="vch-sec-line"></div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Submitted By *</label><input value="${esc(A.user?.name||'')}" disabled></div>
+          <div class="vch-fld"><label>Submission Date</label><input value="${todayStr}" disabled></div>
+        </div>
+        <div class="vch-fld" style="margin-bottom:0"><label>Description / Remarks</label><textarea id="vfRemarks" rows="3" placeholder="Brief description of what this payment is for…"></textarea></div>
+      </div>
+
+      <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px">
+        <button class="btn" onclick="clearVoucherModal()">Clear</button>
+        <button class="btn btn-navy" onclick="saveVoucherModal()">Submit for Approval →</button>
+      </div>
+    </div></div>`);
+  toggleVoucherPayType();
+}
+function toggleVoucherPayType(){
+  // "Project Payment" is the only type that has a linked project -- General/
+  // Admin and Other are plain expenses, so the Project field collapses away
+  // (and its value is cleared) rather than sitting there unused.
+  const val=document.querySelector('input[name="vfPayType"]:checked')?.value||'project';
+  const wrap=document.getElementById('vfProjectWrap');
+  const row=document.getElementById('vchCatProjRow');
+  if(val==='project'){
+    if(wrap)wrap.style.display='';
+    if(row)row.style.gridTemplateColumns='1fr 1fr';
+  }else{
+    if(wrap)wrap.style.display='none';
+    if(row)row.style.gridTemplateColumns='1fr';
+    const sel=document.getElementById('vfProject');if(sel)sel.value='';
+  }
+}
+function clearVoucherModal(){
+  ['vfPayee','vfAmount','vfInvoice','vfDueDate','vfProject','vfRemarks'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  ['vfCurrency','vfMethod','vfCategory'].forEach(id=>{const el=document.getElementById(id);if(el)el.selectedIndex=0;});
+  const firstRadio=document.querySelector('input[name="vfPayType"][value="project"]');if(firstRadio)firstRadio.checked=true;
+  toggleVoucherPayType();
+  const err=document.getElementById('vchModalErr');if(err)err.style.display='none';
+}
+async function saveVoucherModal(){
+  const body={
+    payee:document.getElementById('vfPayee').value,
+    amount:document.getElementById('vfAmount').value,
+    currency:document.getElementById('vfCurrency').value,
+    payment_method:document.getElementById('vfMethod').value,
+    category:document.getElementById('vfCategory').value,
+    payment_type:document.querySelector('input[name="vfPayType"]:checked')?.value||'project',
+    project_id:document.getElementById('vfProject').value,
+    invoice_no:document.getElementById('vfInvoice').value,
+    due_date:document.getElementById('vfDueDate').value,
+    remarks:document.getElementById('vfRemarks').value,
+  };
+  const r=await api('POST','/api/vouchers',body);
+  if(r.error){const e=document.getElementById('vchModalErr');e.textContent=r.error;e.style.display='block';return;}
+  document.getElementById('vchModalOverlay').remove();loadVouchersPage();
+  if(r.warning)alert(r.warning);
+}
+
 // ── Deals (lightweight CRM pipeline that feeds into Quotes) ───────────────────
 let DEALS={list:[],stages:[],dragId:null};
 
@@ -6199,6 +6428,207 @@ async function deleteDealStage(id){
   renderDealStagesModal();
 }
 
+// ── Workflow Settings (configurable approval pipeline per document type) ─────
+// Admin-only settings page. Each document type (Quotes, Delivery Challans,
+// FSM Tickets, Payment Vouchers, plus whatever else gets added to
+// workflow_document_types later) can be turned on/off; turning one on
+// auto-creates a two-stage default definition that the admin then edits
+// here (add/reorder/rename stages, require approval + pick approvers, or
+// notify someone by email when a non-approval stage is entered). See
+// api/workflows.py for the runtime engine that actually drives a document
+// through these stages once a document module starts creating instances.
+let WF={docTypes:[],currentDef:null,users:[]};
+
+function workflowSettingsHTML(){return`<div class="card">
+  <div class="card-title" style="margin-bottom:4px">Workflow Settings</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Turn on a configurable approval pipeline for a document type, then define its stages.</div>
+  <div id="wfDocTypeList"><div style="color:var(--gray-500)">Loading…</div></div>
+</div>`;}
+
+async function loadWorkflowSettingsPage(){
+  const el=document.getElementById('wfDocTypeList');if(!el)return;
+  const r=await api('GET','/api/workflows/document-types');
+  if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  WF.docTypes=r.document_types||[];
+  el.innerHTML=WF.docTypes.length?WF.docTypes.map(dt=>`<div style="display:flex;align-items:center;gap:12px;border:1px solid var(--gray-200);border-radius:8px;padding:12px 14px;margin-bottom:8px">
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;flex:1">
+      <input type="checkbox" ${dt.enabled?'checked':''} onchange="toggleWorkflowDocType('${dt.id}',this.checked)">
+      <span style="font-weight:600">${esc(dt.label)}</span>
+    </label>
+    ${dt.enabled?`<button class="btn btn-sm" onclick="showWorkflowStagesModal('${dt.id}')">⚙ Configure stages</button>`:''}
+  </div>`).join(''):`<div style="padding:20px;text-align:center;color:var(--gray-500)">No document types available yet.</div>`;
+}
+
+async function toggleWorkflowDocType(id,checked){
+  const r=await api('PUT','/api/workflows/document-types/'+id,{enabled:checked});
+  if(r.error){alert(r.error);}
+  loadWorkflowSettingsPage();
+}
+
+async function showWorkflowStagesModal(dtId){
+  const dt=WF.docTypes.find(d=>d.id===dtId);
+  if(!dt||!dt.definition_id){alert('Enable this document type first.');return;}
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="wfStagesOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('wfStagesOverlay').remove()">
+    <div class="modal" style="max-width:640px" id="wfStagesBox">Loading…</div></div>`);
+  const [defR,usersR]=await Promise.all([
+    api('GET','/api/workflows/definitions/'+dt.definition_id),
+    api('GET','/api/workflows/company-users'),
+  ]);
+  if(defR.error){const b=document.getElementById('wfStagesBox');if(b)b.innerHTML=`<div class="auth-err">${esc(defR.error)}</div>`;return;}
+  WF.currentDef=defR.definition;WF.users=usersR.users||[];
+  renderWorkflowStagesModal(dt.label);
+}
+
+function renderWorkflowStagesModal(label){
+  const box=document.getElementById('wfStagesBox');if(!box)return;
+  const stages=(WF.currentDef.stages||[]).slice().sort((a,b)=>a.seq-b.seq);
+  const single=stages.length<=1;
+  box.innerHTML=`
+    <div class="modal-title">${esc(label)} — Approval</div>
+    <div style="font-size:13px;color:var(--gray-500);margin-bottom:18px">Choose who needs to sign off before a ${esc(label.toLowerCase())} record is finalized.</div>
+    <div style="display:flex;flex-direction:column;gap:14px;margin-bottom:16px;max-height:55vh;overflow:auto">
+      ${stages.map((s,i)=>renderWorkflowStageCard(s,i,stages.length,single)).join('')}
+    </div>
+    ${single
+      ?`<button class="btn btn-sm" style="margin-bottom:16px" onclick="addWorkflowStageQuick()">+ Add another approval step</button>`
+      :`<div style="display:flex;gap:8px;margin-bottom:16px">
+          <input id="wfNewStageLabel" placeholder="New step name" style="flex:1">
+          <button class="btn btn-navy" onclick="addWorkflowStage()">+ Add step</button>
+        </div>`}
+    <div class="modal-actions"><button class="btn btn-navy" onclick="document.getElementById('wfStagesOverlay').remove();loadWorkflowSettingsPage()">Done</button></div>`;
+}
+
+const WF_APPROVAL_MODE_LABELS={all:'Everyone below must approve',any:'Just one approval is enough',sequential:'One at a time, in the order listed'};
+
+function renderWorkflowStageCard(s,i,total,single){
+  const approverOptions=WF.users.filter(u=>!(s.approvers||[]).some(a=>a.approver_user_id===u.id))
+    .map(u=>`<option value="${u.id}">${esc(u.name||u.email)}</option>`).join('');
+  const approverChips=(s.approvers||[]).map(a=>`<span style="display:inline-flex;align-items:center;gap:6px;background:var(--navy-light);color:var(--navy);border-radius:14px;padding:5px 6px 5px 12px;font-size:12.5px;font-weight:600;margin:0 6px 6px 0">
+    ${a.approver_role?('Role: '+esc(a.approver_role)):esc((a.users&&(a.users.name||a.users.email))||'user')}
+    <span style="cursor:pointer;color:var(--navy);opacity:.6;font-weight:700" onclick="removeStageApprover('${a.id}')" title="Remove">×</span>
+  </span>`).join('');
+  const notifyAction=(s.actions||[]).find(a=>a.action_type==='notify_email');
+  const notifyTo=notifyAction&&notifyAction.config&&notifyAction.config.to||'';
+
+  const header=single?`
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+      <input value="${esc(s.label)}" style="flex:1;font-weight:700;font-size:15px;border:none;border-bottom:1.5px solid transparent;padding:2px 0;background:transparent" onfocus="this.style.borderBottomColor='var(--gray-200)'" onblur="this.style.borderBottomColor='transparent'" onchange="renameWorkflowStage('${s.id}',this.value)">
+    </div>`:`
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+      <div style="display:flex;flex-direction:column">
+        <button class="btn btn-sm" style="padding:1px 6px" ${i===0?'disabled':''} onclick="moveWorkflowStage('${s.id}',-1)">↑</button>
+        <button class="btn btn-sm" style="padding:1px 6px" ${i===total-1?'disabled':''} onclick="moveWorkflowStage('${s.id}',1)">↓</button>
+      </div>
+      <input value="${esc(s.label)}" style="flex:1;font-weight:700" onchange="renameWorkflowStage('${s.id}',this.value)">
+      <button class="btn btn-sm" style="color:var(--red)" onclick="deleteWorkflowStage('${s.id}')" title="Delete this step">✕</button>
+    </div>`;
+
+  const approvalToggle=single?'':`
+    <label style="font-size:12px;display:flex;align-items:center;gap:6px;margin-bottom:10px;color:var(--gray-700)">
+      <input type="checkbox" ${s.requires_approval?'checked':''} onchange="toggleStageApproval('${s.id}',this.checked)">This step requires approval before moving on
+    </label>`;
+
+  const approvalBody=s.requires_approval?`
+      <div style="font-size:11px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Approval rule</div>
+      <select style="font-size:13px;margin-bottom:12px;width:100%" onchange="setStageApprovalMode('${s.id}',this.value)">
+        <option value="all" ${s.approval_mode==='all'?'selected':''}>${WF_APPROVAL_MODE_LABELS.all}</option>
+        <option value="any" ${s.approval_mode==='any'?'selected':''}>${WF_APPROVAL_MODE_LABELS.any}</option>
+        <option value="sequential" ${s.approval_mode==='sequential'?'selected':''}>${WF_APPROVAL_MODE_LABELS.sequential}</option>
+      </select>
+      <div style="font-size:11px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Approvers</div>
+      <div style="margin-bottom:8px">${approverChips||'<span style="font-size:13px;color:var(--gray-500)">No approvers added yet — add at least one below.</span>'}</div>
+      <div style="display:flex;gap:6px">
+        <select id="wfApproverPick-${s.id}" style="flex:1;font-size:13px"><option value="">Add approver…</option>${approverOptions}<option value="__admin__">Role: Admin</option></select>
+        <button class="btn btn-sm btn-navy" onclick="addStageApprover('${s.id}')">+ Add</button>
+      </div>
+  `:`
+      <div style="font-size:11px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Notify someone (optional)</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select id="wfNotifyPick-${s.id}" style="flex:1;font-size:13px">
+          <option value="">No email notification</option>
+          ${WF.users.map(u=>`<option value="${u.id}" ${notifyTo==='user:'+u.id?'selected':''}>${esc(u.name||u.email)}</option>`).join('')}
+        </select>
+        <button class="btn btn-sm" onclick="setStageNotify('${s.id}','${notifyAction?notifyAction.id:''}')">Save</button>
+      </div>
+  `;
+
+  return `<div style="border:1px solid var(--gray-200);border-radius:10px;padding:16px;background:var(--gray-50)">
+    ${header}
+    ${approvalToggle}
+    ${approvalBody}
+  </div>`;
+}
+
+async function addWorkflowStageQuick(){
+  const label=prompt('Name for this approval step:','Second Approval');
+  if(!label||!label.trim())return;
+  const r=await api('POST','/api/workflows/definitions/'+WF.currentDef.id+'/stages',{label:label.trim(),requires_approval:true});
+  if(r.error){alert(r.error);return;}
+  await reloadCurrentWorkflowDef();
+}
+
+async function addWorkflowStage(){
+  const inp=document.getElementById('wfNewStageLabel');
+  const label=(inp&&inp.value||'').trim();if(!label)return;
+  const r=await api('POST','/api/workflows/definitions/'+WF.currentDef.id+'/stages',{label});
+  if(r.error){alert(r.error);return;}
+  await reloadCurrentWorkflowDef();
+}
+async function renameWorkflowStage(id,label){
+  if(!label.trim())return;
+  await api('PUT','/api/workflows/stages/'+id,{label:label.trim()});
+  const s=(WF.currentDef.stages||[]).find(x=>x.id===id);if(s)s.label=label.trim();
+}
+async function moveWorkflowStage(id,dir){
+  const stages=(WF.currentDef.stages||[]).slice().sort((a,b)=>a.seq-b.seq);
+  const i=stages.findIndex(s=>s.id===id),j=i+dir;
+  if(i<0||j<0||j>=stages.length)return;
+  [stages[i],stages[j]]=[stages[j],stages[i]];
+  await Promise.all(stages.map((s,idx)=>api('PUT','/api/workflows/stages/'+s.id,{seq:idx})));
+  await reloadCurrentWorkflowDef();
+}
+async function toggleStageApproval(id,checked){
+  await api('PUT','/api/workflows/stages/'+id,{requires_approval:checked});
+  await reloadCurrentWorkflowDef();
+}
+async function setStageApprovalMode(id,mode){
+  await api('PUT','/api/workflows/stages/'+id,{approval_mode:mode});
+  const s=(WF.currentDef.stages||[]).find(x=>x.id===id);if(s)s.approval_mode=mode;
+}
+async function deleteWorkflowStage(id){
+  if(!confirm('Delete this stage?'))return;
+  const r=await api('DELETE','/api/workflows/stages/'+id);
+  if(r.error){alert(r.error);return;}
+  await reloadCurrentWorkflowDef();
+}
+async function addStageApprover(stageId){
+  const sel=document.getElementById('wfApproverPick-'+stageId);
+  const val=sel&&sel.value;if(!val)return;
+  const body=val==='__admin__'?{approver_role:'admin'}:{approver_user_id:val};
+  const r=await api('POST','/api/workflows/stages/'+stageId+'/approvers',body);
+  if(r.error){alert(r.error);return;}
+  await reloadCurrentWorkflowDef();
+}
+async function removeStageApprover(approverId){
+  const r=await api('DELETE','/api/workflows/stage-approvers/'+approverId);
+  if(r.error){alert(r.error);return;}
+  await reloadCurrentWorkflowDef();
+}
+async function setStageNotify(stageId,existingActionId){
+  const sel=document.getElementById('wfNotifyPick-'+stageId);
+  const val=sel&&sel.value;
+  if(existingActionId)await api('DELETE','/api/workflows/stage-actions/'+existingActionId);
+  if(val)await api('POST','/api/workflows/stages/'+stageId+'/actions',{trigger:'on_enter',action_type:'notify_email',config:{to:'user:'+val}});
+  await reloadCurrentWorkflowDef();
+}
+async function reloadCurrentWorkflowDef(){
+  const r=await api('GET','/api/workflows/definitions/'+WF.currentDef.id);
+  if(r.error){alert(r.error);return;}
+  WF.currentDef=r.definition;
+  const dt=WF.docTypes.find(d=>d.definition_id===WF.currentDef.id);
+  renderWorkflowStagesModal(dt?dt.label:'Workflow');
+}
+
 // ── Vendor Master (standalone reference list) ─────────────────────────────────
 let VENDS={list:[],total:0,search:'',t:null};
 
@@ -6304,7 +6734,7 @@ function importVendorsMaster(event){
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────
-const RBAC_PAGE_LABELS = {insights:'Insights',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service',myJobs:'My Jobs (Engineer)',deliveryChallans:'Delivery Challans'};
+const RBAC_PAGE_LABELS = {insights:'Insights',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service',myJobs:'My Jobs (Engineer)',deliveryChallans:'Delivery Challans',vouchers:'Payment Vouchers',workflowSettings:'Workflow Settings'};
 let RBAC_PAGE_KEYS_FE = [];
 let RBAC_ROLES_CACHE = [];
 
