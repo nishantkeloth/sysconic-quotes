@@ -5954,7 +5954,7 @@ let VOUCHERS={list:[],statusFilter:''};
 const VOUCHER_STATUS_COLOR={pending:'var(--amber, #b8860b)',approved:'var(--green)',rejected:'var(--red, #a33)'};
 const WF_APPROVAL_STATUS_COLOR={pending:'#92400e',approved:'#065f46',rejected:'#991b1b'};
 const VOUCHER_SBADGE={pending:{bg:'#fef3c7',c:'#92400e'},approved:{bg:'#d1fae5',c:'#065f46'},rejected:{bg:'#fee2e2',c:'#991b1b'}};
-function vouchersHTML(){return`<div class="card">
+function vouchersHTML(){return`<div class="card" style="max-width:1250px">
   <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
     <select id="vchStatusFilter" onchange="VOUCHERS.statusFilter=this.value;loadVouchersPage()" style="padding:10px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit">
       <option value="">All statuses</option>
