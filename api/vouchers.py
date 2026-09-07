@@ -187,7 +187,7 @@ def force_voucher(vid):
     voucher = sb.table('vouchers').select('id').eq('id', vid).eq('company_id', claims['company_id']).execute().data
     if not voucher:
         return jsonify({'error': 'Not found'}), 404
-    result = force_resolve_instance(sb, claims['company_id'], 'vouchers', vid, decision)
+    result = force_resolve_instance(sb, claims['company_id'], 'vouchers', vid, decision, acted_by_user_id=claims['user_id'])
     if 'error' in result:
         # No workflow instance exists for this voucher (e.g. it was
         # submitted before the workflow was configured) -- fall back to a

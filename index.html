@@ -5952,6 +5952,7 @@ function importCustomers(event){
 // ── Payment Vouchers (merged in from the standalone sysconic-pv app) ──────────
 let VOUCHERS={list:[],statusFilter:''};
 const VOUCHER_STATUS_COLOR={pending:'var(--amber, #b8860b)',approved:'var(--green)',rejected:'var(--red, #a33)'};
+const WF_APPROVAL_STATUS_COLOR={pending:'#92400e',approved:'#065f46',rejected:'#991b1b'};
 function vouchersHTML(){return`<div class="card">
   <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
     <select id="vchStatusFilter" onchange="VOUCHERS.statusFilter=this.value;loadVouchersPage()" style="padding:10px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit">
@@ -5972,7 +5973,7 @@ async function loadVouchersPage(){
   if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
   VOUCHERS.list=r.vouchers||[];
   if(!VOUCHERS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No vouchers yet. Click + New Voucher to submit one for approval.</div>`;return;}
-  const cols='1fr 110px 130px 130px 150px 130px';
+  const cols='1fr 110px 120px 120px 210px 130px';
   el.innerHTML=`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Payee</div><div>Amount</div><div>Category</div><div>Project</div><div>Approvals</div><div>Status</div></div>`+
     VOUCHERS.list.map(v=>{
       // Approvals come from the Workflow Engine now (workflow_stage_approvals,
@@ -5980,20 +5981,35 @@ async function loadVouchersPage(){
       // per-voucher voucher_approvals table.
       const approvals=v.workflow_approvals||[];
       const mine=approvals.find(a=>a.approver_user_id===A.user?.id);
-      const approvalSummary=approvals.length?approvals.map(a=>a.status==='approved'?'✓':(a.status==='rejected'?'✗':'…')).join(' '):'—';
+      const isAdmin=A.user?.role==='admin';
       const canRespond=mine&&mine.status==='pending';
-      const canForce=A.user?.role==='admin'&&v.status==='pending';
+      const canForce=isAdmin&&v.status==='pending';
+      // Per-approver rows: name + status. An admin can act on anyone else's
+      // still-pending approval via the same respondVoucher() call the
+      // approver themselves would use -- the backend records it as an
+      // admin override (responded_by_user_id) and this label reflects that.
+      const approvalsHTML=approvals.length?approvals.map(a=>{
+        const name=esc((a.users&&a.users.name)||(a.users&&a.users.email)||'Approver');
+        const onBehalf=a.responded_by_user_id&&a.responded_by_user_id!==a.approver_user_id;
+        const label=onBehalf?(a.status==='approved'?'Approved by ADMIN':'Rejected by ADMIN'):(a.status==='pending'?'Pending':(a.status==='approved'?'Approved':'Rejected'));
+        const title=onBehalf?`On behalf of ${name}`+((a.responder&&a.responder.name)?` — actioned by ${esc(a.responder.name)}`:''):name;
+        const canOverride=isAdmin&&a.status==='pending'&&a.approver_user_id!==A.user?.id;
+        return `<div style="font-size:11px;line-height:1.6" title="${title}">
+          ${name}: <span style="color:${WF_APPROVAL_STATUS_COLOR[a.status]||'#555'};font-weight:700">${label}</span>
+          ${canOverride?`<a href="#" onclick="event.preventDefault();respondVoucher('${a.id}','approve')" title="Approve on behalf of ${name} (logged as ADMIN)" style="color:var(--green);font-weight:700;text-decoration:none;margin-left:5px">✓</a><a href="#" onclick="event.preventDefault();respondVoucher('${a.id}','reject')" title="Reject on behalf of ${name} (logged as ADMIN)" style="color:#a33;font-weight:700;text-decoration:none;margin-left:3px">✗</a>`:''}
+        </div>`;
+      }).join(''):'<span style="color:var(--gray-500)">—</span>';
       return `<div class="prod-row" style="grid-template-columns:${cols}">
         <div data-label="Payee">${esc(v.payee)}</div>
         <div data-label="Amount">${esc(v.currency||'AED')} ${Number(v.amount||0).toLocaleString()}</div>
         <div data-label="Category" style="color:var(--gray-500);font-size:13px">${esc(v.category||'')}</div>
         <div data-label="Project" style="color:var(--gray-500);font-size:13px">${v.payment_type&&v.payment_type!=='project'?`<em>${v.payment_type==='general'?'General/Admin':'Other'}</em>`:esc((v.projects&&v.projects.name)||v.project_name_freeform||'')}</div>
-        <div data-label="Approvals" title="${approvals.length} approver(s)">${approvalSummary}</div>
+        <div data-label="Approvals">${approvalsHTML}</div>
         <div data-label="Status" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="color:${VOUCHER_STATUS_COLOR[v.status]||'inherit'};font-weight:600;text-transform:capitalize">${esc(v.status)}</span>
           ${canRespond?`<button class="btn btn-sm" style="background:var(--green);color:#fff" onclick="respondVoucher('${mine.id}','approve')">Approve</button><button class="btn btn-sm btn-red" onclick="respondVoucher('${mine.id}','reject')">Reject</button>`:''}
           ${canForce?`<button class="btn btn-sm" onclick="forceVoucher('${v.id}','approve')">Force approve</button>`:''}
-          ${A.user?.role==='admin'?`<button class="btn btn-sm btn-red" onclick="delVoucher('${v.id}')">×</button>`:''}
+          ${isAdmin?`<button class="btn btn-sm btn-red" onclick="delVoucher('${v.id}')">×</button>`:''}
         </div>
       </div>`;
     }).join('');

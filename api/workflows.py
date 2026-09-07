@@ -474,7 +474,11 @@ def get_workflow_instance(sb, company_id, doc_key, document_id):
         return None
     inst = inst[0]
     stages = _stages_for_definition(sb, inst['workflow_id'])
-    approvals = sb.table('workflow_stage_approvals').select('id,stage_id,approver_user_id,status,responded_at,users(name,email)').eq('instance_id', inst['id']).execute().data
+    approvals = sb.table('workflow_stage_approvals').select(
+        'id,stage_id,approver_user_id,status,responded_at,responded_by_user_id,'
+        'users!workflow_stage_approvals_approver_user_id_fkey(name,email),'
+        'responder:users!workflow_stage_approvals_responded_by_user_id_fkey(name,email)'
+    ).eq('instance_id', inst['id']).execute().data
     for s in stages:
         s['approvals'] = [a for a in approvals if a['stage_id'] == s['id']]
     inst['stages'] = stages
@@ -496,7 +500,11 @@ def get_workflow_instances_bulk(sb, company_id, doc_key, document_ids):
     if not instances:
         return {}
     instance_ids = [i['id'] for i in instances]
-    approvals = sb.table('workflow_stage_approvals').select('id,instance_id,stage_id,approver_user_id,status,responded_at,users(name,email)').in_('instance_id', instance_ids).execute().data
+    approvals = sb.table('workflow_stage_approvals').select(
+        'id,instance_id,stage_id,approver_user_id,status,responded_at,responded_by_user_id,'
+        'users!workflow_stage_approvals_approver_user_id_fkey(name,email),'
+        'responder:users!workflow_stage_approvals_responded_by_user_id_fkey(name,email)'
+    ).in_('instance_id', instance_ids).execute().data
     by_doc = {}
     for inst in instances:
         inst['approvals'] = [a for a in approvals if a['instance_id'] == inst['id']]
@@ -540,18 +548,25 @@ def _doc_key_for_instance(sb, instance):
     return dt[0]['doc_key'] if dt else None
 
 
-def _apply_stage_decision(sb, approval, decision):
+def _apply_stage_decision(sb, approval, decision, acted_by_user_id=None):
     """Shared by the magic-link route and the in-app respond route. Mirrors
     api/vouchers.py's old _apply_approval_decision: any rejection kills the
     instance; a stage only clears once its approvals satisfy the stage's
     approval_mode, at which point the instance auto-advances to the next
     stage (or completes if it was the last one). Whenever the instance
     resolves either way, syncs the outcome onto the source document's own
-    status column via DOCUMENT_STATUS_SYNC."""
+    status column via DOCUMENT_STATUS_SYNC.
+
+    `acted_by_user_id` is who actually clicked Approve/Reject. It's only
+    recorded (as responded_by_user_id) when it differs from the approval's
+    own approver_user_id -- i.e. an admin acting on someone else's behalf --
+    so the approval log can say "Approved by ADMIN" instead of silently
+    attributing the decision to the original approver."""
     new_status = 'approved' if decision == 'approve' else 'rejected'
-    sb.table('workflow_stage_approvals').update({
-        'status': new_status, 'responded_at': datetime.utcnow().isoformat(),
-    }).eq('id', approval['id']).execute()
+    patch = {'status': new_status, 'responded_at': datetime.utcnow().isoformat()}
+    if acted_by_user_id and acted_by_user_id != approval['approver_user_id']:
+        patch['responded_by_user_id'] = acted_by_user_id
+    sb.table('workflow_stage_approvals').update(patch).eq('id', approval['id']).execute()
 
     instance = sb.table('workflow_instances').select('*').eq('id', approval['instance_id']).execute().data[0]
     stage = sb.table('workflow_stages').select('*').eq('id', approval['stage_id']).execute().data[0]
@@ -578,14 +593,17 @@ def _apply_stage_decision(sb, approval, decision):
     return 'in_progress'
 
 
-def force_resolve_instance(sb, company_id, doc_key, document_id, decision):
+def force_resolve_instance(sb, company_id, doc_key, document_id, decision, acted_by_user_id=None):
     """Admin override -- e.g. api/vouchers.py's force-approve/reject.
     Resolves every pending approval on the document's current workflow
     instance at once and syncs the outcome, bypassing whichever approvers
     haven't responded yet. Returns {'error': ...} if no instance exists
     (e.g. the workflow wasn't configured yet when the document was
     submitted) so the caller can fall back to whatever it did before this
-    engine existed."""
+    engine existed. `acted_by_user_id` (the admin's id) is stamped onto
+    every pending approval it resolves as responded_by_user_id, same as
+    _apply_stage_decision's on-behalf-of tracking, so the log shows these
+    were force-resolved by an admin rather than answered by the approver."""
     dt = sb.table('workflow_document_types').select('id').eq('company_id', company_id).eq('doc_key', doc_key).execute().data
     if not dt:
         return {'error': 'Unknown document type'}
@@ -595,9 +613,10 @@ def force_resolve_instance(sb, company_id, doc_key, document_id, decision):
     inst = inst[0]
     new_status = 'approved' if decision == 'approve' else 'rejected'
     workflow_status = 'completed' if decision == 'approve' else 'rejected'
-    sb.table('workflow_stage_approvals').update({
-        'status': new_status, 'responded_at': datetime.utcnow().isoformat(),
-    }).eq('instance_id', inst['id']).eq('status', 'pending').execute()
+    patch = {'status': new_status, 'responded_at': datetime.utcnow().isoformat()}
+    if acted_by_user_id:
+        patch['responded_by_user_id'] = acted_by_user_id
+    sb.table('workflow_stage_approvals').update(patch).eq('instance_id', inst['id']).eq('status', 'pending').execute()
     sb.table('workflow_instances').update({
         'status': workflow_status, 'updated_at': datetime.utcnow().isoformat(),
     }).eq('id', inst['id']).execute()
@@ -630,18 +649,29 @@ def workflow_action(token, decision):
 # ── Approve / reject from inside the app ────────────────────────────────────
 @app.route('/api/workflows/approvals/<aid>/respond', methods=['POST'])
 def respond_approval(aid):
+    """Normally only the assigned approver can respond. An admin may also
+    respond on behalf of anyone else's pending approval within their own
+    company -- e.g. covering for someone who's out -- in which case the
+    decision is recorded with responded_by_user_id set to the admin, so the
+    approval log reads "Approved/Rejected by ADMIN" instead of silently
+    looking like the original approver answered it themselves."""
     sb = get_sb()
     decision = (request.json or {}).get('decision')
     if decision not in ('approve', 'reject'):
         return jsonify({'error': "decision must be 'approve' or 'reject'"}), 400
-    approval = sb.table('workflow_stage_approvals').select('*').eq('id', aid).eq('approver_user_id', g.claims['user_id']).execute().data
-    if not approval:
+    rows = sb.table('workflow_stage_approvals').select('*,workflow_instances!inner(company_id)').eq('id', aid).execute().data
+    if not rows:
+        return jsonify({'error': 'Not found'}), 404
+    approval = rows[0]
+    instance_company_id = approval.pop('workflow_instances')['company_id']
+    is_own = approval['approver_user_id'] == g.claims['user_id']
+    is_admin_override = (not is_own) and _is_admin() and instance_company_id == g.claims['company_id']
+    if not is_own and not is_admin_override:
         return jsonify({'error': 'You are not listed as an approver on this stage'}), 403
-    approval = approval[0]
     if approval['status'] != 'pending':
-        return jsonify({'error': f"You already marked this '{approval['status']}'"}), 400
-    result = _apply_stage_decision(sb, approval, decision)
-    return jsonify({'success': True, 'status': result})
+        return jsonify({'error': f"This was already marked '{approval['status']}'"}), 400
+    result = _apply_stage_decision(sb, approval, decision, acted_by_user_id=g.claims['user_id'] if is_admin_override else None)
+    return jsonify({'success': True, 'status': result, 'on_behalf': is_admin_override})
 
 
 @app.route('/api/workflows/instances/<iid>/advance', methods=['POST'])
