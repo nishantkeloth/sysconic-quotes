@@ -145,6 +145,90 @@ def _project_budget_snapshot(sb, claims, project_id, extra_amount=0, extra_curre
     }
 
 
+def _project_budget_snapshots_bulk(sb, claims, vouchers):
+    """Batched version of _project_budget_snapshot for the Vouchers list page.
+
+    The original per-voucher version did up to 6 queries *per pending
+    project-linked voucher* (project lookup, budget revision, 3 Zoho tables,
+    vouchers-in-progress) -- fine for a single submission, but with N pending
+    vouchers on screen that's N*6 sequential round trips, which is exactly
+    why the list was slow to load. This does the same computation with a
+    fixed handful of queries regardless of how many vouchers are in the
+    list: one per distinct project_id involved, not one per voucher.
+
+    Returns {voucher_id: snapshot_dict} for every pending, project-linked
+    voucher in `vouchers` whose project could be found."""
+    targets = [v for v in vouchers if v.get('payment_type', 'project') == 'project' and v.get('project_id') and v.get('status') == 'pending']
+    if not targets:
+        return {}
+    project_ids = list({v['project_id'] for v in targets})
+
+    projects = sb.table('projects').select('id,original_estimated_cost').in_('id', project_ids).execute().data or []
+    budget_by_project = {p['id']: (float(p['original_estimated_cost']) if p.get('original_estimated_cost') is not None else None) for p in projects}
+
+    # Latest revision per project -- rows come back ordered newest-first, so
+    # the first one seen per project_id wins; older ones for the same
+    # project are just skipped.
+    revisions = sb.table('project_budget_revisions').select('project_id,revised_budget,revision_number') \
+        .in_('project_id', project_ids).order('revision_number', desc=True).execute().data or []
+    seen_rev = set()
+    for r in revisions:
+        pid = r['project_id']
+        if pid in seen_rev:
+            continue
+        seen_rev.add(pid)
+        if r.get('revised_budget') is not None:
+            budget_by_project[pid] = float(r['revised_budget'])
+
+    has_zoho_data = bool((claims.get('features') or {}).get('project_performance'))
+    zoho_actual_by_project, zoho_committed_by_project = {}, {}
+    if has_zoho_data:
+        bills = sb.table('zoho_bills').select('project_id,total').in_('project_id', project_ids).execute().data or []
+        expenses = sb.table('zoho_expenses').select('project_id,amount').in_('project_id', project_ids).execute().data or []
+        for b in bills:
+            zoho_actual_by_project[b['project_id']] = zoho_actual_by_project.get(b['project_id'], 0.0) + float(b.get('total') or 0)
+        for e in expenses:
+            zoho_actual_by_project[e['project_id']] = zoho_actual_by_project.get(e['project_id'], 0.0) + float(e.get('amount') or 0)
+        pos = sb.table('zoho_purchase_orders').select('project_id,total,billed_total,status').in_('project_id', project_ids).execute().data or []
+        for po in pos:
+            if (po.get('status') or '').lower() in ('cancelled', 'void', 'deleted'):
+                continue
+            pid = po['project_id']
+            zoho_committed_by_project[pid] = zoho_committed_by_project.get(pid, 0.0) + max(0.0, float(po.get('total') or 0) - float(po.get('billed_total') or 0))
+
+    all_vouchers = sb.table('vouchers').select('id,project_id,amount,currency') \
+        .in_('project_id', project_ids).in_('status', ['pending', 'approved']).execute().data or []
+    voucher_sum_by_project = {}
+    for vc in all_vouchers:
+        if (vc.get('currency') or 'AED') != 'AED':
+            continue
+        pid = vc['project_id']
+        voucher_sum_by_project[pid] = voucher_sum_by_project.get(pid, 0.0) + float(vc.get('amount') or 0)
+
+    out = {}
+    for v in targets:
+        pid = v['project_id']
+        budget = budget_by_project.get(pid)
+        zoho_actual = zoho_actual_by_project.get(pid, 0.0)
+        zoho_committed = zoho_committed_by_project.get(pid, 0.0)
+        currency_mismatch = (v.get('currency') or 'AED') != 'AED'
+        this_amount = float(v.get('amount') or 0)
+        # voucher_sum_by_project includes this voucher's own row -- back it
+        # out so "committed by others" doesn't double-count it.
+        voucher_committed = voucher_sum_by_project.get(pid, 0.0) - (this_amount if not currency_mismatch else 0.0)
+        total_committed = zoho_actual + zoho_committed + voucher_committed
+        remaining_before = (budget - total_committed) if budget is not None else None
+        remaining_after = (remaining_before - this_amount) if (remaining_before is not None and not currency_mismatch) else None
+        out[v['id']] = {
+            'budget': budget, 'zoho_actual': zoho_actual, 'zoho_committed': zoho_committed,
+            'voucher_committed': voucher_committed, 'total_committed': total_committed,
+            'remaining_before': remaining_before, 'remaining_after': remaining_after,
+            'over_budget': bool(remaining_after is not None and remaining_after < 0),
+            'currency_mismatch': currency_mismatch, 'has_zoho_data': has_zoho_data,
+        }
+    return out
+
+
 def clean_voucher(d):
     out = {}
     for k in ('payee', 'currency', 'payment_method', 'category', 'invoice_no', 'remarks', 'project_id', 'project_name_freeform', 'payment_type'):
@@ -191,18 +275,12 @@ def list_vouchers():
     # (doc_key='vouchers', document_id=voucher.id) -- fetch all of them in
     # one batch rather than one query per voucher.
     instances = get_workflow_instances_bulk(sb, claims['company_id'], 'vouchers', [v['id'] for v in vouchers])
+    budget_snapshots = _project_budget_snapshots_bulk(sb, claims, vouchers)
     for v in vouchers:
         inst = instances.get(v['id'])
         v['workflow_approvals'] = inst['approvals'] if inst else []
-        # Budget context only for vouchers still awaiting a decision -- once
-        # resolved it's history, and computing it costs a handful of extra
-        # queries per voucher, so it's not worth doing for the whole list.
-        if v.get('payment_type', 'project') == 'project' and v.get('project_id') and v.get('status') == 'pending':
-            v['budget_snapshot'] = _project_budget_snapshot(
-                sb, claims, v['project_id'],
-                extra_amount=v.get('amount') or 0, extra_currency=v.get('currency') or 'AED',
-                exclude_voucher_id=v['id'],
-            )
+        if v['id'] in budget_snapshots:
+            v['budget_snapshot'] = budget_snapshots[v['id']]
     return jsonify({'vouchers': vouchers})
 
 
