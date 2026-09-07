@@ -5974,7 +5974,11 @@ async function loadVouchersPage(){
   if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
   VOUCHERS.list=r.vouchers||[];
   if(!VOUCHERS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No vouchers yet. Click + New Voucher to submit one for approval.</div>`;return;}
-  const cols='1.2fr 100px 110px 130px 210px 90px 150px';
+  // Two flexible columns (Payee, Project) share any leftover width on wide
+  // screens instead of dumping it all into one column -- a single 1fr
+  // column (the earlier version) left a huge blank gap after Payee on wide
+  // monitors, with everything else squeezed into a cluster on the right.
+  const cols='1fr 100px 120px 1fr 240px 90px 150px';
   // Uniform 26x26 icon buttons for row actions -- same footprint regardless
   // of glyph, so up to 5 of them (approve/reject, force-approve/force-
   // reject, delete) sit in one tidy row instead of wrapping. Color signals
@@ -6020,7 +6024,7 @@ async function loadVouchersPage(){
         return `<div style="font-size:10.5px;margin-bottom:4px;padding:3px 6px;border-radius:4px;background:${over?'#fee2e2':'#f3f4f6'};color:${over?'#991b1b':'var(--gray-600)'};font-weight:${over?700:400}" title="${esc(tip)}">${over?'⚠ Over budget — ':'Remaining after: '}${remainTxt}</div>`;
       })():'';
       return `<div class="prod-row" style="grid-template-columns:${cols}">
-        <div data-label="Payee">${esc(v.payee)}</div>
+        <div data-label="Payee" style="cursor:pointer;color:var(--navy);font-weight:600" title="View full voucher details" onclick="showVoucherDetailModal('${v.id}')">${esc(v.payee)}</div>
         <div data-label="Amount">${esc(v.currency||'AED')} ${Number(v.amount||0).toLocaleString()}</div>
         <div data-label="Category" style="color:var(--gray-500);font-size:13px">${esc(v.category||'')}</div>
         <div data-label="Project" style="color:var(--gray-500);font-size:13px">${v.payment_type&&v.payment_type!=='project'?`<em>${v.payment_type==='general'?'General/Admin':'Other'}</em>`:esc((v.projects&&v.projects.name)||v.project_name_freeform||'')}</div>
@@ -6033,6 +6037,74 @@ async function loadVouchersPage(){
         </div>
       </div>`;
     }).join('');
+}
+function showVoucherDetailModal(id){
+  // The list view only has room for a handful of columns -- this shows
+  // every field actually captured on the New Voucher form (invoice number,
+  // due date, payment method, remarks, submitter, full approval history)
+  // using data already loaded in VOUCHERS.list, so no extra API call.
+  const v=VOUCHERS.list.find(x=>x.id===id);
+  if(!v)return;
+  const approvals=v.workflow_approvals||[];
+  const approvalsHTML=approvals.length?approvals.map(a=>{
+    const name=esc((a.users&&a.users.name)||(a.users&&a.users.email)||'Approver');
+    const onBehalf=a.responded_by_user_id&&a.responded_by_user_id!==a.approver_user_id;
+    const label=onBehalf?(a.status==='approved'?'Approved by ADMIN':'Rejected by ADMIN'):(a.status==='pending'?'Pending':(a.status==='approved'?'Approved':'Rejected'));
+    return `<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid var(--gray-100)"><span>${name}</span><span style="color:${WF_APPROVAL_STATUS_COLOR[a.status]||'#555'};font-weight:700">${label}</span></div>`;
+  }).join(''):'<div style="color:var(--gray-500);font-size:13px">No workflow configured for this voucher yet</div>';
+  const paymentTypeLabel=v.payment_type==='general'?'General / Admin Payment':(v.payment_type==='other'?'Other':'Project Payment');
+  const projectLabel=v.payment_type&&v.payment_type!=='project'?'—':esc((v.projects&&v.projects.name)||v.project_name_freeform||'— No specific project —');
+  const submittedDate=v.submitted_at?new Date(v.submitted_at).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):'—';
+  const dueDate=v.due_date?new Date(v.due_date).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):'—';
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="vchDetailOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('vchDetailOverlay').remove()">
+    <div style="max-width:640px;width:100%">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="font-size:19px;font-weight:700;color:var(--gray-900)">Voucher Details</div>
+        <span style="cursor:pointer;color:var(--gray-500);font-size:22px;line-height:1;padding:4px" onclick="document.getElementById('vchDetailOverlay').remove()">×</span>
+      </div>
+      <div class="vch-card">
+        <div class="vch-sec-label">Payment Type</div>
+        <div class="vch-sec-line"></div>
+        <div style="font-size:14px;color:var(--gray-900);margin-bottom:4px">${esc(paymentTypeLabel)}</div>
+
+        <div class="vch-sec-label">Payee Information</div>
+        <div class="vch-sec-line"></div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Payee Name</label><input value="${esc(v.payee||'')}" disabled></div>
+          <div class="vch-fld"><label>Amount</label><input value="${esc(v.currency||'AED')} ${Number(v.amount||0).toLocaleString()}" disabled></div>
+        </div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Currency</label><input value="${esc(v.currency||'AED')}" disabled></div>
+          <div class="vch-fld"><label>Payment Method</label><input value="${esc(v.payment_method||'—')}" disabled></div>
+        </div>
+
+        <div class="vch-sec-label">Invoice Details</div>
+        <div class="vch-sec-line"></div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Invoice Number</label><input value="${esc(v.invoice_no||'—')}" disabled></div>
+          <div class="vch-fld"><label>Payment Due Date</label><input value="${dueDate}" disabled></div>
+        </div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Category</label><input value="${esc(v.category||'—')}" disabled></div>
+          <div class="vch-fld"><label>Project</label><input value="${projectLabel}" disabled></div>
+        </div>
+
+        <div class="vch-sec-label">Submission Details</div>
+        <div class="vch-sec-line"></div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Submitted By</label><input value="${esc((v.submitter&&v.submitter.name)||'—')}" disabled></div>
+          <div class="vch-fld"><label>Submission Date</label><input value="${submittedDate}" disabled></div>
+        </div>
+        <div class="vch-fld" style="margin-bottom:20px"><label>Description / Remarks</label><textarea rows="2" disabled>${esc(v.remarks||'')}</textarea></div>
+
+        <div class="vch-sec-label">Approvals</div>
+        <div class="vch-sec-line"></div>
+        ${approvalsHTML}
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:16px">
+        <button class="btn" onclick="document.getElementById('vchDetailOverlay').remove()">Close</button>
+      </div>
+    </div></div>`);
 }
 async function respondVoucher(approvalId,decision){
   if(!confirm(decision==='approve'?'Approve this voucher?':'Reject this voucher?'))return;

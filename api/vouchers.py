@@ -266,7 +266,9 @@ def list_vouchers():
     if not claims:
         return jsonify({'error': 'Unauthorized'}), 401
     status = request.args.get('status')
-    q = sb.table('vouchers').select('*,projects(name)').eq('company_id', claims['company_id'])
+    # submitter:users(name) resolves submitted_by to a display name -- the
+    # only FK from vouchers to users, so no relationship hint is needed.
+    q = sb.table('vouchers').select('*,projects(name),submitter:users(name)').eq('company_id', claims['company_id'])
     if status:
         q = q.eq('status', status)
     vouchers = q.order('created_at', desc=True).execute().data
