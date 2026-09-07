@@ -5999,12 +5999,24 @@ async function loadVouchersPage(){
           ${canOverride?`<a href="#" onclick="event.preventDefault();respondVoucher('${a.id}','approve')" title="Approve on behalf of ${name} (logged as ADMIN)" style="color:var(--green);font-weight:700;text-decoration:none;margin-left:5px">✓</a><a href="#" onclick="event.preventDefault();respondVoucher('${a.id}','reject')" title="Reject on behalf of ${name} (logged as ADMIN)" style="color:#a33;font-weight:700;text-decoration:none;margin-left:3px">✗</a>`:''}
         </div>`;
       }).join(''):'<span style="color:var(--gray-500)">—</span>';
+      // Budget context (only present for pending, project-linked vouchers --
+      // see api/vouchers.py's list_vouchers()) shown right next to the
+      // approve/reject controls, so whoever's about to approve sees it
+      // before they click.
+      const bs=v.budget_snapshot;
+      const budgetHTML=(bs&&bs.budget!=null)?(()=>{
+        const over=bs.over_budget;
+        const remain=bs.currency_mismatch?bs.remaining_before:bs.remaining_after;
+        const remainTxt=remain==null?'n/a':('AED '+Number(remain).toLocaleString(undefined,{maximumFractionDigits:0}));
+        const tip=`Project budget: AED ${Number(bs.budget).toLocaleString()} · Already committed: AED ${Number(bs.total_committed).toLocaleString()}${bs.has_zoho_data?' (incl. Zoho actuals/POs)':' (approved+pending vouchers)'}${bs.currency_mismatch?' · this voucher\'s currency differs, not netted in':''}`;
+        return `<div style="font-size:10.5px;margin-bottom:4px;padding:3px 6px;border-radius:4px;background:${over?'#fee2e2':'#f3f4f6'};color:${over?'#991b1b':'var(--gray-600)'};font-weight:${over?700:400}" title="${esc(tip)}">${over?'⚠ Over budget — ':'Remaining after: '}${remainTxt}</div>`;
+      })():'';
       return `<div class="prod-row" style="grid-template-columns:${cols}">
         <div data-label="Payee">${esc(v.payee)}</div>
         <div data-label="Amount">${esc(v.currency||'AED')} ${Number(v.amount||0).toLocaleString()}</div>
         <div data-label="Category" style="color:var(--gray-500);font-size:13px">${esc(v.category||'')}</div>
         <div data-label="Project" style="color:var(--gray-500);font-size:13px">${v.payment_type&&v.payment_type!=='project'?`<em>${v.payment_type==='general'?'General/Admin':'Other'}</em>`:esc((v.projects&&v.projects.name)||v.project_name_freeform||'')}</div>
-        <div data-label="Approvals">${approvalsHTML}</div>
+        <div data-label="Approvals">${budgetHTML}${approvalsHTML}</div>
         <div data-label="Status" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="color:${VOUCHER_STATUS_COLOR[v.status]||'inherit'};font-weight:600;text-transform:capitalize">${esc(v.status)}</span>
           ${canRespond?`<button class="btn btn-sm" style="background:var(--green);color:#fff" onclick="respondVoucher('${mine.id}','approve')">Approve</button><button class="btn btn-sm btn-red" onclick="respondVoucher('${mine.id}','reject')">Reject</button>`:''}

@@ -83,6 +83,68 @@ def _rbac_page_gate():
 PAYMENT_TYPES = {'project', 'general', 'other'}
 
 
+def _project_budget_snapshot(sb, claims, project_id, extra_amount=0, extra_currency='AED', exclude_voucher_id=None):
+    """Rough "how much of this project's budget is left" snapshot -- used to
+    warn (never block) at submission time and to give approvers context
+    before they click Approve. Never raises; returns None if the project
+    can't be found.
+
+    Budget = latest project_budget_revisions.revised_budget, falling back to
+    projects.original_estimated_cost -- same precedence api/projects.py's
+    pp_add_budget_revision() uses. "Committed" = Zoho actual/committed costs
+    (same tables/filters as api/project_performance.py's
+    recalculate_project(), read-only here so this has no side effects) when
+    the project_performance feature is enabled, plus this project's own
+    pending+approved vouchers (excluding exclude_voucher_id, so the voucher
+    being evaluated isn't counted twice against extra_amount).
+
+    Project financials have no currency column and are AED-only in practice;
+    a voucher in another currency can't be netted in without an FX rate, so
+    extra_amount is only subtracted when extra_currency == 'AED' --
+    currency_mismatch flags the other case so callers can say so instead of
+    silently showing a wrong number."""
+    proj = sb.table('projects').select('id,original_estimated_cost').eq('id', project_id).execute().data
+    if not proj:
+        return None
+    budget = proj[0].get('original_estimated_cost')
+    rev = sb.table('project_budget_revisions').select('revised_budget') \
+        .eq('project_id', project_id).order('revision_number', desc=True).limit(1).execute().data
+    if rev:
+        budget = rev[0].get('revised_budget')
+    budget = float(budget) if budget is not None else None
+
+    zoho_actual = zoho_committed = 0.0
+    has_zoho_data = bool((claims.get('features') or {}).get('project_performance'))
+    if has_zoho_data:
+        bills = sb.table('zoho_bills').select('total').eq('project_id', project_id).execute().data or []
+        expenses = sb.table('zoho_expenses').select('amount').eq('project_id', project_id).execute().data or []
+        zoho_actual = sum(float(b.get('total') or 0) for b in bills) + sum(float(e.get('amount') or 0) for e in expenses)
+        pos = sb.table('zoho_purchase_orders').select('total,billed_total,status').eq('project_id', project_id).execute().data or []
+        zoho_committed = sum(
+            max(0.0, float(po.get('total') or 0) - float(po.get('billed_total') or 0))
+            for po in pos if (po.get('status') or '').lower() not in ('cancelled', 'void', 'deleted')
+        )
+
+    vq = sb.table('vouchers').select('id,amount,currency').eq('project_id', project_id).in_('status', ['pending', 'approved'])
+    if exclude_voucher_id:
+        vq = vq.neq('id', exclude_voucher_id)
+    vouchers = vq.execute().data or []
+    voucher_committed = sum(float(v.get('amount') or 0) for v in vouchers if (v.get('currency') or 'AED') == 'AED')
+
+    total_committed = zoho_actual + zoho_committed + voucher_committed
+    remaining_before = (budget - total_committed) if budget is not None else None
+    currency_mismatch = extra_currency != 'AED'
+    remaining_after = (remaining_before - extra_amount) if (remaining_before is not None and not currency_mismatch) else None
+
+    return {
+        'budget': budget, 'zoho_actual': zoho_actual, 'zoho_committed': zoho_committed,
+        'voucher_committed': voucher_committed, 'total_committed': total_committed,
+        'remaining_before': remaining_before, 'remaining_after': remaining_after,
+        'over_budget': bool(remaining_after is not None and remaining_after < 0),
+        'currency_mismatch': currency_mismatch, 'has_zoho_data': has_zoho_data,
+    }
+
+
 def clean_voucher(d):
     out = {}
     for k in ('payee', 'currency', 'payment_method', 'category', 'invoice_no', 'remarks', 'project_id', 'project_name_freeform', 'payment_type'):
@@ -132,6 +194,15 @@ def list_vouchers():
     for v in vouchers:
         inst = instances.get(v['id'])
         v['workflow_approvals'] = inst['approvals'] if inst else []
+        # Budget context only for vouchers still awaiting a decision -- once
+        # resolved it's history, and computing it costs a handful of extra
+        # queries per voucher, so it's not worth doing for the whole list.
+        if v.get('payment_type', 'project') == 'project' and v.get('project_id') and v.get('status') == 'pending':
+            v['budget_snapshot'] = _project_budget_snapshot(
+                sb, claims, v['project_id'],
+                extra_amount=v.get('amount') or 0, extra_currency=v.get('currency') or 'AED',
+                exclude_voucher_id=v['id'],
+            )
     return jsonify({'vouchers': vouchers})
 
 
@@ -162,15 +233,36 @@ def create_voucher():
         'Category': voucher.get('category', ''),
         'Project': project_name,
     }
+
+    # Budget check -- warns, never blocks. Only meaningful for project-linked
+    # vouchers where the project actually has a budget set.
+    budget_info = None
+    if voucher.get('payment_type', 'project') == 'project' and voucher.get('project_id'):
+        budget_info = _project_budget_snapshot(
+            sb, claims, voucher['project_id'],
+            extra_amount=voucher.get('amount') or 0, extra_currency=voucher.get('currency') or 'AED',
+            exclude_voucher_id=voucher['id'],
+        )
+    if budget_info and budget_info['budget'] is not None:
+        meta['Project Budget'] = f"AED {budget_info['budget']:,.2f}"
+        meta['Already Committed'] = f"AED {budget_info['total_committed']:,.2f}" + (' (incl. Zoho actuals/POs)' if budget_info['has_zoho_data'] else ' (approved + pending vouchers)')
+        if budget_info['currency_mismatch']:
+            meta['Remaining (before this voucher)'] = f"AED {budget_info['remaining_before']:,.2f} — voucher currency differs, not netted in"
+        else:
+            flag = ' — OVER BUDGET' if budget_info['over_budget'] else ''
+            meta['Remaining After This Voucher'] = f"AED {budget_info['remaining_after']:,.2f}{flag}"
+
     result = start_workflow_instance(sb, claims['company_id'], 'vouchers', voucher['id'], meta)
-    warning = None
+    warnings = []
     if 'error' in result:
         # Workflow not configured yet -- the voucher is still submitted (so
         # nothing is lost), but nobody got emailed, so flag that clearly
         # instead of silently leaving it stuck in 'pending' forever.
-        warning = f"Submitted, but no approval workflow is set up for Payment Vouchers yet ({result['error']}). Ask an admin to configure it in Settings → Workflow Settings."
+        warnings.append(f"Submitted, but no approval workflow is set up for Payment Vouchers yet ({result['error']}). Ask an admin to configure it in Settings → Workflow Settings.")
+    if budget_info and budget_info['over_budget']:
+        warnings.append(f"Heads up: this voucher would leave the project AED {abs(budget_info['remaining_after']):,.2f} over its remaining budget. It's still been submitted -- approvers will see this flagged.")
 
-    return jsonify({'voucher': voucher, 'warning': warning}), 201
+    return jsonify({'voucher': voucher, 'warning': ' '.join(warnings) if warnings else None}), 201
 
 
 # ── Admin force-override (bypasses whichever approvers haven't responded) ───
