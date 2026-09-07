@@ -5953,6 +5953,7 @@ function importCustomers(event){
 let VOUCHERS={list:[],statusFilter:''};
 const VOUCHER_STATUS_COLOR={pending:'var(--amber, #b8860b)',approved:'var(--green)',rejected:'var(--red, #a33)'};
 const WF_APPROVAL_STATUS_COLOR={pending:'#92400e',approved:'#065f46',rejected:'#991b1b'};
+const VOUCHER_SBADGE={pending:{bg:'#fef3c7',c:'#92400e'},approved:{bg:'#d1fae5',c:'#065f46'},rejected:{bg:'#fee2e2',c:'#991b1b'}};
 function vouchersHTML(){return`<div class="card">
   <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
     <select id="vchStatusFilter" onchange="VOUCHERS.statusFilter=this.value;loadVouchersPage()" style="padding:10px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit">
@@ -5973,8 +5974,20 @@ async function loadVouchersPage(){
   if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
   VOUCHERS.list=r.vouchers||[];
   if(!VOUCHERS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No vouchers yet. Click + New Voucher to submit one for approval.</div>`;return;}
-  const cols='1fr 110px 120px 120px 210px 130px';
-  el.innerHTML=`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Payee</div><div>Amount</div><div>Category</div><div>Project</div><div>Approvals</div><div>Status</div></div>`+
+  // All fixed widths -- flexible (fr) columns here grabbed way more space
+  // than their actual content (short payee/project names) ever needed on a
+  // wide screen, which shoved every column after them apart with big blank
+  // gaps. Fixed widths keep the whole table packed together on the left;
+  // any leftover width on a very wide screen just trails after Actions.
+  const cols='240px 100px 120px 170px 240px 90px 150px';
+  // Uniform 26x26 icon buttons for row actions -- same footprint regardless
+  // of glyph, so up to 5 of them (approve/reject, force-approve/force-
+  // reject, delete) sit in one tidy row instead of wrapping. Color signals
+  // the category: green/red = the approver's own decision, amber = an
+  // admin force-override (bypasses whichever approvers haven't responded),
+  // red = delete.
+  const vIconBtn=(glyph,title,onclick,bg,fg)=>`<button title="${title}" onclick="${onclick}" style="width:26px;height:26px;flex:0 0 auto;border:none;border-radius:6px;background:${bg};color:${fg};font-size:13px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0">${glyph}</button>`;
+  el.innerHTML=`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Payee</div><div>Amount</div><div>Category</div><div>Project</div><div>Approvals</div><div>Status</div><div>Actions</div></div>`+
     VOUCHERS.list.map(v=>{
       // Approvals come from the Workflow Engine now (workflow_stage_approvals,
       // via api/vouchers.py's get_workflow_instances_bulk) instead of the old
@@ -6012,19 +6025,96 @@ async function loadVouchersPage(){
         return `<div style="font-size:10.5px;margin-bottom:4px;padding:3px 6px;border-radius:4px;background:${over?'#fee2e2':'#f3f4f6'};color:${over?'#991b1b':'var(--gray-600)'};font-weight:${over?700:400}" title="${esc(tip)}">${over?'⚠ Over budget — ':'Remaining after: '}${remainTxt}</div>`;
       })():'';
       return `<div class="prod-row" style="grid-template-columns:${cols}">
-        <div data-label="Payee">${esc(v.payee)}</div>
+        <div data-label="Payee" style="cursor:pointer;color:var(--navy);font-weight:600" title="View full voucher details" onclick="showVoucherDetailModal('${v.id}')">${esc(v.payee)}</div>
         <div data-label="Amount">${esc(v.currency||'AED')} ${Number(v.amount||0).toLocaleString()}</div>
         <div data-label="Category" style="color:var(--gray-500);font-size:13px">${esc(v.category||'')}</div>
         <div data-label="Project" style="color:var(--gray-500);font-size:13px">${v.payment_type&&v.payment_type!=='project'?`<em>${v.payment_type==='general'?'General/Admin':'Other'}</em>`:esc((v.projects&&v.projects.name)||v.project_name_freeform||'')}</div>
         <div data-label="Approvals">${budgetHTML}${approvalsHTML}</div>
-        <div data-label="Status" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <span style="color:${VOUCHER_STATUS_COLOR[v.status]||'inherit'};font-weight:600;text-transform:capitalize">${esc(v.status)}</span>
-          ${canRespond?`<button class="btn btn-sm" style="background:var(--green);color:#fff" onclick="respondVoucher('${mine.id}','approve')">Approve</button><button class="btn btn-sm btn-red" onclick="respondVoucher('${mine.id}','reject')">Reject</button>`:''}
-          ${canForce?`<button class="btn btn-sm" onclick="forceVoucher('${v.id}','approve')">Force approve</button>`:''}
-          ${isAdmin?`<button class="btn btn-sm btn-red" onclick="delVoucher('${v.id}')">×</button>`:''}
+        <div data-label="Status"><span style="background:${(VOUCHER_SBADGE[v.status]||{}).bg||'#eee'};color:${(VOUCHER_SBADGE[v.status]||{}).c||'#555'};font-weight:700;padding:3px 10px;border-radius:10px;font-size:12px;text-transform:capitalize;white-space:nowrap">${esc(v.status)}</span></div>
+        <div data-label="Actions" style="display:flex;align-items:center;gap:4px;flex-wrap:nowrap">
+          ${canRespond?vIconBtn('✓','Approve',`respondVoucher('${mine.id}','approve')`,'#d1fae5','#065f46')+vIconBtn('✗','Reject',`respondVoucher('${mine.id}','reject')`,'#fee2e2','#991b1b'):''}
+          ${canForce?vIconBtn('✓','Force approve — bypasses remaining approvers',`forceVoucher('${v.id}','approve')`,'#fef3c7','#92400e')+vIconBtn('✗','Force reject — bypasses remaining approvers',`forceVoucher('${v.id}','reject')`,'#fef3c7','#92400e'):''}
+          ${isAdmin?vIconBtn('🗑','Delete voucher',`delVoucher('${v.id}')`,'#fee2e2','#991b1b'):''}
         </div>
       </div>`;
     }).join('');
+}
+function showVoucherDetailModal(id){
+  // The list view only has room for a handful of columns -- this shows
+  // every field actually captured on the New Voucher form (invoice number,
+  // due date, payment method, remarks, submitter, full approval history)
+  // using data already loaded in VOUCHERS.list, so no extra API call.
+  const v=VOUCHERS.list.find(x=>x.id===id);
+  if(!v)return;
+  const approvals=v.workflow_approvals||[];
+  const approvalsHTML=approvals.length?approvals.map(a=>{
+    const name=esc((a.users&&a.users.name)||(a.users&&a.users.email)||'Approver');
+    const onBehalf=a.responded_by_user_id&&a.responded_by_user_id!==a.approver_user_id;
+    const label=onBehalf?(a.status==='approved'?'Approved by ADMIN':'Rejected by ADMIN'):(a.status==='pending'?'Pending':(a.status==='approved'?'Approved':'Rejected'));
+    return `<div style="display:flex;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid var(--gray-100)"><span>${name}</span><span style="color:${WF_APPROVAL_STATUS_COLOR[a.status]||'#555'};font-weight:700">${label}</span></div>`;
+  }).join(''):'<div style="color:var(--gray-500);font-size:13px">No workflow configured for this voucher yet</div>';
+  const paymentTypeLabel=v.payment_type==='general'?'General / Admin Payment':(v.payment_type==='other'?'Other':'Project Payment');
+  const projectLabel=v.payment_type&&v.payment_type!=='project'?'—':esc((v.projects&&v.projects.name)||v.project_name_freeform||'— No specific project —');
+  const submittedDate=v.submitted_at?new Date(v.submitted_at).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):'—';
+  const dueDate=v.due_date?new Date(v.due_date).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):'—';
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="vchDetailOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('vchDetailOverlay').remove()">
+    <div style="max-width:640px;width:100%;max-height:90vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="font-size:19px;font-weight:700;color:var(--gray-900)">Voucher Details</div>
+        <span style="cursor:pointer;color:var(--gray-500);font-size:22px;line-height:1;padding:4px" onclick="document.getElementById('vchDetailOverlay').remove()">×</span>
+      </div>
+      <div class="vch-card">
+        <div class="vch-sec-label">Payment Type</div>
+        <div class="vch-sec-line"></div>
+        <div style="font-size:14px;color:var(--gray-900);margin-bottom:4px">${esc(paymentTypeLabel)}</div>
+
+        <div class="vch-sec-label">Payee Information</div>
+        <div class="vch-sec-line"></div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Payee Name</label><input value="${esc(v.payee||'')}" disabled></div>
+          <div class="vch-fld"><label>Amount</label><input value="${esc(v.currency||'AED')} ${Number(v.amount||0).toLocaleString()}" disabled></div>
+        </div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Currency</label><input value="${esc(v.currency||'AED')}" disabled></div>
+          <div class="vch-fld"><label>Payment Method</label><input value="${esc(v.payment_method||'—')}" disabled></div>
+        </div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Bank Name</label><input value="${esc(v.bank_name||'—')}" disabled></div>
+          <div class="vch-fld"><label>Account Number / IBAN</label><input value="${esc(v.bank_account||'—')}" disabled></div>
+        </div>
+
+        <div class="vch-sec-label">Invoice Details</div>
+        <div class="vch-sec-line"></div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Invoice Number</label><input value="${esc(v.invoice_no||'—')}" disabled></div>
+          <div class="vch-fld"><label>Payment Due Date</label><input value="${dueDate}" disabled></div>
+        </div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Category</label><input value="${esc(v.category||'—')}" disabled></div>
+          <div class="vch-fld"><label>Project</label><input value="${projectLabel}" disabled></div>
+        </div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Cost Center / Department</label><input value="${esc(v.cost_center||'—')}" disabled></div>
+          <div class="vch-fld"><label>VAT Amount</label><input value="${v.vat_amount!=null?esc(v.currency||'AED')+' '+Number(v.vat_amount).toLocaleString():'—'}" disabled></div>
+        </div>
+        <div class="vch-fld"><label>Receipt / Invoice Attachment</label>${v.receipt_url?`<div><a href="${esc(v.receipt_url)}" target="_blank" rel="noopener" class="btn btn-sm" style="text-decoration:none;display:inline-flex">📎 View attached file</a></div>`:`<div style="font-size:13px;color:var(--gray-500);padding:8px 0">No file attached</div>`}</div>
+
+        <div class="vch-sec-label">Submission Details</div>
+        <div class="vch-sec-line"></div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Submitted By</label><input value="${esc((v.submitter&&v.submitter.name)||'—')}" disabled></div>
+          <div class="vch-fld"><label>Submission Date</label><input value="${submittedDate}" disabled></div>
+        </div>
+        <div class="vch-fld" style="margin-bottom:20px"><label>Description / Remarks</label><textarea rows="2" disabled>${esc(v.remarks||'')}</textarea></div>
+
+        <div class="vch-sec-label">Approvals</div>
+        <div class="vch-sec-line"></div>
+        ${approvalsHTML}
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:16px">
+        <button class="btn" onclick="document.getElementById('vchDetailOverlay').remove()">Close</button>
+      </div>
+    </div></div>`);
 }
 async function respondVoucher(approvalId,decision){
   if(!confirm(decision==='approve'?'Approve this voucher?':'Reject this voucher?'))return;
@@ -6049,7 +6139,7 @@ async function showVoucherModal(){
   const projR=await api('GET','/api/projects');
   const projects=projR.projects||[];
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="vchModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('vchModalOverlay').remove()">
-    <div style="max-width:640px;width:100%">
+    <div style="max-width:640px;width:100%;max-height:90vh;overflow-y:auto">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
         <div style="font-size:19px;font-weight:700;color:var(--gray-900)">Submit Payment Voucher</div>
         <span style="cursor:pointer;color:var(--gray-500);font-size:22px;line-height:1;padding:4px" onclick="document.getElementById('vchModalOverlay').remove()">×</span>
@@ -6077,6 +6167,10 @@ async function showVoucherModal(){
           </select></div>
           <div class="vch-fld"><label>Payment Method</label><select id="vfMethod"><option>Bank Transfer</option><option>Cheque</option><option>Cash</option><option>Online Payment</option></select></div>
         </div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Bank Name</label><input id="vfBankName" placeholder="e.g. Emirates NBD"></div>
+          <div class="vch-fld"><label>Account Number / IBAN</label><input id="vfBankAccount" placeholder="AE07 0000 0000 0000 0000 000"></div>
+        </div>
 
         <div class="vch-sec-label">Invoice Details</div>
         <div class="vch-sec-line"></div>
@@ -6090,6 +6184,13 @@ async function showVoucherModal(){
             <option value="">— No specific project —</option>
             ${projects.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
           </select></div>
+        </div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Cost Center / Department</label><input id="vfCostCenter" placeholder="e.g. Operations"></div>
+          <div class="vch-fld"><label>VAT Amount</label><input id="vfVat" type="number" step="0.01" placeholder="0.00"></div>
+        </div>
+        <div class="vch-fld"><label>Receipt / Invoice Attachment</label><input id="vfReceipt" type="file" accept="image/*,.pdf">
+          <div style="font-size:11px;color:var(--gray-500);margin-top:4px">JPG, PNG or PDF, up to 4 MB. Optional — can be added later too.</div>
         </div>
 
         <div class="vch-sec-label">Submission Details</div>
@@ -6125,7 +6226,7 @@ function toggleVoucherPayType(){
   }
 }
 function clearVoucherModal(){
-  ['vfPayee','vfAmount','vfInvoice','vfDueDate','vfProject','vfRemarks'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  ['vfPayee','vfAmount','vfInvoice','vfDueDate','vfProject','vfRemarks','vfBankName','vfBankAccount','vfCostCenter','vfVat','vfReceipt'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   ['vfCurrency','vfMethod','vfCategory'].forEach(id=>{const el=document.getElementById(id);if(el)el.selectedIndex=0;});
   const firstRadio=document.querySelector('input[name="vfPayType"][value="project"]');if(firstRadio)firstRadio.checked=true;
   toggleVoucherPayType();
@@ -6143,11 +6244,39 @@ async function saveVoucherModal(){
     invoice_no:document.getElementById('vfInvoice').value,
     due_date:document.getElementById('vfDueDate').value,
     remarks:document.getElementById('vfRemarks').value,
+    bank_name:document.getElementById('vfBankName').value,
+    bank_account:document.getElementById('vfBankAccount').value,
+    cost_center:document.getElementById('vfCostCenter').value,
+    vat_amount:document.getElementById('vfVat').value,
   };
   const r=await api('POST','/api/vouchers',body);
   if(r.error){const e=document.getElementById('vchModalErr');e.textContent=r.error;e.style.display='block';return;}
+
+  // Receipt upload is a separate follow-up call (same base64-FileReader
+  // pattern as product images/company logo) -- the voucher is already
+  // submitted at this point either way, so a failed upload just means no
+  // file got attached, not a lost voucher.
+  const file=document.getElementById('vfReceipt')?.files?.[0];
+  const warnings=[];
+  if(r.warning)warnings.push(r.warning);
+  if(file){
+    if(file.size>4*1024*1024){
+      warnings.push('Receipt file is over 4 MB and was not attached — you can add it later from the voucher details.');
+    }else{
+      await new Promise(resolve=>{
+        const reader=new FileReader();
+        reader.onload=async()=>{
+          const up=await api('POST','/api/vouchers/'+r.voucher.id+'/receipt',{data:reader.result,content_type:file.type});
+          if(up.error)warnings.push('Receipt upload failed: '+up.error);
+          resolve();
+        };
+        reader.onerror=()=>{warnings.push('Could not read the receipt file.');resolve();};
+        reader.readAsDataURL(file);
+      });
+    }
+  }
   document.getElementById('vchModalOverlay').remove();loadVouchersPage();
-  if(r.warning)alert(r.warning);
+  if(warnings.length)alert(warnings.join(' '));
 }
 
 // ── Deals (lightweight CRM pipeline that feeds into Quotes) ───────────────────
