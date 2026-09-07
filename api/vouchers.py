@@ -25,7 +25,7 @@ Add this file to BOTH `builds` and `routes` in vercel.json.
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
-import os, jwt, traceback
+import os, jwt, traceback, base64, time, re
 from datetime import datetime
 from supabase import create_client
 
@@ -39,6 +39,41 @@ SUPABASE_KEY = os.environ.get('SUPABASE_SERVICE_KEY')
 JWT_SECRET   = os.environ.get('JWT_SECRET')
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Receipt/invoice attachments -- same private-bucket + signed-URL pattern as
+# api/products.py's product-images and api/auth.py's company-assets (see
+# _signed_url() there for the full rationale). Images or PDF, 4MB cap to
+# stay comfortably under Vercel's default request body limit once
+# base64-encoded (~33% bigger than the raw file).
+RECEIPTS_BUCKET = 'voucher-receipts'
+MAX_RECEIPT_BYTES = 4 * 1024 * 1024
+SIGNED_URL_EXPIRES_SECONDS = 10 * 365 * 24 * 60 * 60  # ~10 years, same as products.py
+RECEIPT_EXT_MAP = {
+    'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
+    'application/pdf': 'pdf',
+}
+
+
+def _signed_url(bucket, path, expires_in=SIGNED_URL_EXPIRES_SECONDS):
+    """Copied from api/products.py -- see its comment for why this defensively
+    handles varying supabase-py response-key naming and bare-path results."""
+    res = sb.storage.from_(bucket).create_signed_url(path, expires_in)
+    url = res.get('signedURL') or res.get('signedUrl') or res.get('signed_url') or res.get('url')
+    if not url:
+        raise RuntimeError(f'Unexpected create_signed_url() response shape: {res!r}')
+    if url.startswith('http://') or url.startswith('https://'):
+        return url
+    return f"{SUPABASE_URL}/storage/v1{url}"
+
+
+def _extract_storage_path(url, bucket):
+    """Copied from api/products.py -- recovers the object path from an
+    already-stored signed URL so a replaced/removed receipt's old file can
+    actually be deleted from storage, not just unlinked in the DB."""
+    if not url:
+        return None
+    m = re.search(rf'/{re.escape(bucket)}/([^?]+)', url)
+    return m.group(1) if m else None
 
 
 @app.errorhandler(Exception)
@@ -231,7 +266,7 @@ def _project_budget_snapshots_bulk(sb, claims, vouchers):
 
 def clean_voucher(d):
     out = {}
-    for k in ('payee', 'currency', 'payment_method', 'category', 'invoice_no', 'remarks', 'project_id', 'project_name_freeform', 'payment_type'):
+    for k in ('payee', 'currency', 'payment_method', 'category', 'invoice_no', 'remarks', 'project_id', 'project_name_freeform', 'payment_type', 'bank_name', 'bank_account', 'cost_center'):
         if k == 'project_id':
             # Comes from a <select> of real projects now -- an empty string
             # means "no project selected", which must be None, not '', or
@@ -247,6 +282,11 @@ def clean_voucher(d):
     if 'amount' in d:
         try:
             out['amount'] = float(d['amount'])
+        except (TypeError, ValueError):
+            pass
+    if d.get('vat_amount') not in (None, ''):
+        try:
+            out['vat_amount'] = float(d['vat_amount'])
         except (TypeError, ValueError):
             pass
     if d.get('due_date'):
@@ -379,3 +419,77 @@ def delete_voucher(vid):
         return jsonify({'error': 'Admin only'}), 403
     sb.table('vouchers').delete().eq('id', vid).eq('company_id', claims['company_id']).execute()
     return jsonify({'success': True})
+
+
+# ── Receipt / invoice attachment ────────────────────────────────────────────
+@app.route('/api/vouchers/<vid>/receipt', methods=['POST'])
+def set_receipt(vid):
+    """Same base64-JSON-body upload pattern as api/products.py's set_image()
+    and api/auth.py's company-profile logo upload -- see RECEIPTS_BUCKET's
+    comment above for why. Called as a follow-up request right after a
+    voucher is created (the New Voucher form doesn't block submission on
+    this; a failed upload just means no receipt got attached)."""
+    claims = verify_token(request)
+    if not claims:
+        return jsonify({'error': 'Unauthorized'}), 401
+    existing = sb.table('vouchers').select('id,receipt_url').eq('id', vid).eq('company_id', claims['company_id']).execute().data
+    if not existing:
+        return jsonify({'error': 'Not found'}), 404
+
+    d = request.json or {}
+    raw = str(d.get('data') or '')
+    if not raw:
+        return jsonify({'error': 'No file data provided'}), 400
+    if ',' in raw:
+        raw = raw.split(',', 1)[1]  # strip data: prefix
+    try:
+        data = base64.b64decode(raw)
+    except Exception:
+        return jsonify({'error': 'Invalid file data'}), 400
+
+    ctype = str(d.get('content_type') or '').split(';')[0].strip().lower()
+    ext = RECEIPT_EXT_MAP.get(ctype)
+    if not ext:
+        return jsonify({'error': f'Unsupported file type ({ctype or "unknown"}). Use JPG, PNG, WEBP, GIF or PDF.'}), 400
+    if len(data) > MAX_RECEIPT_BYTES:
+        return jsonify({'error': 'File is larger than 4 MB. Please use a smaller file.'}), 400
+    if len(data) < 50:
+        return jsonify({'error': 'That does not look like a valid file.'}), 400
+
+    old_path = _extract_storage_path(existing[0].get('receipt_url'), RECEIPTS_BUCKET)
+    path = f"{claims['company_id']}/{vid}-{int(time.time())}.{ext}"
+    try:
+        sb.storage.from_(RECEIPTS_BUCKET).upload(path, data, {'content-type': ctype})
+    except Exception:
+        return jsonify({'error': 'Could not save file to storage. Check that the voucher-receipts bucket exists.'}), 502
+    try:
+        signed_url = _signed_url(RECEIPTS_BUCKET, path)
+    except Exception as e:
+        return jsonify({'error': f'File uploaded but could not generate its access URL: {str(e)[:200]}'}), 502
+
+    if old_path:
+        try:
+            sb.storage.from_(RECEIPTS_BUCKET).remove([old_path])
+        except Exception:
+            pass  # best-effort -- don't block the DB update if cleanup of the old file fails
+
+    row = sb.table('vouchers').update({'receipt_url': signed_url, 'updated_at': datetime.utcnow().isoformat()}).eq('id', vid).execute()
+    return jsonify({'voucher': row.data[0]})
+
+
+@app.route('/api/vouchers/<vid>/receipt', methods=['DELETE'])
+def remove_receipt(vid):
+    claims = verify_token(request)
+    if not claims:
+        return jsonify({'error': 'Unauthorized'}), 401
+    existing = sb.table('vouchers').select('id,receipt_url').eq('id', vid).eq('company_id', claims['company_id']).execute().data
+    if not existing:
+        return jsonify({'error': 'Not found'}), 404
+    old_path = _extract_storage_path(existing[0].get('receipt_url'), RECEIPTS_BUCKET)
+    if old_path:
+        try:
+            sb.storage.from_(RECEIPTS_BUCKET).remove([old_path])
+        except Exception:
+            pass
+    row = sb.table('vouchers').update({'receipt_url': None, 'updated_at': datetime.utcnow().isoformat()}).eq('id', vid).execute()
+    return jsonify({'voucher': row.data[0]})

@@ -6077,6 +6077,10 @@ function showVoucherDetailModal(id){
           <div class="vch-fld"><label>Currency</label><input value="${esc(v.currency||'AED')}" disabled></div>
           <div class="vch-fld"><label>Payment Method</label><input value="${esc(v.payment_method||'—')}" disabled></div>
         </div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Bank Name</label><input value="${esc(v.bank_name||'—')}" disabled></div>
+          <div class="vch-fld"><label>Account Number / IBAN</label><input value="${esc(v.bank_account||'—')}" disabled></div>
+        </div>
 
         <div class="vch-sec-label">Invoice Details</div>
         <div class="vch-sec-line"></div>
@@ -6088,6 +6092,11 @@ function showVoucherDetailModal(id){
           <div class="vch-fld"><label>Category</label><input value="${esc(v.category||'—')}" disabled></div>
           <div class="vch-fld"><label>Project</label><input value="${projectLabel}" disabled></div>
         </div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Cost Center / Department</label><input value="${esc(v.cost_center||'—')}" disabled></div>
+          <div class="vch-fld"><label>VAT Amount</label><input value="${v.vat_amount!=null?esc(v.currency||'AED')+' '+Number(v.vat_amount).toLocaleString():'—'}" disabled></div>
+        </div>
+        <div class="vch-fld"><label>Receipt / Invoice Attachment</label>${v.receipt_url?`<div><a href="${esc(v.receipt_url)}" target="_blank" rel="noopener" class="btn btn-sm" style="text-decoration:none;display:inline-flex">📎 View attached file</a></div>`:`<div style="font-size:13px;color:var(--gray-500);padding:8px 0">No file attached</div>`}</div>
 
         <div class="vch-sec-label">Submission Details</div>
         <div class="vch-sec-line"></div>
@@ -6157,6 +6166,10 @@ async function showVoucherModal(){
           </select></div>
           <div class="vch-fld"><label>Payment Method</label><select id="vfMethod"><option>Bank Transfer</option><option>Cheque</option><option>Cash</option><option>Online Payment</option></select></div>
         </div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Bank Name</label><input id="vfBankName" placeholder="e.g. Emirates NBD"></div>
+          <div class="vch-fld"><label>Account Number / IBAN</label><input id="vfBankAccount" placeholder="AE07 0000 0000 0000 0000 000"></div>
+        </div>
 
         <div class="vch-sec-label">Invoice Details</div>
         <div class="vch-sec-line"></div>
@@ -6170,6 +6183,13 @@ async function showVoucherModal(){
             <option value="">— No specific project —</option>
             ${projects.map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('')}
           </select></div>
+        </div>
+        <div class="vch-row">
+          <div class="vch-fld"><label>Cost Center / Department</label><input id="vfCostCenter" placeholder="e.g. Operations"></div>
+          <div class="vch-fld"><label>VAT Amount</label><input id="vfVat" type="number" step="0.01" placeholder="0.00"></div>
+        </div>
+        <div class="vch-fld"><label>Receipt / Invoice Attachment</label><input id="vfReceipt" type="file" accept="image/*,.pdf">
+          <div style="font-size:11px;color:var(--gray-500);margin-top:4px">JPG, PNG or PDF, up to 4 MB. Optional — can be added later too.</div>
         </div>
 
         <div class="vch-sec-label">Submission Details</div>
@@ -6205,7 +6225,7 @@ function toggleVoucherPayType(){
   }
 }
 function clearVoucherModal(){
-  ['vfPayee','vfAmount','vfInvoice','vfDueDate','vfProject','vfRemarks'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
+  ['vfPayee','vfAmount','vfInvoice','vfDueDate','vfProject','vfRemarks','vfBankName','vfBankAccount','vfCostCenter','vfVat','vfReceipt'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
   ['vfCurrency','vfMethod','vfCategory'].forEach(id=>{const el=document.getElementById(id);if(el)el.selectedIndex=0;});
   const firstRadio=document.querySelector('input[name="vfPayType"][value="project"]');if(firstRadio)firstRadio.checked=true;
   toggleVoucherPayType();
@@ -6223,11 +6243,39 @@ async function saveVoucherModal(){
     invoice_no:document.getElementById('vfInvoice').value,
     due_date:document.getElementById('vfDueDate').value,
     remarks:document.getElementById('vfRemarks').value,
+    bank_name:document.getElementById('vfBankName').value,
+    bank_account:document.getElementById('vfBankAccount').value,
+    cost_center:document.getElementById('vfCostCenter').value,
+    vat_amount:document.getElementById('vfVat').value,
   };
   const r=await api('POST','/api/vouchers',body);
   if(r.error){const e=document.getElementById('vchModalErr');e.textContent=r.error;e.style.display='block';return;}
+
+  // Receipt upload is a separate follow-up call (same base64-FileReader
+  // pattern as product images/company logo) -- the voucher is already
+  // submitted at this point either way, so a failed upload just means no
+  // file got attached, not a lost voucher.
+  const file=document.getElementById('vfReceipt')?.files?.[0];
+  const warnings=[];
+  if(r.warning)warnings.push(r.warning);
+  if(file){
+    if(file.size>4*1024*1024){
+      warnings.push('Receipt file is over 4 MB and was not attached — you can add it later from the voucher details.');
+    }else{
+      await new Promise(resolve=>{
+        const reader=new FileReader();
+        reader.onload=async()=>{
+          const up=await api('POST','/api/vouchers/'+r.voucher.id+'/receipt',{data:reader.result,content_type:file.type});
+          if(up.error)warnings.push('Receipt upload failed: '+up.error);
+          resolve();
+        };
+        reader.onerror=()=>{warnings.push('Could not read the receipt file.');resolve();};
+        reader.readAsDataURL(file);
+      });
+    }
+  }
   document.getElementById('vchModalOverlay').remove();loadVouchersPage();
-  if(r.warning)alert(r.warning);
+  if(warnings.length)alert(warnings.join(' '));
 }
 
 // ── Deals (lightweight CRM pipeline that feeds into Quotes) ───────────────────
