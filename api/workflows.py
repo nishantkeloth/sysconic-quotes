@@ -139,12 +139,16 @@ def update_document_type(dtid):
                 'is_active': True,
             }).execute().data[0]
             definition_id = definition['id']
-            # Seed a sensible two-stage default (Draft -> Approved) so a
-            # freshly-enabled document type isn't an empty pipeline; admin
-            # can rename/add/remove stages immediately after from Settings.
+            # Seed a single "Approval" stage -- the common case by far is
+            # "these people need to sign off before this is final", not a
+            # multi-stage pipeline. A prior version seeded a second, non-
+            # approval "Draft" stage ahead of this one, which just added
+            # visual clutter (an extra card to look at) and, worse, a
+            # document could get stuck there since nothing auto-advances a
+            # non-approval stage. Admin can still add more stages from
+            # Settings for document types that genuinely need a pipeline.
             sb.table('workflow_stages').insert([
-                {'workflow_id': definition_id, 'seq': 0, 'key': 'draft', 'label': 'Draft', 'requires_approval': False},
-                {'workflow_id': definition_id, 'seq': 1, 'key': 'approved', 'label': 'Approved', 'requires_approval': True, 'approval_mode': 'all'},
+                {'workflow_id': definition_id, 'seq': 0, 'key': 'approval', 'label': 'Approval', 'requires_approval': True, 'approval_mode': 'all'},
             ]).execute()
     return jsonify({'success': True, 'definition_id': definition_id})
 
