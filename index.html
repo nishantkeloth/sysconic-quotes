@@ -4559,6 +4559,12 @@ async function captureProduct(si,ii){
     if(hit){
       it.product_id=hit.id;
       let fill=false;
+      // A model typed/pasted directly (rather than picked from the
+      // dropdown -- see pmPick()) matches an existing master record here,
+      // but this used to only copy image/description/cost, never brand --
+      // so a silently-matched row kept an empty Brand field forever even
+      // though the master record it just got linked to has one.
+      if(!brand&&hit.brand){it.brand=hit.brand;fill=true;}
       if(hit.image_url&&it.img!==hit.image_url){it.img=hit.image_url;fill=true;}
       if(!it.desc&&hit.description){it.desc=hit.description;fill=true;}
       if((!it.cost||+it.cost===0)&&+hit.default_cost>0){it.cost=+hit.default_cost;fill=true;}
