@@ -126,12 +126,17 @@ def _project_budget_snapshot(sb, claims, project_id, extra_amount=0, extra_curre
 
     Budget = latest project_budget_revisions.revised_budget, falling back to
     projects.original_estimated_cost -- same precedence api/projects.py's
-    pp_add_budget_revision() uses. "Committed" = Zoho actual/committed costs
-    (same tables/filters as api/project_performance.py's
-    recalculate_project(), read-only here so this has no side effects) when
-    the project_performance feature is enabled, plus this project's own
-    pending+approved vouchers (excluding exclude_voucher_id, so the voucher
-    being evaluated isn't counted twice against extra_amount).
+    pp_add_budget_revision() uses. "Committed" = this project's own
+    pending+approved vouchers only (excluding exclude_voucher_id, so the
+    voucher being evaluated isn't counted twice against extra_amount).
+
+    Deliberately does NOT include Zoho actual/committed costs (an earlier
+    version did) -- a voucher can be the payment request for a PO/bill
+    that's already recorded in Zoho, and there's no reliable link between a
+    voucher and a specific Zoho PO/bill to avoid counting that same
+    real-world expense twice. Vouchers-only avoids that double-count
+    entirely, at the cost of not seeing non-voucher spend here -- see
+    api/project_performance.py for that fuller picture instead.
 
     Project financials have no currency column and are AED-only in practice;
     a voucher in another currency can't be netted in without an FX rate, so
@@ -148,48 +153,36 @@ def _project_budget_snapshot(sb, claims, project_id, extra_amount=0, extra_curre
         budget = rev[0].get('revised_budget')
     budget = float(budget) if budget is not None else None
 
-    zoho_actual = zoho_committed = 0.0
-    has_zoho_data = bool((claims.get('features') or {}).get('project_performance'))
-    if has_zoho_data:
-        bills = sb.table('zoho_bills').select('total').eq('project_id', project_id).execute().data or []
-        expenses = sb.table('zoho_expenses').select('amount').eq('project_id', project_id).execute().data or []
-        zoho_actual = sum(float(b.get('total') or 0) for b in bills) + sum(float(e.get('amount') or 0) for e in expenses)
-        pos = sb.table('zoho_purchase_orders').select('total,billed_total,status').eq('project_id', project_id).execute().data or []
-        zoho_committed = sum(
-            max(0.0, float(po.get('total') or 0) - float(po.get('billed_total') or 0))
-            for po in pos if (po.get('status') or '').lower() not in ('cancelled', 'void', 'deleted')
-        )
-
     vq = sb.table('vouchers').select('id,amount,currency').eq('project_id', project_id).in_('status', ['pending', 'approved'])
     if exclude_voucher_id:
         vq = vq.neq('id', exclude_voucher_id)
     vouchers = vq.execute().data or []
     voucher_committed = sum(float(v.get('amount') or 0) for v in vouchers if (v.get('currency') or 'AED') == 'AED')
 
-    total_committed = zoho_actual + zoho_committed + voucher_committed
+    total_committed = voucher_committed
     remaining_before = (budget - total_committed) if budget is not None else None
     currency_mismatch = extra_currency != 'AED'
     remaining_after = (remaining_before - extra_amount) if (remaining_before is not None and not currency_mismatch) else None
 
     return {
-        'budget': budget, 'zoho_actual': zoho_actual, 'zoho_committed': zoho_committed,
-        'voucher_committed': voucher_committed, 'total_committed': total_committed,
+        'budget': budget, 'voucher_committed': voucher_committed, 'total_committed': total_committed,
         'remaining_before': remaining_before, 'remaining_after': remaining_after,
         'over_budget': bool(remaining_after is not None and remaining_after < 0),
-        'currency_mismatch': currency_mismatch, 'has_zoho_data': has_zoho_data,
+        'currency_mismatch': currency_mismatch,
     }
 
 
 def _project_budget_snapshots_bulk(sb, claims, vouchers):
     """Batched version of _project_budget_snapshot for the Vouchers list page.
 
-    The original per-voucher version did up to 6 queries *per pending
-    project-linked voucher* (project lookup, budget revision, 3 Zoho tables,
-    vouchers-in-progress) -- fine for a single submission, but with N pending
-    vouchers on screen that's N*6 sequential round trips, which is exactly
-    why the list was slow to load. This does the same computation with a
-    fixed handful of queries regardless of how many vouchers are in the
-    list: one per distinct project_id involved, not one per voucher.
+    Vouchers-only (see _project_budget_snapshot's docstring for why Zoho
+    actual/committed costs were dropped -- double-counting risk when a
+    voucher is the payment for a PO/bill Zoho already has recorded, with no
+    reliable link between the two to de-duplicate).
+
+    Still batched to avoid one query per voucher: one pass over every
+    project involved instead of one round-trip per pending voucher, which
+    is what made the list slow to load before this was batched.
 
     Returns {voucher_id: snapshot_dict} for every pending, project-linked
     voucher in `vouchers` whose project could be found."""
@@ -215,22 +208,6 @@ def _project_budget_snapshots_bulk(sb, claims, vouchers):
         if r.get('revised_budget') is not None:
             budget_by_project[pid] = float(r['revised_budget'])
 
-    has_zoho_data = bool((claims.get('features') or {}).get('project_performance'))
-    zoho_actual_by_project, zoho_committed_by_project = {}, {}
-    if has_zoho_data:
-        bills = sb.table('zoho_bills').select('project_id,total').in_('project_id', project_ids).execute().data or []
-        expenses = sb.table('zoho_expenses').select('project_id,amount').in_('project_id', project_ids).execute().data or []
-        for b in bills:
-            zoho_actual_by_project[b['project_id']] = zoho_actual_by_project.get(b['project_id'], 0.0) + float(b.get('total') or 0)
-        for e in expenses:
-            zoho_actual_by_project[e['project_id']] = zoho_actual_by_project.get(e['project_id'], 0.0) + float(e.get('amount') or 0)
-        pos = sb.table('zoho_purchase_orders').select('project_id,total,billed_total,status').in_('project_id', project_ids).execute().data or []
-        for po in pos:
-            if (po.get('status') or '').lower() in ('cancelled', 'void', 'deleted'):
-                continue
-            pid = po['project_id']
-            zoho_committed_by_project[pid] = zoho_committed_by_project.get(pid, 0.0) + max(0.0, float(po.get('total') or 0) - float(po.get('billed_total') or 0))
-
     all_vouchers = sb.table('vouchers').select('id,project_id,amount,currency') \
         .in_('project_id', project_ids).in_('status', ['pending', 'approved']).execute().data or []
     voucher_sum_by_project = {}
@@ -244,22 +221,19 @@ def _project_budget_snapshots_bulk(sb, claims, vouchers):
     for v in targets:
         pid = v['project_id']
         budget = budget_by_project.get(pid)
-        zoho_actual = zoho_actual_by_project.get(pid, 0.0)
-        zoho_committed = zoho_committed_by_project.get(pid, 0.0)
         currency_mismatch = (v.get('currency') or 'AED') != 'AED'
         this_amount = float(v.get('amount') or 0)
         # voucher_sum_by_project includes this voucher's own row -- back it
         # out so "committed by others" doesn't double-count it.
         voucher_committed = voucher_sum_by_project.get(pid, 0.0) - (this_amount if not currency_mismatch else 0.0)
-        total_committed = zoho_actual + zoho_committed + voucher_committed
+        total_committed = voucher_committed
         remaining_before = (budget - total_committed) if budget is not None else None
         remaining_after = (remaining_before - this_amount) if (remaining_before is not None and not currency_mismatch) else None
         out[v['id']] = {
-            'budget': budget, 'zoho_actual': zoho_actual, 'zoho_committed': zoho_committed,
-            'voucher_committed': voucher_committed, 'total_committed': total_committed,
+            'budget': budget, 'voucher_committed': voucher_committed, 'total_committed': total_committed,
             'remaining_before': remaining_before, 'remaining_after': remaining_after,
             'over_budget': bool(remaining_after is not None and remaining_after < 0),
-            'currency_mismatch': currency_mismatch, 'has_zoho_data': has_zoho_data,
+            'currency_mismatch': currency_mismatch,
         }
     return out
 
@@ -365,7 +339,7 @@ def create_voucher():
         )
     if budget_info and budget_info['budget'] is not None:
         meta['Project Budget'] = f"AED {budget_info['budget']:,.2f}"
-        meta['Already Committed'] = f"AED {budget_info['total_committed']:,.2f}" + (' (incl. Zoho actuals/POs)' if budget_info['has_zoho_data'] else ' (approved + pending vouchers)')
+        meta['Already Committed'] = f"AED {budget_info['total_committed']:,.2f} (other approved + pending vouchers)"
         if budget_info['currency_mismatch']:
             meta['Remaining (before this voucher)'] = f"AED {budget_info['remaining_before']:,.2f} — voucher currency differs, not netted in"
         else:
