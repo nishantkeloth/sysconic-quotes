@@ -31,7 +31,11 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .sb-brand{padding:18px 20px;border-bottom:1px solid rgba(255,255,255,.12);display:flex;align-items:center;gap:10px}
 .sb-logo{height:30px;object-fit:contain}
 .sb-co{font-size:12px;color:rgba(255,255,255,.5);margin-top:2px}
-.sb-nav{flex:1;padding:10px 0;overflow-y:auto}
+.sb-nav{flex:1;padding:10px 0;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.25) transparent}
+.sb-nav::-webkit-scrollbar{width:6px}
+.sb-nav::-webkit-scrollbar-track{background:transparent}
+.sb-nav::-webkit-scrollbar-thumb{background:rgba(255,255,255,.25);border-radius:3px}
+.sb-nav::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.4)}
 .sb-sec{font-size:11px;font-weight:700;color:rgba(255,255,255,.35);padding:14px 20px 5px;letter-spacing:.08em;text-transform:uppercase}
 .sb-item{display:flex;align-items:center;gap:10px;padding:11px 20px;cursor:pointer;color:rgba(255,255,255,.65);font-size:14px;font-weight:500;border-left:3px solid transparent;transition:all .15s}
 .sb-badge{background:#f59e0b;color:#fff;font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;margin-left:auto}
@@ -3669,7 +3673,7 @@ function appHTML(){
   }
 
   return`<div class="shell">${sidebar}${sbOverlay}${helpFabHTML()}${helpDrawerHTML()}<div class="main">
-    <div class="topbar"><div style="display:flex;align-items:center;gap:6px;min-width:0"><button class="sb-toggle" onclick="toggleSidebarBtn()" aria-label="${A.sbCollapsed?'Show sidebar':'Hide sidebar'}" title="${A.sbCollapsed?'Show sidebar':'Hide sidebar'}">☰</button><div class="topbar-title">${PAGE_TITLES[A.page]||''}</div></div><div class="topbar-right">${topbarRight}</div></div>
+    <div class="topbar"><div style="display:flex;align-items:center;gap:6px;min-width:0"><button class="sb-toggle" onclick="toggleSidebarBtn()" aria-label="${A.sbCollapsed?'Show sidebar':'Hide sidebar'}" title="${A.sbCollapsed?'Show sidebar':'Hide sidebar'}">${A.sbCollapsed?'☰':'◀'}</button><div class="topbar-title">${PAGE_TITLES[A.page]||''}</div></div><div class="topbar-right">${topbarRight}</div></div>
     ${cstrip}
     <div class="content">${pageContent}</div>
   </div></div>`;
@@ -5954,7 +5958,10 @@ let VOUCHERS={list:[],statusFilter:''};
 const VOUCHER_STATUS_COLOR={pending:'var(--amber, #b8860b)',approved:'var(--green)',rejected:'var(--red, #a33)'};
 const WF_APPROVAL_STATUS_COLOR={pending:'#92400e',approved:'#065f46',rejected:'#991b1b'};
 const VOUCHER_SBADGE={pending:{bg:'#fef3c7',c:'#92400e'},approved:{bg:'#d1fae5',c:'#065f46'},rejected:{bg:'#fee2e2',c:'#991b1b'}};
-function vouchersHTML(){return`<div class="card" style="max-width:1250px">
+function vouchersHTML(){return`
+  <div style="font-size:12px;color:var(--gray-500);margin-bottom:4px">Finance / Payment Vouchers</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Submit and approve payment requests against a project or a general expense.</div>
+  <div class="card" style="max-width:1250px">
   <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
     <select id="vchStatusFilter" onchange="VOUCHERS.statusFilter=this.value;loadVouchersPage()" style="padding:10px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit">
       <option value="">All statuses</option>
@@ -5965,7 +5972,7 @@ function vouchersHTML(){return`<div class="card" style="max-width:1250px">
     <div style="flex:1"></div>
     <button class="btn btn-navy" onclick="showVoucherModal()">+ New Voucher</button>
   </div>
-  <div id="voucherList"><div style="color:var(--gray-500)">Loading…</div></div>
+  <div id="voucherList" style="overflow-x:auto"><div style="color:var(--gray-500)">Loading…</div></div>
 </div>`;}
 async function loadVouchersPage(){
   const q=VOUCHERS.statusFilter?('?status='+encodeURIComponent(VOUCHERS.statusFilter)):'';
@@ -5974,12 +5981,10 @@ async function loadVouchersPage(){
   if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
   VOUCHERS.list=r.vouchers||[];
   if(!VOUCHERS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No vouchers yet. Click + New Voucher to submit one for approval.</div>`;return;}
-  // All fixed widths -- flexible (fr) columns here grabbed way more space
-  // than their actual content (short payee/project names) ever needed on a
-  // wide screen, which shoved every column after them apart with big blank
-  // gaps. Fixed widths keep the whole table packed together on the left;
-  // any leftover width on a very wide screen just trails after Actions.
-  const cols='240px 100px 120px 170px 240px 90px 150px';
+  // Fixed widths, rebalanced so Payee/Category aren't wider than their
+  // content needs while Approvals (approver rows + budget line) and Actions
+  // (up to 5 icon buttons) get enough room to not feel cramped.
+  const cols='200px 120px 100px 150px 270px 90px 170px';
   // Uniform 26x26 icon buttons for row actions -- same footprint regardless
   // of glyph, so up to 5 of them (approve/reject, force-approve/force-
   // reject, delete) sit in one tidy row instead of wrapping. Color signals
@@ -6020,15 +6025,15 @@ async function loadVouchersPage(){
       const budgetHTML=(bs&&bs.budget!=null)?(()=>{
         const over=bs.over_budget;
         const remain=bs.currency_mismatch?bs.remaining_before:bs.remaining_after;
-        const remainTxt=remain==null?'n/a':('AED '+Number(remain).toLocaleString(undefined,{maximumFractionDigits:0}));
-        const tip=`Project budget: AED ${Number(bs.budget).toLocaleString()} · Already committed: AED ${Number(bs.total_committed).toLocaleString()}${bs.has_zoho_data?' (incl. Zoho actuals/POs)':' (approved+pending vouchers)'}${bs.currency_mismatch?' · this voucher\'s currency differs, not netted in':''}`;
+        const remainTxt=remain==null?'n/a':('AED '+fmt(remain));
+        const tip=`Project budget: AED ${fmt(bs.budget)} · Already committed: AED ${fmt(bs.total_committed)}${bs.has_zoho_data?' (incl. Zoho actuals/POs)':' (approved+pending vouchers)'}${bs.currency_mismatch?' · this voucher\'s currency differs, not netted in':''}`;
         return `<div style="font-size:10.5px;margin-bottom:4px;padding:3px 6px;border-radius:4px;background:${over?'#fee2e2':'#f3f4f6'};color:${over?'#991b1b':'var(--gray-600)'};font-weight:${over?700:400}" title="${esc(tip)}">${over?'⚠ Over budget — ':'Remaining after: '}${remainTxt}</div>`;
       })():'';
       return `<div class="prod-row" style="grid-template-columns:${cols}">
         <div data-label="Payee" style="cursor:pointer;color:var(--navy);font-weight:600" title="View full voucher details" onclick="showVoucherDetailModal('${v.id}')">${esc(v.payee)}</div>
-        <div data-label="Amount">${esc(v.currency||'AED')} ${Number(v.amount||0).toLocaleString()}</div>
+        <div data-label="Amount">${esc(v.currency||'AED')} ${fmt(v.amount||0)}</div>
         <div data-label="Category" style="color:var(--gray-500);font-size:13px">${esc(v.category||'')}</div>
-        <div data-label="Project" style="color:var(--gray-500);font-size:13px">${v.payment_type&&v.payment_type!=='project'?`<em>${v.payment_type==='general'?'General/Admin':'Other'}</em>`:esc((v.projects&&v.projects.name)||v.project_name_freeform||'')}</div>
+        <div data-label="Project" style="color:var(--gray-500);font-size:13px">${v.payment_type&&v.payment_type!=='project'?`<span style="background:var(--gray-100);color:var(--gray-600);padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600">${v.payment_type==='general'?'General/Admin':'Other'}</span>`:esc((v.projects&&v.projects.name)||v.project_name_freeform||'')}</div>
         <div data-label="Approvals">${budgetHTML}${approvalsHTML}</div>
         <div data-label="Status"><span style="background:${(VOUCHER_SBADGE[v.status]||{}).bg||'#eee'};color:${(VOUCHER_SBADGE[v.status]||{}).c||'#555'};font-weight:700;padding:3px 10px;border-radius:10px;font-size:12px;text-transform:capitalize;white-space:nowrap">${esc(v.status)}</span></div>
         <div data-label="Actions" style="display:flex;align-items:center;gap:4px;flex-wrap:nowrap">
@@ -6072,7 +6077,7 @@ function showVoucherDetailModal(id){
         <div class="vch-sec-line"></div>
         <div class="vch-row">
           <div class="vch-fld"><label>Payee Name</label><input value="${esc(v.payee||'')}" disabled></div>
-          <div class="vch-fld"><label>Amount</label><input value="${esc(v.currency||'AED')} ${Number(v.amount||0).toLocaleString()}" disabled></div>
+          <div class="vch-fld"><label>Amount</label><input value="${esc(v.currency||'AED')} ${fmt(v.amount||0)}" disabled></div>
         </div>
         <div class="vch-row">
           <div class="vch-fld"><label>Currency</label><input value="${esc(v.currency||'AED')}" disabled></div>
@@ -6095,7 +6100,7 @@ function showVoucherDetailModal(id){
         </div>
         <div class="vch-row">
           <div class="vch-fld"><label>Cost Center / Department</label><input value="${esc(v.cost_center||'—')}" disabled></div>
-          <div class="vch-fld"><label>VAT Amount</label><input value="${v.vat_amount!=null?esc(v.currency||'AED')+' '+Number(v.vat_amount).toLocaleString():'—'}" disabled></div>
+          <div class="vch-fld"><label>VAT Amount</label><input value="${v.vat_amount!=null?esc(v.currency||'AED')+' '+fmt(v.vat_amount):'—'}" disabled></div>
         </div>
         <div class="vch-fld"><label>Receipt / Invoice Attachment</label>${v.receipt_url?`<div><a href="${esc(v.receipt_url)}" target="_blank" rel="noopener" class="btn btn-sm" style="text-decoration:none;display:inline-flex">📎 View attached file</a></div>`:`<div style="font-size:13px;color:var(--gray-500);padding:8px 0">No file attached</div>`}</div>
 
