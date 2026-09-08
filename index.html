@@ -5960,7 +5960,26 @@ function importCustomers(event){
 }
 
 // ── Payment Vouchers (merged in from the standalone sysconic-pv app) ──────────
-let VOUCHERS={list:[],statusFilter:''};
+let VOUCHERS={list:[],statusFilter:'',searchQuery:''};
+// Lightweight fuzzy match: substring match wins outright; otherwise falls
+// back to an in-order subsequence check (all query chars appear somewhere
+// in the text, in order, not necessarily adjacent) so small typos or
+// partial words ("bnfotech", "maxhub") still find "BEN INFOTECH..." /
+// "Pencil - Maxhub Solution" without needing a fuzzy-search library.
+function vFuzzyMatch(query,text){
+  query=(query||'').trim().toLowerCase();
+  if(!query)return true;
+  text=(text||'').toLowerCase();
+  if(text.includes(query))return true;
+  let qi=0;
+  for(let i=0;i<text.length&&qi<query.length;i++){if(text[i]===query[qi])qi++;}
+  return qi===query.length;
+}
+function vSearchableText(v){
+  return [v.payee,v.category,v.invoice_no,v.status,v.payment_type,v.currency,v.amount,
+    (v.projects&&v.projects.name),v.project_name_freeform,
+    (v.submitter&&v.submitter.name),v.bank_name,v.cost_center].filter(Boolean).join(' ');
+}
 const VOUCHER_STATUS_COLOR={pending:'var(--amber, #b8860b)',approved:'var(--green)',rejected:'var(--red, #a33)'};
 const WF_APPROVAL_STATUS_COLOR={pending:'#92400e',approved:'#065f46',rejected:'#991b1b'};
 const VOUCHER_SBADGE={pending:{bg:'#fef3c7',c:'#92400e'},approved:{bg:'#d1fae5',c:'#065f46'},rejected:{bg:'#fee2e2',c:'#991b1b'}};
@@ -5975,6 +5994,7 @@ function vouchersHTML(){return`
       <option value="approved">Approved</option>
       <option value="rejected">Rejected</option>
     </select>
+    <input id="vchSearch" type="text" placeholder="Search payee, project, category…" value="${esc(VOUCHERS.searchQuery)}" oninput="VOUCHERS.searchQuery=this.value;renderVoucherRows()" style="padding:10px 12px;font-size:14px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-family:inherit;min-width:240px">
     <div style="flex:1"></div>
     <button class="btn btn-navy" onclick="showVoucherModal()">+ New Voucher</button>
   </div>
@@ -5986,7 +6006,13 @@ async function loadVouchersPage(){
   const el=document.getElementById('voucherList');if(!el)return;
   if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
   VOUCHERS.list=r.vouchers||[];
+  renderVoucherRows();
+}
+function renderVoucherRows(){
+  const el=document.getElementById('voucherList');if(!el)return;
   if(!VOUCHERS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No vouchers yet. Click + New Voucher to submit one for approval.</div>`;return;}
+  const rows=VOUCHERS.searchQuery?VOUCHERS.list.filter(v=>vFuzzyMatch(VOUCHERS.searchQuery,vSearchableText(v))):VOUCHERS.list;
+  if(!rows.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No vouchers match "${esc(VOUCHERS.searchQuery)}".</div>`;return;}
   // Fixed widths, rebalanced so Payee/Category aren't wider than their
   // content needs while Approvals (approver rows + budget line) and Actions
   // (up to 5 icon buttons) get enough room to not feel cramped.
@@ -5999,7 +6025,7 @@ async function loadVouchersPage(){
   // red = delete.
   const vIconBtn=(glyph,title,onclick,bg,fg)=>`<button title="${title}" onclick="${onclick}" style="width:26px;height:26px;flex:0 0 auto;border:none;border-radius:6px;background:${bg};color:${fg};font-size:13px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0">${glyph}</button>`;
   el.innerHTML=`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Payee</div><div>Amount</div><div>Category</div><div>Project</div><div>Approvals</div><div>Status</div><div>Actions</div></div>`+
-    VOUCHERS.list.map(v=>{
+    rows.map(v=>{
       // Approvals come from the Workflow Engine now (workflow_stage_approvals,
       // via api/vouchers.py's get_workflow_instances_bulk) instead of the old
       // per-voucher voucher_approvals table.
