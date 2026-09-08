@@ -6028,12 +6028,20 @@ async function loadVouchersPage(){
       // approve/reject controls, so whoever's about to approve sees it
       // before they click.
       const bs=v.budget_snapshot;
+      // Show the actual Budget / Committed / This-voucher breakdown right
+      // in the cell instead of burying it in a hover tooltip -- an approver
+      // (or anyone glancing at the list) should be able to see why
+      // something is flagged over budget without having to hover or ask.
       const budgetHTML=(bs&&bs.budget!=null)?(()=>{
         const over=bs.over_budget;
         const remain=bs.currency_mismatch?bs.remaining_before:bs.remaining_after;
         const remainTxt=remain==null?'n/a':('AED '+fmt(remain));
-        const tip=`Project budget: AED ${fmt(bs.budget)} · Already committed: AED ${fmt(bs.total_committed)}${bs.has_zoho_data?' (incl. Zoho actuals/POs)':' (approved+pending vouchers)'}${bs.currency_mismatch?' · this voucher\'s currency differs, not netted in':''}`;
-        return `<div style="font-size:10.5px;margin-bottom:4px;padding:3px 6px;border-radius:4px;background:${over?'#fee2e2':'#f3f4f6'};color:${over?'#991b1b':'var(--gray-600)'};font-weight:${over?700:400}" title="${esc(tip)}">${over?'⚠ Over budget — ':'Remaining after: '}${remainTxt}</div>`;
+        const committedNote=' (other vouchers)';
+        const mismatchNote=bs.currency_mismatch?' · this voucher\'s currency differs, not netted in':'';
+        return `<div style="font-size:10.5px;margin-bottom:4px;padding:4px 6px;border-radius:4px;background:${over?'#fee2e2':'#f3f4f6'}">
+          <div style="color:${over?'#991b1b':'var(--gray-600)'};font-weight:700">${over?'⚠ Over budget — ':'Remaining after: '}${remainTxt}</div>
+          <div style="color:${over?'#b45309':'var(--gray-500)'};margin-top:2px" title="${esc('Budget minus everything else already committed to this project, minus this voucher\'s own amount.'+mismatchNote)}">Budget AED ${fmt(bs.budget)} · Committed AED ${fmt(bs.total_committed)}${committedNote} · This voucher AED ${fmt(v.amount||0)}</div>
+        </div>`;
       })():'';
       return `<div class="prod-row" style="grid-template-columns:${cols}">
         <div data-label="Payee" style="cursor:pointer;color:var(--navy);font-weight:600" title="View full voucher details" onclick="showVoucherDetailModal('${v.id}')">${esc(v.payee)}</div>
@@ -6104,6 +6112,20 @@ function showVoucherDetailModal(id){
           <div class="vch-fld"><label>Category</label><input value="${esc(v.category||'—')}" disabled></div>
           <div class="vch-fld"><label>Project</label><input value="${projectLabel}" disabled></div>
         </div>
+        ${v.budget_snapshot&&v.budget_snapshot.budget!=null?(()=>{
+          const bs=v.budget_snapshot;
+          const remain=bs.currency_mismatch?bs.remaining_before:bs.remaining_after;
+          const remainTxt=remain==null?'n/a':('AED '+fmt(remain));
+          const committedNote=' (other pending + approved vouchers on this project)';
+          return `<div style="background:${bs.over_budget?'#fee2e2':'#f3f4f6'};border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:13px">
+            <div style="font-weight:700;color:${bs.over_budget?'#991b1b':'var(--gray-700)'};margin-bottom:4px">${bs.over_budget?'⚠ Over budget by '+('AED '+fmt(Math.abs(remain))):'Within budget — '+remainTxt+' remaining'}</div>
+            <div style="color:var(--gray-600);font-size:12px;line-height:1.6">
+              Project budget: AED ${fmt(bs.budget)}<br>
+              Already committed: AED ${fmt(bs.total_committed)}${committedNote}<br>
+              This voucher: AED ${fmt(v.amount||0)}${bs.currency_mismatch?' (different currency — not netted into the totals above)':''}
+            </div>
+          </div>`;
+        })():''}
         <div class="vch-row">
           <div class="vch-fld"><label>Cost Center / Department</label><input value="${esc(v.cost_center||'—')}" disabled></div>
           <div class="vch-fld"><label>VAT Amount</label><input value="${v.vat_amount!=null?esc(v.currency||'AED')+' '+fmt(v.vat_amount):'—'}" disabled></div>
