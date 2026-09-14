@@ -218,6 +218,10 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .opt-pill:hover{border-color:var(--navy);color:var(--navy)}
 .opt-pill.active{background:var(--navy);color:#fff;border-color:var(--navy)}
 .opt-pill-add{padding:7px 16px;font-size:14px;border-radius:20px;cursor:pointer;border:2px dashed var(--navy-mid);background:var(--navy-light);color:var(--navy);font-family:inherit;font-weight:600}
+.opt-pill-wrap{position:relative;display:inline-flex}
+.opt-pill-wrap .opt-pill{padding-right:28px}
+.opt-pill-del{position:absolute;right:7px;top:50%;transform:translateY(-50%);width:16px;height:16px;border-radius:50%;border:none;background:transparent;opacity:.6;font-size:14px;font-weight:700;cursor:pointer;line-height:1;padding:0}
+.opt-pill-del:hover{opacity:1;background:rgba(0,0,0,.15)}
 
 /* ── Sections ── */
 .section{margin-bottom:24px}
@@ -2984,6 +2988,21 @@ function toggleImgOn(){const v=!imgOn();opts().forEach(o=>o.catalogOn=v);schedSa
 const opt=()=>opts()[A.activeOpt];
 const sec=si=>opt()?.sections[si];
 function addOpt(){const n=opts().length+1;opts().push(mkOption(`Option ${n}`));A.activeOpt=opts().length-1;draw();}
+// A quote always needs at least one option -- opt() (used everywhere in the
+// editor) assumes opts()[A.activeOpt] exists, so deleting the last one would
+// break the page. The pill's × is simply not rendered when only one option
+// is left (see opt-pills markup below), and this is a second guard in case
+// it's ever called some other way.
+function delOpt(i){
+  if(opts().length<=1){alert('A quote must have at least one option -- add another before deleting this one.');return;}
+  const label=opts()[i]?.label||`Option ${i+1}`;
+  if(!confirm(`Delete "${label}"? This can't be undone.`))return;
+  opts().splice(i,1);
+  if(A.activeOpt>i)A.activeOpt--;
+  if(A.activeOpt>=opts().length)A.activeOpt=opts().length-1;
+  schedSave();
+  draw();
+}
 function addSec(){const name=prompt('Section name:','New Section');if(!name)return;opt().sections.push({id:uid(),name,items:[]});draw();}
 function delSec(si){if(!confirm('Remove this section?'))return;opt().sections.splice(si,1);draw();}
 function addItem(si){sec(si).items.push(mkItem());scrollToNewItem(si,sec(si).items.length-1);}
@@ -4007,7 +4026,13 @@ function editorHTML(){
   if(_prepDirty)schedSave();
 
   let html=`<div class="opt-pills">`;
-  opts().forEach((op,i)=>html+=`<button class="opt-pill ${i===A.activeOpt?'active':''}" onclick="A.activeOpt=${i};draw()">${esc(op.label)}</button>`);
+  opts().forEach((op,i)=>{
+    const active=i===A.activeOpt;
+    html+=`<div class="opt-pill-wrap">
+      <button class="opt-pill ${active?'active':''}" onclick="A.activeOpt=${i};draw()">${esc(op.label)}</button>
+      ${opts().length>1?`<button class="opt-pill-del" title="Delete this option" style="color:${active?'#fff':'var(--gray-500)'}" onclick="event.stopPropagation();delOpt(${i})">×</button>`:''}
+    </div>`;
+  });
   html+=`<button class="opt-pill-add" onclick="addOpt()">+ Add option</button></div>`;
 
   html+=`<div class="card">
