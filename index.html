@@ -2986,10 +2986,26 @@ const sec=si=>opt()?.sections[si];
 function addOpt(){const n=opts().length+1;opts().push(mkOption(`Option ${n}`));A.activeOpt=opts().length-1;draw();}
 function addSec(){const name=prompt('Section name:','New Section');if(!name)return;opt().sections.push({id:uid(),name,items:[]});draw();}
 function delSec(si){if(!confirm('Remove this section?'))return;opt().sections.splice(si,1);draw();}
-function addItem(si){sec(si).items.push(mkItem());draw();}
+function addItem(si){sec(si).items.push(mkItem());scrollToNewItem(si,sec(si).items.length-1);}
+// draw() fully rebuilds #app's HTML, so the scrollable .content div is a
+// brand-new element every time and its scrollTop resets to 0 -- that's why
+// "+ Add item" used to leave you back at the top of a long quote with no
+// indication the new line is now at the bottom. Scroll it into view (and
+// focus its first field, for the editable/internal row layout) right after
+// the redraw so you land exactly where you'd expect to keep typing.
+function scrollToNewItem(si,ii){
+  draw();
+  setTimeout(()=>{
+    const row=document.getElementById(`itemrow-${si}-${ii}`);
+    if(!row)return;
+    row.scrollIntoView({behavior:'smooth',block:'center'});
+    const firstField=row.querySelector('textarea,input');
+    if(firstField)firstField.focus();
+  },30);
+}
 function delItem(si,ii){sec(si).items.splice(ii,1);draw();}
 function copyItem(si,ii){A.itemClipboard=JSON.parse(JSON.stringify(sec(si).items[ii]));draw();}
-function pasteItem(si){if(!A.itemClipboard)return;sec(si).items.push(JSON.parse(JSON.stringify(A.itemClipboard)));draw();}
+function pasteItem(si){if(!A.itemClipboard)return;sec(si).items.push(JSON.parse(JSON.stringify(A.itemClipboard)));scrollToNewItem(si,sec(si).items.length-1);}
 // Reorder within a section only — swaps two entries of sec(si).items, the
 // same array delItem/addItem already operate on, so an item can never cross
 // into another section. No item is copied or recreated: only array position
@@ -4018,7 +4034,7 @@ function editorHTML(){
     s.items.forEach((it,ii)=>{
       const c=calcItem(it);
       if(isInt){
-        rows+=`<div class="item-row int${IMG?' img':''}" ondragover="dragOverRow(event,${si},${ii})" ondrop="dropRow(event,${si},${ii})" ondragleave="dragLeaveRow(event)" ondragend="dragEndRow()">
+        rows+=`<div class="item-row int${IMG?' img':''}" id="itemrow-${si}-${ii}" ondragover="dragOverRow(event,${si},${ii})" ondrop="dropRow(event,${si},${ii})" ondragleave="dragLeaveRow(event)" ondragend="dragEndRow()">
           <div class="imove">
             <span class="idrag" draggable="true" ondragstart="dragStartItem(event,${si},${ii})" title="Drag to reorder">⠿</span>
             <button title="Move up" ${ii===0?'disabled':''} onclick="moveItemUp(${si},${ii})">▲</button>
@@ -4046,7 +4062,7 @@ function editorHTML(){
           <button class="idel" title="Copy line" style="font-size:14px" onclick="copyItem(${si},${ii})">⧉</button><button class="idel" onclick="delItem(${si},${ii})">×</button>
         </div>`;
       } else {
-        rows+=`<div class="item-row cli${IMG?' img':''}">
+        rows+=`<div class="item-row cli${IMG?' img':''}" id="itemrow-${si}-${ii}">
           <div class="inum">${rn++}</div>
           ${IMG?thumbCell(si,ii,it):''}
           <div style="padding:8px 5px;font-size:14px">${esc(it.brand)}</div>
