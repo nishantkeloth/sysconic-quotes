@@ -3024,13 +3024,13 @@ function scrollToNewItem(si,ii){
     if(firstField)firstField.focus();
   },30);
 }
-// Proposal Builder: quote-level "Professional Proposal" content (exec summary
-// intro override + "Understanding of Requirements" rows) lives in its own
-// popup (openQuoteProposalModal below) rather than inline on the Quote
-// Details card -- it's optional, quote-specific content that was crowding
-// the main editor view for quotes that don't use it. proposal_data.requirements
-// is a small array of {need, description} the user fills in once per quote,
-// if at all.
+// Proposal Builder: quote-level "Understanding of Requirements" rows --
+// {need, description} facts the user fills in once per quote, used as-is
+// (never AI-reworded) when drafting the Professional Proposal. Lives inside
+// the "Generate Proposal" modal's input step (see renderProposalModal) --
+// it used to be its own separate popup, but that made "proposal content"
+// look like two unrelated things when it's really one input screen for the
+// same AI drafting flow.
 function quoteProposalRowsHTML(){
   const reqRows=(A.activeQuote.proposal_data&&A.activeQuote.proposal_data.requirements)||[];
   return reqRows.map((row,ri)=>`
@@ -3040,11 +3040,11 @@ function quoteProposalRowsHTML(){
       <button class="idel" onclick="delRequirementRow(${ri})" title="Remove row">×</button>
     </div>`).join('');
 }
-// Add/remove refresh just the modal's row list (#qPropReqRows) when the modal
-// is open, instead of a full draw() -- draw() only replaces #app, and the
-// modal overlay lives outside it (appended straight to document.body, see
-// openQuoteProposalModal), so it would otherwise go stale mid-edit. Falls
-// back to draw() if somehow called with the modal closed.
+// Add/remove refresh just the modal's row list (#qPropReqRows) in place,
+// instead of a full draw() -- draw() only replaces #app, and the Generate
+// Proposal modal overlay lives outside it (appended straight to
+// document.body, see openProposalModal), so it would otherwise go stale
+// mid-edit. Falls back to draw() if somehow called with the modal closed.
 function addRequirementRow(){
   if(!A.activeQuote.proposal_data)A.activeQuote.proposal_data={};
   if(!A.activeQuote.proposal_data.requirements)A.activeQuote.proposal_data.requirements=[];
@@ -3058,28 +3058,6 @@ function delRequirementRow(ri){
   schedSave();
   const rowsEl=document.getElementById('qPropReqRows');
   if(rowsEl){rowsEl.innerHTML=quoteProposalRowsHTML();setTimeout(initTA,30);}else draw();
-}
-function openQuoteProposalModal(){
-  if(!A.activeQuote.proposal_data)A.activeQuote.proposal_data={};
-  const pd=A.activeQuote.proposal_data;
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="qPropOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeQuoteProposalModal()">
-    <div class="modal" style="max-width:640px;max-height:88vh;overflow-y:auto">
-      <div class="modal-title">Professional Proposal — quote-specific content</div>
-      <div class="modal-sub">Optional. Reusable boilerplate (About Us, Scope of Work, Warranty) is set once in Company Profile — this is just the handful of things that vary quote to quote.</div>
-      <div class="fld2" style="margin:14px 0 16px"><label>Executive summary intro (optional — a short auto-generated summary of your sections is used if left blank)</label><textarea class="iinput" rows="2" style="width:100%;box-sizing:border-box" oninput="A.activeQuote.proposal_data.exec_summary_intro=this.value;schedSave()">${esc(pd.exec_summary_intro||'')}</textarea></div>
-      <div style="font-weight:600;font-size:13px;margin-bottom:8px">Understanding of Requirements</div>
-      <div id="qPropReqRows">${quoteProposalRowsHTML()}</div>
-      <button class="btn btn-sm" onclick="addRequirementRow()">+ Add requirement row</button>
-      <div class="modal-actions">
-        <button class="btn btn-navy" onclick="closeQuoteProposalModal()">Done</button>
-      </div>
-    </div>
-  </div>`);
-  setTimeout(initTA,30);
-}
-function closeQuoteProposalModal(){
-  const el=document.getElementById('qPropOverlay');if(el)el.remove();
-  draw(); // refresh the trigger button's ✓ badge behind the modal
 }
 // Proposal Builder: per-section concept image/blurb expand-collapse UI state.
 // Deliberately NOT stored on the section object itself (which is the JSONB
@@ -4133,14 +4111,11 @@ function editorHTML(){
     </div>
   </div>`;
 
-  if(hasFeature('proposal_builder')){
-    if(!A.activeQuote.proposal_data)A.activeQuote.proposal_data={};
-    const pd=A.activeQuote.proposal_data;
-    const proposalContentSet=!!(pd.exec_summary_intro||(pd.requirements||[]).length);
-    html+=`<div style="margin:-6px 0 16px">
-      <button class="btn btn-sm" onclick="openQuoteProposalModal()" title="Executive summary intro & Understanding of Requirements for this quote's Professional Proposal">📝 Proposal content${proposalContentSet?' ✓':''}</button>
-    </div>`;
-  }
+  // Executive summary override + Understanding of Requirements used to live
+  // in their own popup here, separate from "Generate Proposal" -- moved
+  // into that modal's input step instead (see renderProposalModal) since
+  // they're both inputs to the exact same AI drafting flow and having two
+  // separate entry points for "proposal content" was confusing.
 
   (o.sections||[]).forEach((s,si)=>{
     let rn=1;
@@ -5814,6 +5789,8 @@ function renderProposalModal(){
     return;
   }
   const opts_=opts();
+  if(!A.activeQuote.proposal_data)A.activeQuote.proposal_data={};
+  const pd=A.activeQuote.proposal_data;
   box.innerHTML=`
     <div class="modal-title">📑 Generate Technical & Commercial Proposal</div>
     <div class="modal-sub">Scope is auto-drafted from this quote's bill of materials below — edit it, add context (use case, floors, timeline), or attach a brief/spec document. AI drafts the content first so you can review and edit it before anything is generated.</div>
@@ -5827,6 +5804,11 @@ function renderProposalModal(){
       <input type="file" id="propFile" accept=".pdf,.docx,.txt" onchange="propFileChosen(event)">
       ${PROP.file?`<div style="font-size:12px;color:var(--gray-500);margin-top:4px">Attached: ${esc(PROP.file.filename)}</div>`:''}
     </div>
+    <div style="margin-bottom:6px"><label style="font-size:13px;font-weight:600;color:var(--gray-500)">Executive summary override <span style="font-weight:400;color:var(--gray-500)">(optional — the AI writes one from the brief above if left blank)</span></label></div>
+    <textarea class="iinput" rows="2" style="width:100%;box-sizing:border-box;border:1.5px solid var(--gray-200);margin-bottom:12px" oninput="A.activeQuote.proposal_data.exec_summary_intro=this.value;schedSave()">${esc(pd.exec_summary_intro||'')}</textarea>
+    <div style="margin-bottom:6px"><label style="font-size:13px;font-weight:600;color:var(--gray-500)">Understanding of Requirements <span style="font-weight:400;color:var(--gray-500)">(optional — exact facts, used as-is, never reworded by the AI)</span></label></div>
+    <div id="qPropReqRows" style="margin-bottom:6px">${quoteProposalRowsHTML()}</div>
+    <button type="button" class="btn btn-sm" style="margin-bottom:14px" onclick="addRequirementRow()">+ Add requirement row</button>
     <div class="fld2" style="margin-bottom:6px"><label>Option to price</label>
       <select id="propWhich" onchange="PROP.which=this.value;if(PROP.briefAuto){PROP.brief=propAutoBriefFromBOM(PROP.which);}renderProposalModal();">
         ${opts_.map((op,i)=>`<option value="${i}" ${String(i)===PROP.which?'selected':''}>${esc(op.label)}</option>`).join('')}
@@ -5846,6 +5828,7 @@ function renderProposalModal(){
       <button class="btn" onclick="closeProposalModal()">Cancel</button>
       <button class="btn btn-navy" id="propGenBtn" onclick="draftProposal()">Draft with AI ✨</button>
     </div>`;
+  setTimeout(initTA,30);
 }
 
 function proposalReviewHTML(){
