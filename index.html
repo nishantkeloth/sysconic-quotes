@@ -4548,8 +4548,8 @@ function buildOptionSectionBlocks(o,TH,IMG,hideP){
     s.items.forEach((it,idx)=>{const c=calcItem(it);const vatAmt=o.vatEnabled?c.tp*((o.vatRate||5)/100):null;srows+=`<tr style="background:${idx%2===0?'#fff':TH.bg};page-break-inside:avoid">
       <td style="padding:${DP('10px 8px')};font-size:${SZ(11,'table')}px;color:#a8b0bd;text-align:center;${cellB};border-bottom:1px solid #eef1f5">${rn++}</td>
       ${IMG?`<td style="padding:${DP('4px 6px')};text-align:center;${cellB};border-bottom:1px solid #eef1f5">${it.img?`<div style="width:32px;height:32px;border-radius:4px;border:1px solid #e2e6ec;overflow:hidden;display:inline-block"><img src="${esc(it.img)}" style="width:100%;height:100%;object-fit:contain;display:block"></div>`:''}</td>`:''}
-      <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;white-space:nowrap;${cellB};border-bottom:1px solid #eef1f5">${esc(it.brand)}</td>
-      <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;white-space:nowrap;${cellB};border-bottom:1px solid #eef1f5">${esc(it.model)}</td>
+      <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;white-space:normal;word-break:break-word;${cellB};border-bottom:1px solid #eef1f5">${esc(it.brand)}</td>
+      <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;white-space:normal;word-break:break-word;${cellB};border-bottom:1px solid #eef1f5">${esc(it.model)}</td>
       <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#555;white-space:pre-line;${cellB};border-bottom:1px solid #eef1f5">${esc(it.desc)}</td>
       ${hideP?'':`<td style="padding:${DP('10px 10px')};font-size:${SZ(13,'table')}px;font-weight:700;text-align:right;white-space:nowrap;color:${TH.dark};${cellB};border-bottom:1px solid #eef1f5">${fmt(c.up)}</td>`}
       <td style="padding:${DP('10px 8px')};font-size:${SZ(12,'table')}px;text-align:center;white-space:nowrap;color:#555;${cellB};border-bottom:1px solid #eef1f5">${it.qty||1}</td>
@@ -5744,9 +5744,11 @@ function propTemplateSwatch(key){
 }
 
 // Generic add/remove for the repeatable content lists (feature_cards, scope_cards,
-// control_testing, architecture_items, mobilization_phases, exclusions) in the
-// proposal review modal — lets the user add more or delete AI-drafted items
-// instead of being stuck with a fixed count.
+// control_testing, mobilization_phases, exclusions) in the proposal review
+// modal — lets the user add more or delete AI-drafted items instead of being
+// stuck with a fixed count. solution_sections isn't part of this -- it's a
+// dict keyed by the quote's real BOM section names (fixed by the BOM itself,
+// not addable/removable here), edited directly in proposalReviewHTML().
 function propAddListItem(key, tmpl){
   (PROP.content[key]=PROP.content[key]||[]).push(Object.assign({}, tmpl));
   renderProposalModal();
@@ -5831,7 +5833,7 @@ function proposalReviewHTML(){
   if(!(c.feature_cards||(c.feature_cards=[])).length)c.feature_cards.push({title:'',description:''});
   if(!(c.scope_cards||(c.scope_cards=[])).length)c.scope_cards.push({title:'',description:''});
   if(!(c.control_testing||(c.control_testing=[])).length)c.control_testing.push({title:'',bullets:[]});
-  if(!(c.architecture_items||(c.architecture_items=[])).length)c.architecture_items.push({label:'',value:''});
+  if(!c.solution_sections)c.solution_sections={};
   if(!(c.mobilization_phases||(c.mobilization_phases=[])).length)c.mobilization_phases.push({title:'',bullets:[]});
   if(!(c.exclusions||(c.exclusions=[])).length)c.exclusions.push({title:'',text:''});
 
@@ -5857,7 +5859,7 @@ function proposalReviewHTML(){
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);display:block;margin-bottom:6px">Sections to include</label>
     <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">
-      ${[['overview','Overview'],['requirements','Understanding of Requirements'],['scope','Scope of Work'],['quality','Quality/Testing'],['system_design','System Design'],...(hasFeature('diagrams')?[['schematic','System Schematic']]:[]),['rollout','Rollout Plan'],['payment_terms','Payment Terms'],['warranty','Warranty']].map(([key,lbl])=>`<label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;cursor:pointer"><input type="checkbox" ${(c.sections_enabled||(c.sections_enabled={}))[key]!==false?'checked':''} onchange="PROP.content.sections_enabled=PROP.content.sections_enabled||{};PROP.content.sections_enabled['${key}']=this.checked">${lbl}</label>`).join('')}
+      ${[['overview','Overview'],['requirements','Understanding of Requirements'],['scope','Scope of Work'],['quality','Quality/Testing'],['system_design','Proposed Solutions (per-section write-ups)'],...(hasFeature('diagrams')?[['schematic','System Schematic']]:[]),['rollout','Rollout Plan'],['payment_terms','Payment Terms'],['warranty','Warranty']].map(([key,lbl])=>`<label style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:500;cursor:pointer"><input type="checkbox" ${(c.sections_enabled||(c.sections_enabled={}))[key]!==false?'checked':''} onchange="PROP.content.sections_enabled=PROP.content.sections_enabled||{};PROP.content.sections_enabled['${key}']=this.checked">${lbl}</label>`).join('')}
     </div>
     ${hasFeature('diagrams')&&!opts().some(o=>(o.diagram&&o.diagram.code)||(o.sections||[]).some(s=>s.diagram&&s.diagram.code))?`<div style="font-size:12px;color:var(--amber);margin:-8px 0 12px">System Schematic: no diagram is saved on this quote yet — generate one via 🗺 AI Diagram in the editor toolbar, or that section will be skipped.</div>`:''}
 
@@ -5890,10 +5892,14 @@ function proposalReviewHTML(){
     ${c.control_testing.map((t,i)=>`<div style="display:flex;gap:8px;margin:6px 0;align-items:flex-start"><div style="flex:1"><input style="width:100%;margin-bottom:4px" placeholder="Section title" value="${esc(t.title)}" oninput="PROP.content.control_testing[${i}].title=this.value"><textarea rows="2" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" placeholder="One bullet per line" oninput="PROP.content.control_testing[${i}].bullets=propTextToBullets(this.value)">${esc(propBulletsToText(t.bullets))}</textarea></div>${propRemoveBtn('control_testing',i)}</div>`).join('')}
     ${propAddBtn('Add control/testing topic', `propAddListItem('control_testing',{title:'',bullets:[]})`)}
 
-    <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Solution architecture</label>
-    ${c.architecture_items.map((a,i)=>`<div style="display:flex;gap:6px;margin:4px 0;align-items:center"><input style="flex:1" placeholder="Label" value="${esc(a.label)}" oninput="PROP.content.architecture_items[${i}].label=this.value"><input style="flex:1" placeholder="Value" value="${esc(a.value)}" oninput="PROP.content.architecture_items[${i}].value=this.value">${propRemoveBtn('architecture_items',i)}</div>`).join('')}
-    ${propAddBtn('Add architecture item', `propAddListItem('architecture_items',{label:'',value:''})`)}
-    <textarea rows="2" style="width:100%;margin:6px 0;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" placeholder="Architecture note" oninput="PROP.content.architecture_note=this.value">${esc(c.architecture_note||'')}</textarea>
+    <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Proposed Solutions — per-section write-up</label>
+    <div style="font-size:11.5px;color:var(--gray-500);margin:2px 0 6px">One entry per real section in this quote's bill of materials — the AI grounded each in that section's actual brands/models. Its priced line items render automatically below; edit only the narrative here.</div>
+    ${Object.keys(c.solution_sections).length?Object.keys(c.solution_sections).map(name=>{const sec=c.solution_sections[name]||{intro:'',key_benefits:[]};return `
+    <div style="margin:8px 0;padding:8px;border:1.5px solid var(--gray-200);border-radius:8px">
+      <div style="font-weight:700;font-size:12.5px;color:var(--navy);margin-bottom:6px">${esc(name)}</div>
+      <textarea rows="2" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px;margin-bottom:6px" placeholder="Intro for this section" oninput="PROP.content.solution_sections['${name.replace(/'/g,"\\'")}'].intro=this.value">${esc(sec.intro||'')}</textarea>
+      <textarea rows="2" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" placeholder="Key benefits — one per line" oninput="PROP.content.solution_sections['${name.replace(/'/g,"\\'")}'].key_benefits=propTextToBullets(this.value)">${esc(propBulletsToText(sec.key_benefits))}</textarea>
+    </div>`;}).join(''):`<div style="font-size:12px;color:var(--gray-500);padding:6px 0">No sections found on this quote yet — add sections/items to the BOM, then redraft.</div>`}
 
     <label style="font-size:12px;font-weight:700;color:var(--gray-500);margin-top:10px;display:block">Mobilization phases</label>
     ${c.mobilization_phases.map((p,i)=>`<div style="display:flex;gap:8px;margin:6px 0;align-items:flex-start"><div style="flex:1"><div style="display:flex;gap:6px;margin-bottom:4px"><input style="flex:2" placeholder="Phase title" value="${esc(p.title)}" oninput="PROP.content.mobilization_phases[${i}].title=this.value"><input style="flex:1" placeholder="Duration e.g. 3-5 days" value="${esc(p.duration||'')}" oninput="PROP.content.mobilization_phases[${i}].duration=this.value"></div><textarea rows="2" style="width:100%;padding:6px;font-family:inherit;border:1.5px solid var(--gray-200);border-radius:8px" placeholder="One bullet per line" oninput="PROP.content.mobilization_phases[${i}].bullets=propTextToBullets(this.value)">${esc(propBulletsToText(p.bullets))}</textarea></div>${propRemoveBtn('mobilization_phases',i)}</div>`).join('')}
