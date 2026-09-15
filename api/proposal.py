@@ -1259,6 +1259,29 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
 
         E.append(PageBreak())
         if not _section_on(content, 'overview'): del E[_ov_start:]
+
+        # Understanding of Requirements -- quote-specific, user-authored facts
+        # from the editor's Proposal content popup (quotes.proposal_data.
+        # requirements), passed through verbatim by draft_proposal() rather
+        # than AI-generated, so only rendered at all when the user actually
+        # filled some in.
+        _req_start = len(E)
+        if content.get('understanding_of_requirements'):
+            E += [section_badge('DISCOVERY', TH)] + heading('Understanding of Requirements', S, TH)
+            S_need = ParagraphStyle('need', fontName='Helvetica-Bold', fontSize=9, textColor=TH['navy'], leading=13)
+            req_rows_pdf = []
+            for req in content['understanding_of_requirements']:
+                need = (req.get('need') or '').strip()
+                desc = (req.get('description') or '').strip()
+                if not need and not desc: continue
+                req_rows_pdf.append([Paragraph(esc_p(need), S_need), Paragraph(esc_p(desc), S['body'])])
+            if req_rows_pdf:
+                t = Table(req_rows_pdf, colWidths=[42*mm, CW-42*mm])
+                t.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),8),('RIGHTPADDING',(0,0),(-1,-1),8)]))
+                E.append(t)
+                E.append(PageBreak())
+        if not _section_on(content, 'requirements'): del E[_req_start:]
+
         _sc_start = len(E)
         E += [section_badge('DELIVERY', TH)] + heading('Scope of Work', S, TH)
         if content.get('scope_cards'):
@@ -1480,6 +1503,9 @@ def _load_quote(claims, quote_id):
         if isinstance(quote.get(f), str):
             try: quote[f] = json.loads(quote[f])
             except: quote[f] = []
+    if isinstance(quote.get('proposal_data'), str):
+        try: quote['proposal_data'] = json.loads(quote['proposal_data'])
+        except: quote['proposal_data'] = {}
     return quote
 
 def _load_company_dict(claims):
@@ -1543,6 +1569,18 @@ def draft_proposal():
         content = draft_proposal_content(brief, attachment_text, equipment_summary, cur, model, company)
     except RuntimeError as e:
         return jsonify({'error': str(e)}), 502
+
+    # Quote-level "Professional Proposal" content (set once per quote via the
+    # editor's Proposal content popup, stored in quotes.proposal_data) --
+    # applied AFTER the AI draft rather than fed into the prompt, so it's used
+    # verbatim and never reworded/dropped on a redraft, unlike the free-text
+    # brief above which the AI is free to paraphrase every time.
+    pd = quote.get('proposal_data') or {}
+    req_rows = [r for r in (pd.get('requirements') or []) if (r.get('need') or '').strip() or (r.get('description') or '').strip()]
+    if req_rows:
+        content['understanding_of_requirements'] = req_rows
+    if (pd.get('exec_summary_intro') or '').strip():
+        content['executive_summary'] = pd['exec_summary_intro'].strip()
 
     content.setdefault('title', quote.get('title') or 'Technical Proposal')
     # Real company payment terms (Company Profile -> Proposal Builder content
