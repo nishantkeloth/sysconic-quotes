@@ -4099,9 +4099,9 @@ function editorHTML(){
       <div class="fld2" style="margin-bottom:16px"><label>Executive summary intro (optional — a short auto-generated summary of your sections is used if left blank)</label><textarea class="iinput" rows="2" style="width:100%;box-sizing:border-box" oninput="A.activeQuote.proposal_data.exec_summary_intro=this.value;schedSave()">${esc(pd.exec_summary_intro||'')}</textarea></div>
       <div style="font-weight:600;font-size:13px;margin-bottom:8px">Understanding of Requirements</div>
       ${reqRows.map((row,ri)=>`
-        <div style="display:flex;gap:8px;margin-bottom:8px;align-items:flex-start">
-          <input class="iinput" style="flex:0 0 200px" placeholder="e.g. Lobby impact display" value="${esc(row.need||'')}" oninput="A.activeQuote.proposal_data.requirements[${ri}].need=this.value;schedSave()">
-          <textarea class="iinput" style="flex:1" rows="1" placeholder="A seamless canvas for institutional branding, announcements and live media." oninput="A.activeQuote.proposal_data.requirements[${ri}].description=this.value;schedSave()">${esc(row.description||'')}</textarea>
+        <div style="display:grid;grid-template-columns:200px minmax(0,1fr) 24px;gap:8px;margin-bottom:8px;align-items:flex-start">
+          <input class="iinput" style="width:100%;box-sizing:border-box" placeholder="e.g. Lobby impact display" value="${esc(row.need||'')}" oninput="A.activeQuote.proposal_data.requirements[${ri}].need=this.value;schedSave()">
+          <textarea class="iinput" style="width:100%;box-sizing:border-box;min-width:0" rows="1" placeholder="A seamless canvas for institutional branding, announcements and live media." oninput="A.activeQuote.proposal_data.requirements[${ri}].description=this.value;schedSave()">${esc(row.description||'')}</textarea>
           <button class="idel" onclick="delRequirementRow(${ri})" title="Remove row">×</button>
         </div>`).join('')}
       <button class="btn btn-sm" onclick="addRequirementRow()">+ Add requirement row</button>
