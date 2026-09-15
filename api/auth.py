@@ -1000,6 +1000,15 @@ def update_company_profile():
         update = {}
         for f in COMPANY_PROFILE_FIELDS:
             if f in d and f != 'logo_url':  # logo is set separately via the upload endpoint
+                if f == 'founded_year':
+                    # This is an integer column -- an empty <input type=number>
+                    # sends '' (not null), which Postgres rejects outright
+                    # ('invalid input syntax for type integer'). Save it as
+                    # NULL when blank/non-numeric instead of erroring the
+                    # whole profile save over one optional field.
+                    raw = str(d[f] or '').strip()
+                    update[f] = int(raw) if raw.isdigit() else None
+                    continue
                 cap = 6000 if f in COMPANY_PROFILE_LONG_FIELDS else 500
                 update[f] = str(d[f] or '').strip()[:cap]
         if update:
