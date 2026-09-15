@@ -959,6 +959,19 @@ COMPANY_PROFILE_LONG_FIELDS = {
 LOGO_BUCKET = 'company-assets'
 MAX_LOGO_BYTES = 4 * 1024 * 1024  # 4 MB
 
+# Feature flags a company's own Admin is allowed to flip for themselves,
+# without needing the platform owner (see api/platform.py's
+# update_company_features(), which remains the superset control for every
+# flag in index.html's FEATURE_CATALOG). Deliberately a short allowlist, not
+# "every key in companies.features" -- most flags (vouchers, workflowEngine,
+# fsm_module, etc.) are core modules the platform owner provisions per plan,
+# and letting a company admin flip those off themselves risks locking their
+# own team out of something they didn't mean to touch. proposal_builder is
+# safe to self-serve: it's purely additive (a disabled/hidden button when
+# off) and its own content-library fields already live behind admin-only
+# save().
+SELF_SERVE_FEATURES = {'proposal_builder'}
+
 # TEN-002 fix: company-assets is a PRIVATE bucket now (or about to become one --
 # see docs/saas-audit/REMEDIATION-ROADMAP.md). Mirrors the same long-lived
 # signed-URL pattern used in api/products.py -- see that file's comments for
@@ -981,7 +994,7 @@ def get_company_profile():
         sb = get_sb()
         claims = verify_token(request)
         if not claims: return jsonify({'error': 'Unauthorized'}), 401
-        row = sb.table('companies').select('id,name,' + ','.join(COMPANY_PROFILE_FIELDS)).eq('id', claims['company_id']).execute()
+        row = sb.table('companies').select('id,name,features,' + ','.join(COMPANY_PROFILE_FIELDS)).eq('id', claims['company_id']).execute()
         if not row.data: return jsonify({'error': 'Not found'}), 404
         return jsonify({'profile': row.data[0]})
     except Exception as e:
@@ -1014,6 +1027,39 @@ def update_company_profile():
         if update:
             sb.table('companies').update(update).eq('id', claims['company_id']).execute()
         return jsonify({'ok': True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# Self-service add-on toggle for a company's own Admin. Deliberately a
+# separate, narrower route from api/platform.py's update_company_features()
+# (platform-admin-only, any flag, any company): this one only ever touches
+# the caller's own company_id, and only lets them flip flags in
+# SELF_SERVE_FEATURES -- an admin POSTing a core-module key like
+# 'workflowEngine' here just gets it silently ignored, not honored, so this
+# can't be used to grant modules the platform owner didn't provision.
+@app.route('/api/auth/company-profile/features', methods=['POST'])
+def update_own_company_features():
+    try:
+        sb = get_sb()
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+
+        d = request.json or {}
+        updates = d.get('features')
+        if not isinstance(updates, dict):
+            return jsonify({'error': 'features must be an object of {flag_key: true/false}'}), 400
+        updates = {k: bool(v) for k, v in updates.items() if k in SELF_SERVE_FEATURES}
+        if not updates:
+            return jsonify({'error': 'No self-serve toggleable flags in request'}), 400
+
+        co = sb.table('companies').select('features').eq('id', claims['company_id']).execute().data
+        if not co: return jsonify({'error': 'Company not found'}), 404
+        current = co[0].get('features') or {}
+        merged = {**current, **updates}
+        sb.table('companies').update({'features': merged}).eq('id', claims['company_id']).execute()
+        return jsonify({'ok': True, 'features': merged})
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
