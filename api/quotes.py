@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
-import os, jwt, traceback, base64, requests, re
+import os, jwt, traceback, base64, requests, re, time
 from datetime import datetime, timedelta
 from supabase import create_client
 
@@ -21,6 +21,26 @@ MS_CLIENT_SECRET = os.environ.get('MS_CLIENT_SECRET')
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 STATUS_LABELS_PY = {'draft': 'Draft', 'sent': 'Sent', 'awarded': 'Awarded', 'lost': 'Lost'}
+
+# ── Proposal Builder concept images ──────────────────────────────────────────
+# Per-section "concept view" images for the Professional Proposal template
+# (gated behind the proposal_builder company feature). Same private-bucket +
+# long-lived-signed-URL pattern as product-images / voucher-receipts / company-
+# assets: the signed URL itself is what gets stored on the section object
+# inside quote_data (as `image`), so no separate DB table is needed here --
+# it's just persisted the next time the quote autosaves like any other field.
+PROPOSAL_IMAGE_BUCKET = 'proposal-images'
+MAX_PROPOSAL_IMAGE_BYTES = 4 * 1024 * 1024  # 4 MB
+SIGNED_URL_EXPIRES_SECONDS = 10 * 365 * 24 * 60 * 60  # ~10 years
+
+def _signed_url(bucket, path, expires_in=SIGNED_URL_EXPIRES_SECONDS):
+    res = sb.storage.from_(bucket).create_signed_url(path, expires_in)
+    url = res.get('signedURL') or res.get('signedUrl') or res.get('signed_url') or res.get('url')
+    if not url:
+        raise RuntimeError(f'Unexpected create_signed_url() response shape: {res!r}')
+    if url.startswith('http://') or url.startswith('https://'):
+        return url
+    return f"{SUPABASE_URL}/storage/v1{url}"
 
 def get_ms_token():
     """Get a Microsoft Graph access token using client credentials."""
@@ -297,6 +317,7 @@ def create_quote():
         'quote_data':    d.get('quote_data', []),
         'vendor_data':   d.get('vendor_data', []),
         'terms_data':    d.get('terms_data', []),
+        'proposal_data': d.get('proposal_data', {}),
         'total_sell':    d.get('total_sell', 0),
         'total_gp':      d.get('total_gp', 0),
         'margin':        d.get('margin', 0),
@@ -305,6 +326,55 @@ def create_quote():
     quote = row.data[0]
     _log_activity(quote['id'], claims['user_id'], 'created', f"Quote \"{quote.get('title') or 'Untitled'}\" created")
     return jsonify({'quote': quote}), 201
+
+# ── Proposal Builder: upload a per-section concept image ────────────────────
+# Returns a signed URL only -- it's the caller's job to then set that URL as
+# `image` on the relevant section inside quote_data and save the quote as
+# normal (schedSave() in index.html). Nothing is written to the quotes row
+# here, so an image upload with no follow-up save just leaves an orphaned
+# object in storage rather than corrupting quote state.
+@app.route('/api/quotes/<qid>/proposal-image', methods=['POST'])
+def upload_proposal_image(qid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not _has_feature(claims, 'proposal_builder'):
+        return jsonify({'error': 'The Professional Proposal Builder is not enabled for this company.'}), 403
+
+    existing = sb.table('quotes').select('id').eq('id', qid).eq('company_id', claims['company_id']).execute()
+    if not existing.data: return jsonify({'error': 'Not found'}), 404
+
+    d = request.json or {}
+    raw = str(d.get('data') or '')
+    if not raw: return jsonify({'error': 'No image data provided'}), 400
+    if ',' in raw: raw = raw.split(',', 1)[1]  # strip data: prefix
+    try:
+        data = base64.b64decode(raw)
+    except Exception:
+        return jsonify({'error': 'Invalid image data'}), 400
+
+    if len(data) > MAX_PROPOSAL_IMAGE_BYTES:
+        return jsonify({'error': 'Image is larger than 4 MB. Please use a smaller image.'}), 400
+    if len(data) < 100:
+        return jsonify({'error': 'That does not look like a valid image.'}), 400
+
+    ctype = str(d.get('content_type') or 'image/jpeg').split(';')[0].strip().lower()
+    ext = {'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp'}.get(ctype)
+    if not ext:
+        return jsonify({'error': f'Unsupported image type ({ctype or "unknown"}). Use JPG, PNG or WEBP.'}), 400
+
+    section_id = re.sub(r'[^a-zA-Z0-9_-]', '', str(d.get('section_id') or 'section'))[:60]
+    path = f"{claims['company_id']}/{qid}-{section_id}-{int(time.time())}.{ext}"
+    try:
+        sb.storage.from_(PROPOSAL_IMAGE_BUCKET).upload(path, data, {'content-type': ctype})
+    except Exception:
+        return jsonify({'error': 'Could not save image to storage. Check that the proposal-images bucket exists.'}), 502
+
+    try:
+        signed_url = _signed_url(PROPOSAL_IMAGE_BUCKET, path)
+    except Exception as e:
+        return jsonify({'error': f'Image uploaded but could not generate its access URL: {str(e)[:200]}'}), 502
+
+    return jsonify({'image_url': signed_url})
 
 # ── Project Performance: on-award hook ──────────────────────────────────────
 # Duplicated calc logic (see calc_item/calc_opt in api/pdf.py, api/proposal.py
@@ -442,7 +512,7 @@ def _activate_project_performance(claims, quote, won_option_index):
 # sent/awarded/lost, its content is locked — the only way to edit it again
 # is to explicitly set the status back to 'draft' first. This keeps what a
 # reviewer/customer saw for a given version from silently drifting.
-CONTENT_FIELDS = ['title','customer','currency','exchange_rate','pricing_type','quote_data','vendor_data','terms_data','total_sell','total_gp','margin']
+CONTENT_FIELDS = ['title','customer','currency','exchange_rate','pricing_type','quote_data','vendor_data','terms_data','proposal_data','total_sell','total_gp','margin']
 
 @app.route('/api/quotes/<qid>', methods=['PUT'])
 def update_quote(qid):
@@ -456,7 +526,7 @@ def update_quote(qid):
         return jsonify({'error': 'Forbidden'}), 403
 
     d = request.json or {}
-    allowed = ['title','customer','status','currency','exchange_rate','pricing_type','quote_data','vendor_data','terms_data','total_sell','total_gp','margin']
+    allowed = ['title','customer','status','currency','exchange_rate','pricing_type','quote_data','vendor_data','terms_data','proposal_data','total_sell','total_gp','margin']
     update = {k: d[k] for k in allowed if k in d}
 
     old_status = existing.data[0].get('status')

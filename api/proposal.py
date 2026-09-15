@@ -57,6 +57,9 @@ def verify_token(req):
     except:
         return None
 
+def has_feature(claims, feature):
+    return bool((claims.get('features') or {}).get(feature))
+
 # ── Colors (matches the modernized Quotation PDF) ───────────────────────────────
 def has_page_access(claims, page_key):
     if claims.get('role') == 'admin':
@@ -149,6 +152,20 @@ def build_company_dict(co, fallback_name):
         'certifications': co.get('certifications') or '',
         'founded_year': co.get('founded_year') or '',
         'notable_clients': co.get('notable_clients') or '',
+        # Proposal Builder content library (Company Profile -> Proposal
+        # Builder content library) -- reusable, human-written facts about
+        # this company, set once and reused on every proposal. Passed into
+        # draft_proposal_content() below to ground the AI draft in real
+        # policy/language instead of it inventing generic scope/warranty/
+        # payment-terms text fresh every time.
+        'about_us_text': co.get('about_us_text') or '',
+        'why_us_bullets': co.get('why_us_bullets') or '',
+        'scope_ours_bullets': co.get('scope_ours_bullets') or '',
+        'scope_client_bullets': co.get('scope_client_bullets') or '',
+        'warranty_text': co.get('warranty_text') or '',
+        'default_validity_days': co.get('default_validity_days') or '',
+        'default_delivery_weeks': co.get('default_delivery_weeks') or '',
+        'default_payment_terms': co.get('default_payment_terms') or '',
     }
 
 def _fetch_bytes(url, timeout=15):
@@ -245,13 +262,43 @@ _TIER_GUIDANCE = {
     'enterprise': "This is an ENTERPRISE-scale, multi-system deployment. Write an in-depth, comprehensive proposal that covers every major subsystem/category distinctly — favor specificity and granularity throughout rather than brevity.",
 }
 
-def _build_system_prompt(tier, targets):
+def _company_facts_block(company):
+    """Renders the company's Proposal Builder content library (set once in
+    Company Profile) as an instruction block telling the AI to use these real
+    facts rather than inventing its own generic scope/warranty/payment-terms
+    language. Returns '' when the company hasn't filled any of this in, so
+    drafting behaves exactly as before for companies that haven't set it up."""
+    if not company:
+        return ''
+    lines = []
+    if company.get('about_us_text'):
+        lines.append(f"About the company: {company['about_us_text']}")
+    if company.get('why_us_bullets'):
+        lines.append("Why choose this company (weave the spirit of these into the executive summary / feature cards, don't just copy verbatim):\n" + company['why_us_bullets'])
+    if company.get('scope_ours_bullets'):
+        lines.append("This company's standard scope of work -- base scope_cards on these real items rather than inventing generic ones:\n" + company['scope_ours_bullets'])
+    if company.get('scope_client_bullets'):
+        lines.append("Standard items left to the CLIENT's scope (mention in general_notes or exclusions where relevant, don't put these in scope_cards):\n" + company['scope_client_bullets'])
+    if company.get('warranty_text'):
+        lines.append(f"This company's standard warranty & support policy -- base warranty_years and support_bullets on this real text rather than inventing your own:\n{company['warranty_text']}")
+    if company.get('default_payment_terms'):
+        lines.append(f"This company's standard payment terms -- use this instead of inventing generic milestones: {company['default_payment_terms']}")
+    if company.get('default_delivery_weeks'):
+        lines.append(f"This company's standard delivery timeline: {company['default_delivery_weeks']} -- scale mobilization_phases durations to be consistent with this overall timeframe.")
+    if company.get('default_validity_days'):
+        lines.append(f"This proposal's standard validity period is {company['default_validity_days']} days -- mention this in general_notes.")
+    if not lines:
+        return ''
+    return "\n\nCOMPANY FACTS -- this company has provided the following real policies and information. Ground the relevant sections in these facts instead of inventing your own generic equivalents; never contradict them:\n" + "\n\n".join(lines)
+
+def _build_system_prompt(tier, targets, company=None):
     summary_len = '2-4 sentences' if tier in ('small', 'medium') else '4-6 sentences, genuinely comprehensive'
     note_len = '1-2 sentences' if tier in ('small', 'medium') else '2-4 sentences, covering how the subsystems integrate with each other'
     closing = ('Favor conciseness — this is a smaller job and padding it out with generic language will look inflated.'
                if tier == 'small' else
                'Favor genuine depth and specificity throughout — this is a substantial scope and the proposal should read as comprehensive, not a shortened summary.')
-    return f"""You are a senior AV/IT solutions consultant drafting the TEXT CONTENT for a professional technical proposal document (not the pricing — that's handled separately). Given a project brief, optional reference material, and a summary of the actual equipment being proposed (brands/models/categories from a real bill of materials), draft compelling, specific, professional proposal content.
+    company_facts = _company_facts_block(company)
+    return f"""You are a senior AV/IT solutions consultant drafting the TEXT CONTENT for a professional technical proposal document (not the pricing — that's handled separately). Given a project brief, optional reference material, and a summary of the actual equipment being proposed (brands/models/categories from a real bill of materials), draft compelling, specific, professional proposal content.{company_facts}
 
 This project's scope has been assessed as {tier.upper()} based on its real bill of materials (line item count, section count, and brand diversity). {_TIER_GUIDANCE[tier]}
 
@@ -301,13 +348,13 @@ def _gemini_request_with_retry(req):
             raise RuntimeError('AI service is unreachable right now. Please try again.')
     raise RuntimeError('AI service is currently overloaded. Please try again in a minute.')
 
-def draft_proposal_content(brief, attachment_text, equipment_summary, currency, model=None):
+def draft_proposal_content(brief, attachment_text, equipment_summary, currency, model=None, company=None):
     if not GEMINI_API_KEY:
         raise RuntimeError('Proposal generation is not configured yet (GEMINI_API_KEY is missing)')
 
     tier = _scope_tier(equipment_summary)
     targets = SCOPE_TARGETS[tier]
-    system_prompt = _build_system_prompt(tier, targets)
+    system_prompt = _build_system_prompt(tier, targets, company)
 
     user_msg = json.dumps({
         'project_brief': brief[:4000],
@@ -598,6 +645,40 @@ def _bom_item_image(url, cache):
     cache[url] = flow
     return flow
 
+SECTION_IMG_BOX_MM = 55  # square box a section's concept image is fit inside -- larger than a BOM item thumbnail, this is a package "hero shot"
+
+def _section_concept_image(url, cache):
+    """Same fetch/budget/cache machinery as _bom_item_image(), but sized for
+    a section-level 'concept image' (set via the quote editor's per-section
+    🖼 Proposal content panel, saved as section.image) rather than a small
+    per-line-item thumbnail. Shares the same cache dict -- and therefore the
+    same overall per-document fetch budget -- as item images, so a proposal
+    with many sections + many item photos still can't run away on fetch time."""
+    if not url:
+        return ''
+    cache_key = 'concept:' + url
+    if cache_key in cache:
+        return cache[cache_key]
+    budget = cache.setdefault('__budget__', {'deadline': time.time() + BOM_IMG_TIME_BUDGET_SECONDS, 'fetched': 0})
+    if budget['fetched'] >= BOM_IMG_MAX_COUNT or time.time() >= budget['deadline']:
+        cache[cache_key] = ''
+        return ''
+    flow = ''
+    try:
+        img_bytes = _fetch_bytes(url, timeout=BOM_IMG_FETCH_TIMEOUT)
+        if img_bytes:
+            reader = ImageReader(io.BytesIO(img_bytes))
+            iw, ih = reader.getSize()
+            if iw and ih:
+                box = SECTION_IMG_BOX_MM * mm
+                dw, dh = _img_contain_rect(iw, ih, box, box)
+                flow = Image(io.BytesIO(img_bytes), width=dw, height=dh)
+    except Exception:
+        flow = ''
+    budget['fetched'] += 1
+    cache[cache_key] = flow
+    return flow
+
 def bom_table(sections, CW, cur, with_price, pricing_type='markup', TH=None, img_cache=None):
     TH = TH or _theme_for('modern')
     if img_cache is None: img_cache = {}
@@ -608,10 +689,27 @@ def bom_table(sections, CW, cur, with_price, pricing_type='markup', TH=None, img
     flow = []
     img_w = BOM_IMG_COL_MM * mm
     rem = CW - img_w
+    S_blurb = ParagraphStyle('sblurb', fontName='Helvetica-Oblique', fontSize=8.5, textColor=TH['gray'], leading=11)
     for s in sections:
         if s.get('name'):
             flow.append(Paragraph(f"<b>{esc_p(s['name'])}</b>", ParagraphStyle('sn', fontName='Helvetica-Bold', fontSize=10, textColor=TH['navy'])))
             flow.append(Spacer(1, 1.5*mm))
+        # Optional per-section concept image + one-line description, set via
+        # the quote editor's "🖼 Proposal content" panel -- mirrors how the
+        # reference-quality proposal templates show a hero shot + caption
+        # above each package's priced line items.
+        concept_img = _section_concept_image(s.get('image'), img_cache) if s.get('image') else ''
+        if concept_img or s.get('blurb'):
+            concept_row = []
+            if concept_img: concept_row.append(concept_img)
+            if s.get('blurb'): concept_row.append(Paragraph(esc_p(s['blurb']), S_blurb))
+            if len(concept_row) == 2:
+                ct = Table([concept_row], colWidths=[SECTION_IMG_BOX_MM*mm + 4*mm, CW - SECTION_IMG_BOX_MM*mm - 4*mm])
+                ct.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(1,0),(1,0),0),('TOPPADDING',(0,0),(-1,-1),0),('BOTTOMPADDING',(0,0),(-1,-1),0)]))
+                flow.append(ct)
+            else:
+                flow.append(concept_row[0])
+            flow.append(Spacer(1, 3*mm))
         if with_price:
             hdr = ['#','Img','Brand','Model','Description', f'Unit Price ({cur})', 'Qty', 'UOM', f'Total ({cur})']
             pct = [0.04, 0.10, 0.13, 0.32, 0.13, 0.06, 0.06, 0.16]
@@ -1384,10 +1482,20 @@ def _load_quote(claims, quote_id):
             except: quote[f] = []
     return quote
 
-def _load_company(claims):
-    co_row = sb.table('companies').select('name,legal_name,address,trn,phone,website,logo_url,certifications,founded_year,notable_clients').eq('id', claims['company_id']).execute()
+def _load_company_dict(claims):
+    """DB-only company facts, no logo fetch -- used by the drafting step
+    (draft_proposal), which needs the text facts to ground the AI prompt but
+    has no use for the actual logo image bytes."""
+    co_row = sb.table('companies').select(
+        'name,legal_name,address,trn,phone,website,logo_url,certifications,founded_year,notable_clients,'
+        'about_us_text,why_us_bullets,scope_ours_bullets,scope_client_bullets,warranty_text,'
+        'default_validity_days,default_delivery_weeks,default_payment_terms'
+    ).eq('id', claims['company_id']).execute()
     co_raw = co_row.data[0] if co_row.data else {}
-    company = build_company_dict(co_raw, co_raw.get('name'))
+    return build_company_dict(co_raw, co_raw.get('name')), co_raw
+
+def _load_company(claims):
+    company, co_raw = _load_company_dict(claims)
     logo_bytes = _fetch_bytes(co_raw.get('logo_url'))
     return company, logo_bytes
 
@@ -1395,6 +1503,8 @@ def _load_company(claims):
 def draft_proposal():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not has_feature(claims, 'proposal_builder'):
+        return jsonify({'error': 'The Professional Proposal Builder is not enabled for this company. Ask your admin to enable it, or contact us to add it to your plan.'}), 403
 
     d = request.json or {}
     quote_id = d.get('quote_id')
@@ -1425,20 +1535,25 @@ def draft_proposal():
 
     equipment_summary, opts = get_equipment_summary(quote, which)
     cur = quote.get('currency') or 'AED'
+    company, _co_raw = _load_company_dict(claims)
 
     try:
         requested_model = d.get('model')
         model = requested_model if requested_model in ALLOWED_GEMINI_MODELS else None
-        content = draft_proposal_content(brief, attachment_text, equipment_summary, cur, model)
+        content = draft_proposal_content(brief, attachment_text, equipment_summary, cur, model, company)
     except RuntimeError as e:
         return jsonify({'error': str(e)}), 502
 
     content.setdefault('title', quote.get('title') or 'Technical Proposal')
-    content.setdefault('payment_terms', [
+    # Real company payment terms (Company Profile -> Proposal Builder content
+    # library) win over the generic hardcoded default -- one string, not a
+    # list, since that field is a single free-text line in Company Profile.
+    default_payment_terms = [company['default_payment_terms']] if company.get('default_payment_terms') else [
         '50% advance payment on order confirmation',
         '40% on delivery of equipment to site',
         '10% on completion, testing and handover',
-    ])
+    ]
+    content.setdefault('payment_terms', default_payment_terms)
     content['customer_name'] = quote.get('customer') or ''
     content['date'] = (opts[0].get('date') if opts else '') or time.strftime('%d %B %Y')
     content['prepared_by'] = (opts[0].get('by') if opts else '') or ''
@@ -1484,6 +1599,8 @@ def draft_proposal():
 def render_proposal():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not has_feature(claims, 'proposal_builder'):
+        return jsonify({'error': 'The Professional Proposal Builder is not enabled for this company. Ask your admin to enable it, or contact us to add it to your plan.'}), 403
 
     d = request.json or {}
     quote_id = d.get('quote_id')

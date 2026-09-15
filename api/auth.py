@@ -947,7 +947,15 @@ COMPANY_PROFILE_FIELDS = [
     'legal_name', 'address', 'trn', 'phone', 'website', 'logo_url',
     'bank_name', 'bank_account_name', 'bank_account_no', 'bank_iban', 'bank_swift', 'bank_branch',
     'certifications', 'founded_year', 'notable_clients',
+    'about_us_text', 'why_us_bullets', 'scope_ours_bullets', 'scope_client_bullets', 'warranty_text',
+    'default_validity_days', 'default_delivery_weeks', 'default_payment_terms',
 ]
+# Long-form fields above (paragraphs / one-bullet-per-line text) need more room
+# than the 500-char cap the rest of the profile fields get -- a Scope of Work
+# or About Us block legitimately runs longer than a bank name ever would.
+COMPANY_PROFILE_LONG_FIELDS = {
+    'about_us_text', 'why_us_bullets', 'scope_ours_bullets', 'scope_client_bullets', 'warranty_text',
+}
 LOGO_BUCKET = 'company-assets'
 MAX_LOGO_BYTES = 4 * 1024 * 1024  # 4 MB
 
@@ -992,7 +1000,8 @@ def update_company_profile():
         update = {}
         for f in COMPANY_PROFILE_FIELDS:
             if f in d and f != 'logo_url':  # logo is set separately via the upload endpoint
-                update[f] = str(d[f] or '').strip()[:500]
+                cap = 6000 if f in COMPANY_PROFILE_LONG_FIELDS else 500
+                update[f] = str(d[f] or '').strip()[:cap]
         if update:
             sb.table('companies').update(update).eq('id', claims['company_id']).execute()
         return jsonify({'ok': True})

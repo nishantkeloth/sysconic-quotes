@@ -176,6 +176,7 @@ def list_companies():
             'user_count': user_counts.get(co['id'], 0),
             'quote_count': quote_counts.get(co['id'], 0),
             'admins': admins_by_company.get(co['id'], []),
+            'features': co.get('features') or {},
         })
     return jsonify({'companies': out})
 
@@ -243,6 +244,33 @@ def reactivate_company(cid):
     sb.table('companies').update({'status': 'active'}).eq('id', cid).execute()
     _audit(claims, 'reactivate_company', target_company_id=cid)
     return jsonify({'ok': True})
+
+# ── Per-feature add-on toggles ───────────────────────────────────────────────────
+# Every premium module (vouchers, workflowEngine, diagrams, project_performance,
+# etc.) is gated by a boolean in companies.features (JSONB), embedded into that
+# company's JWT at login (see api/auth.py) and checked client-side via
+# hasFeature(). Until now the only way to flip one of these on for a company was
+# a platform admin running a manual `update companies set features = features ||
+# '{"x": true}'` in Supabase directly -- this endpoint makes that a proper
+# checklist in the Platform UI instead, so add-ons (like the Professional
+# Proposal Builder) can be sold and toggled per company without touching SQL.
+# Merges rather than replaces so toggling one flag never clobbers the others.
+@app.route('/api/platform/companies/<cid>/features', methods=['POST'])
+def update_company_features(cid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not require_platform_admin(claims): return jsonify(PLATFORM_ADMIN_ONLY), 403
+    d = request.json or {}
+    updates = d.get('features')
+    if not isinstance(updates, dict):
+        return jsonify({'error': 'features must be an object of {flag_key: true/false}'}), 400
+    co = sb.table('companies').select('features').eq('id', cid).execute().data
+    if not co: return jsonify({'error': 'Company not found'}), 404
+    current = co[0].get('features') or {}
+    merged = {**current, **{k: bool(v) for k, v in updates.items()}}
+    sb.table('companies').update({'features': merged}).eq('id', cid).execute()
+    _audit(claims, 'update_company_features', target_company_id=cid, detail={'features': updates})
+    return jsonify({'ok': True, 'features': merged})
 
 # ── Invite a user into a specific, explicitly-chosen existing company ──────────
 # This is the actual fix for data segregation: a platform admin picks the exact

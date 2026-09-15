@@ -2021,10 +2021,11 @@ async function openQuote(q){
   const r=await api('GET','/api/quotes/'+q.id);
   if(!r.quote)return;
   A.activeQuote=r.quote;
-  ['quote_data','terms_data','vendor_data'].forEach(f=>{if(typeof A.activeQuote[f]==='string')A.activeQuote[f]=JSON.parse(A.activeQuote[f]);});
+  ['quote_data','terms_data','vendor_data','proposal_data'].forEach(f=>{if(typeof A.activeQuote[f]==='string')A.activeQuote[f]=JSON.parse(A.activeQuote[f]);});
   if(!A.activeQuote.quote_data||!A.activeQuote.quote_data.length)A.activeQuote.quote_data=[mkOption('Option 1')];
   if(!A.activeQuote.terms_data||!A.activeQuote.terms_data.length)A.activeQuote.terms_data=[...DEFAULT_TERMS];
   if(!A.activeQuote.vendor_data)A.activeQuote.vendor_data=[];
+  if(!A.activeQuote.proposal_data)A.activeQuote.proposal_data={};
   A.cur=A.activeQuote.currency||'AED';A.rate=A.activeQuote.exchange_rate||1;A.activeOpt=0;A.page='editor';draw();
   if(!A.activeQuote.customer)setTimeout(openCustModal,150);
 }
@@ -2040,6 +2041,7 @@ async function saveQuote(){
     title:A.activeQuote.title,customer:A.activeQuote.customer,status:A.activeQuote.status,
     currency:A.cur,exchange_rate:A.rate,pricing_type:A.activeQuote.pricing_type||'markup',
     quote_data:A.activeQuote.quote_data,terms_data:A.activeQuote.terms_data,vendor_data:A.activeQuote.vendor_data,
+    proposal_data:A.activeQuote.proposal_data,
     total_sell:T.ts,total_gp:T.tg,margin:T.margin,
   });
   if(r.quote){const i=A.quotes.findIndex(q=>q.id===A.activeQuote.id);if(i>=0)A.quotes[i]=r.quote;A.activeQuote.project_id=r.quote.project_id;setStatus('saved');if(r.quote.status==='awarded')draw();return true;}
@@ -3022,6 +3024,42 @@ function scrollToNewItem(si,ii){
     if(firstField)firstField.focus();
   },30);
 }
+// Proposal Builder: "Understanding of Requirements" rows (quote-level, not
+// per-section) -- stored in proposal_data.requirements, a small array of
+// {need, description} the user fills in once per quote, if at all.
+function addRequirementRow(){
+  if(!A.activeQuote.proposal_data)A.activeQuote.proposal_data={};
+  if(!A.activeQuote.proposal_data.requirements)A.activeQuote.proposal_data.requirements=[];
+  A.activeQuote.proposal_data.requirements.push({need:'',description:''});
+  schedSave();draw();
+}
+function delRequirementRow(ri){
+  A.activeQuote.proposal_data.requirements.splice(ri,1);
+  schedSave();draw();
+}
+// Proposal Builder: per-section concept image/blurb expand-collapse UI state.
+// Deliberately NOT stored on the section object itself (which is the JSONB
+// blob that gets persisted verbatim) -- it's purely which panels are open in
+// this browser tab right now, so it lives in its own in-memory Set keyed by
+// section id instead.
+let PROPOSAL_UI={openSections:new Set()};
+function toggleSectionProposal(sid){
+  if(PROPOSAL_UI.openSections.has(sid))PROPOSAL_UI.openSections.delete(sid);
+  else PROPOSAL_UI.openSections.add(sid);
+  draw();
+}
+async function uploadSectionImage(event,si){
+  const file=event.target.files[0];if(!file)return;event.target.value='';
+  const reader=new FileReader();
+  reader.onload=async function(e){
+    const r=await api('POST',`/api/quotes/${A.activeQuote.id}/proposal-image`,{data:e.target.result,content_type:file.type,section_id:sec(si).id});
+    if(r.error){alert(r.error);return;}
+    sec(si).image=r.image_url;
+    schedSave();
+    draw();
+  };
+  reader.readAsDataURL(file);
+}
 function delItem(si,ii){sec(si).items.splice(ii,1);draw();}
 function copyItem(si,ii){A.itemClipboard=JSON.parse(JSON.stringify(sec(si).items[ii]));draw();}
 function pasteItem(si){if(!A.itemClipboard)return;sec(si).items.push(JSON.parse(JSON.stringify(A.itemClipboard)));scrollToNewItem(si,sec(si).items.length-1);}
@@ -3725,7 +3763,7 @@ function buildTopbarRight(){
     <span class="tb-sep"></span>
     ${!isQuoteLocked()?`<button class="btn btn-navy" onclick="saveQuote()">💾 Save</button>`:`<button class="btn btn-navy" onclick="unlockForEditing()">🔓 Unlock to edit</button>`}
     ${!isQuoteLocked()?`<button class="btn" onclick="submitForReview()" title="Snapshot this quote and send it for internal approval before it goes to the customer">📤 Send to Review</button>`:''}
-    <button class="btn" onclick="openProposalModal()" title="Generate a technical/commercial proposal document from this quote using AI">📑 Generate Proposal</button>
+    ${hasFeature('proposal_builder')?`<button class="btn" onclick="openProposalModal()" title="Generate a technical/commercial proposal document from this quote using AI">📑 Generate Proposal</button>`:`<button class="btn" disabled style="opacity:.55;cursor:not-allowed" title="Professional Proposal Builder is a paid add-on — ask your admin to enable it, or contact us to add it to your plan">📑 Generate Proposal 🔒</button>`}
     ${reviewStatusBadgeHTML()}
     <span class="tb-sep"></span>
     <button class="btn" onclick="reviewQuote()">🔍 AI Review</button>
@@ -4051,6 +4089,25 @@ function editorHTML(){
     </div>
   </div>`;
 
+  if(hasFeature('proposal_builder')){
+    if(!A.activeQuote.proposal_data)A.activeQuote.proposal_data={};
+    const pd=A.activeQuote.proposal_data;
+    const reqRows=pd.requirements||[];
+    html+=`<div class="card" style="margin-top:16px">
+      <div class="card-title">Professional Proposal — quote-specific content</div>
+      <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px">Optional. Reusable boilerplate (About Us, Scope of Work, Warranty) is set once in Company Profile — this is just the handful of things that vary quote to quote.</div>
+      <div class="fld2" style="margin-bottom:16px"><label>Executive summary intro (optional — a short auto-generated summary of your sections is used if left blank)</label><textarea class="iinput" rows="2" style="width:100%;box-sizing:border-box" oninput="A.activeQuote.proposal_data.exec_summary_intro=this.value;schedSave()">${esc(pd.exec_summary_intro||'')}</textarea></div>
+      <div style="font-weight:600;font-size:13px;margin-bottom:8px">Understanding of Requirements</div>
+      ${reqRows.map((row,ri)=>`
+        <div style="display:flex;gap:8px;margin-bottom:8px;align-items:flex-start">
+          <input class="iinput" style="flex:0 0 200px" placeholder="e.g. Lobby impact display" value="${esc(row.need||'')}" oninput="A.activeQuote.proposal_data.requirements[${ri}].need=this.value;schedSave()">
+          <textarea class="iinput" style="flex:1" rows="1" placeholder="A seamless canvas for institutional branding, announcements and live media." oninput="A.activeQuote.proposal_data.requirements[${ri}].description=this.value;schedSave()">${esc(row.description||'')}</textarea>
+          <button class="idel" onclick="delRequirementRow(${ri})" title="Remove row">×</button>
+        </div>`).join('')}
+      <button class="btn btn-sm" onclick="addRequirementRow()">+ Add requirement row</button>
+    </div>`;
+  }
+
   (o.sections||[]).forEach((s,si)=>{
     let rn=1;
     const IC=IMG?['']:[];
@@ -4102,6 +4159,20 @@ function editorHTML(){
       }
     });
 
+    const proposalOn=hasFeature('proposal_builder');
+    const proposalOpen=proposalOn&&PROPOSAL_UI.openSections.has(s.id);
+    const proposalBlockHTML=proposalOpen?`<div style="background:#fafbfc;border:1.5px solid var(--gray-200);border-radius:8px;padding:14px;margin-bottom:12px">
+      <div style="font-size:12px;font-weight:600;color:var(--gray-500);margin-bottom:10px">Concept image & description — shown above this section's line items on the Professional Proposal</div>
+      <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
+        <div style="width:140px;height:90px;border:1.5px solid var(--gray-200);border-radius:6px;overflow:hidden;flex:0 0 auto;display:flex;align-items:center;justify-content:center;background:#fff" id="secImgPreview-${si}">
+          ${s.image?`<img src="${esc(s.image)}" style="max-width:100%;max-height:100%;object-fit:cover">`:`<span style="font-size:11px;color:var(--gray-500)">No image</span>`}
+        </div>
+        <div style="flex:1;min-width:220px">
+          <label class="btn btn-sm" style="cursor:pointer;margin-bottom:8px;display:inline-block">Upload image<input type="file" accept="image/png,image/jpeg,image/webp" style="display:none" onchange="uploadSectionImage(event,${si})"></label>
+          <textarea class="iinput" rows="2" style="width:100%;box-sizing:border-box" placeholder="A one or two sentence description of this package, shown under the image on the proposal." oninput="sec(${si}).blurb=this.value;schedSave()">${esc(s.blurb||'')}</textarea>
+        </div>
+      </div>
+    </div>`:'';
     html+=`<div class="section">
       <div class="sec-hd">
         <div class="sec-hd-l">
@@ -4110,10 +4181,12 @@ function editorHTML(){
           <div class="sec-badge">${s.items.length} item${s.items.length!==1?'s':''}</div>
         </div>
         <div style="display:flex;gap:8px">
+          ${proposalOn?`<button class="btn btn-sm" onclick="toggleSectionProposal('${s.id}')" title="Concept image & description for the Professional Proposal">🖼 Proposal content${(s.image||s.blurb)?' ✓':''}</button>`:''}
           <button class="btn btn-sm" onclick="addItem(${si})">+ Add item</button>
           ${A.itemClipboard?`<button class="btn btn-sm" onclick="pasteItem(${si})" title="Paste copied line into this section">📋 Paste</button>`:''}<button class="btn btn-sm btn-red" onclick="delSec(${si})">Remove</button>
         </div>
       </div>
+      ${proposalBlockHTML}
       <div class="grid-scroll" onwheel="gridWheelScroll(event,this)">
         <div class="col-hd ${isInt?'int':'cli'}${IMG?' img':''}">${hds.map(h=>`<div>${h}</div>`).join('')}</div>
         <div class="items-wrap">${rows||`<div style="padding:20px;text-align:center;color:var(--gray-500);font-size:14px">No items yet — <button class="btn btn-sm" onclick="addItem(${si})">+ Add item</button></div>`}</div>
@@ -4455,6 +4528,60 @@ function printPricingToggleHTML(){
     <button class="btn ${hidden?'':'btn-navy'}" onclick="togglePrintPricing()" style="white-space:nowrap">${hidden?'💰 Show prices':'🚫 Hide prices'}</button>
   </div>`;
 }
+// Builds the priced BOQ table (plus, when set, a concept image/blurb above
+// it) for every section of one pricing option. Extracted out of printHTML()
+// so the exact same table markup can be reused by the Professional Proposal
+// template (printProposalHTML, added for the paid proposal_builder add-on)
+// without a second, drifting copy of ~40 lines of <table> markup. The concept
+// image/blurb only render when a section actually has one set (via the
+// editor's "🖼 Proposal content" panel), so this is a no-op visually for
+// every quote that doesn't use that feature -- Standard print output is
+// unchanged unless the user opted into it.
+function buildOptionSectionBlocks(o,TH,IMG,hideP){
+  let rn=1; let sectionBlocks=[];
+  (o.sections||[]).forEach(s=>{
+    let srows='';
+    const cellB='border-right:1px solid #e9ecf2';
+    s.items.forEach((it,idx)=>{const c=calcItem(it);const vatAmt=o.vatEnabled?c.tp*((o.vatRate||5)/100):null;srows+=`<tr style="background:${idx%2===0?'#fff':TH.bg};page-break-inside:avoid">
+      <td style="padding:${DP('10px 8px')};font-size:${SZ(11,'table')}px;color:#a8b0bd;text-align:center;${cellB};border-bottom:1px solid #eef1f5">${rn++}</td>
+      ${IMG?`<td style="padding:${DP('4px 6px')};text-align:center;${cellB};border-bottom:1px solid #eef1f5">${it.img?`<div style="width:32px;height:32px;border-radius:4px;border:1px solid #e2e6ec;overflow:hidden;display:inline-block"><img src="${esc(it.img)}" style="width:100%;height:100%;object-fit:contain;display:block"></div>`:''}</td>`:''}
+      <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;white-space:nowrap;${cellB};border-bottom:1px solid #eef1f5">${esc(it.brand)}</td>
+      <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;white-space:nowrap;${cellB};border-bottom:1px solid #eef1f5">${esc(it.model)}</td>
+      <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#555;white-space:pre-line;${cellB};border-bottom:1px solid #eef1f5">${esc(it.desc)}</td>
+      ${hideP?'':`<td style="padding:${DP('10px 10px')};font-size:${SZ(13,'table')}px;font-weight:700;text-align:right;white-space:nowrap;color:${TH.dark};${cellB};border-bottom:1px solid #eef1f5">${fmt(c.up)}</td>`}
+      <td style="padding:${DP('10px 8px')};font-size:${SZ(12,'table')}px;text-align:center;white-space:nowrap;color:#555;${cellB};border-bottom:1px solid #eef1f5">${it.qty||1}</td>
+      <td style="padding:${DP('10px 8px')};font-size:${SZ(11,'table')}px;text-align:center;white-space:nowrap;color:#a8b0bd;${cellB};border-bottom:1px solid #eef1f5">${esc(it.uom||'Pcs')}</td>
+      ${hideP?'':`<td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;text-align:right;white-space:nowrap;color:#a8b0bd;${cellB};border-bottom:1px solid #eef1f5">${vatAmt!==null?fmt(vatAmt):'—'}</td>
+      <td style="padding:${DP('10px 10px')};font-size:${SZ(13,'table')}px;font-weight:700;text-align:right;white-space:nowrap;color:${TH.dark};border-bottom:1px solid #eef1f5">${fmt(c.tp)}</td>`}
+    </tr>`;});
+    const cellBhd='border-right:1px solid rgba(255,255,255,.18)';
+    const shortSection=(s.items||[]).length<=5&&(s.items||[]).reduce((n,it)=>n+((it.desc||'').length),0)<=300;
+    const conceptHTML=(s.image||s.blurb)?`<div style="display:flex;gap:16px;align-items:center;margin:20px 0 2px;page-break-inside:avoid">
+      ${s.image?`<img src="${esc(s.image)}" style="width:220px;height:140px;object-fit:cover;border-radius:8px;border:1px solid #e2e6ec;flex:0 0 auto">`:''}
+      ${s.blurb?`<div style="flex:1;font-size:${SZ(12,'body')}px;color:#555;line-height:1.6;font-style:italic">${esc(s.blurb)}</div>`:''}
+    </div>`:'';
+    sectionBlocks.push(`<div style="${shortSection?'page-break-inside:avoid':''}">
+    ${conceptHTML}
+    <div style="display:inline-block;background:${TH.dark};color:#fff;font-size:${SZ(12,'header')}px;font-weight:800;padding:7px 16px;border-radius:6px;margin:${conceptHTML?'10px':'20px'} 0 12px;text-transform:uppercase;letter-spacing:.04em;page-break-after:avoid">${esc(s.name)}</div>
+    <table style="width:100%;border-collapse:collapse;font-size:${SZ(12,'table')}px;margin-bottom:6px;border:1px solid #e2e6ec">
+      <thead><tr style="background:${TH.dark}">
+        <th style="padding:${DP('10px 8px')};text-align:center;width:28px;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">#</th>
+        ${IMG?`<th style="padding:${DP('6px 8px')};text-align:center;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}"></th>`:''}
+        <th style="padding:${DP('10px')};text-align:left;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Brand</th>
+        <th style="padding:${DP('10px')};text-align:left;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Model</th>
+        <th style="padding:${DP('10px')};text-align:left;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Description</th>
+        ${hideP?'':`<th style="padding:${DP('10px')};text-align:right;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Unit (${sym()})</th>`}
+        <th style="padding:${DP('10px 8px')};text-align:center;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Qty</th>
+        <th style="padding:${DP('10px 8px')};text-align:center;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em${hideP?'':';'+cellBhd}">UOM</th>
+        ${hideP?'':`<th style="padding:${DP('10px')};text-align:right;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">VAT</th>
+        <th style="padding:${DP('10px')};text-align:right;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em">Total</th>`}
+      </tr></thead>
+      <tbody>${srows}</tbody>
+    </table>
+    </div>`);
+  });
+  return sectionBlocks;
+}
 function printHTML(forExport){
   const q=A.activeQuote; if(!q)return'';
   const hideP=!!A.printHidePrices;
@@ -4475,43 +4602,8 @@ function printHTML(forExport){
     </div>`;
   }
   os.forEach((o,oi)=>{
-    const T=calcOpt(o); let rn=1; let sectionBlocks=[];
-    (o.sections||[]).forEach(s=>{
-      let srows='';
-      const cellB='border-right:1px solid #e9ecf2';
-      s.items.forEach((it,idx)=>{const c=calcItem(it);const vatAmt=o.vatEnabled?c.tp*((o.vatRate||5)/100):null;srows+=`<tr style="background:${idx%2===0?'#fff':TH.bg};page-break-inside:avoid">
-        <td style="padding:${DP('10px 8px')};font-size:${SZ(11,'table')}px;color:#a8b0bd;text-align:center;${cellB};border-bottom:1px solid #eef1f5">${rn++}</td>
-        ${IMG?`<td style="padding:${DP('4px 6px')};text-align:center;${cellB};border-bottom:1px solid #eef1f5">${it.img?`<div style="width:32px;height:32px;border-radius:4px;border:1px solid #e2e6ec;overflow:hidden;display:inline-block"><img src="${esc(it.img)}" style="width:100%;height:100%;object-fit:contain;display:block"></div>`:''}</td>`:''}
-        <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;white-space:nowrap;${cellB};border-bottom:1px solid #eef1f5">${esc(it.brand)}</td>
-        <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#333;white-space:nowrap;${cellB};border-bottom:1px solid #eef1f5">${esc(it.model)}</td>
-        <td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;color:#555;white-space:pre-line;${cellB};border-bottom:1px solid #eef1f5">${esc(it.desc)}</td>
-        ${hideP?'':`<td style="padding:${DP('10px 10px')};font-size:${SZ(13,'table')}px;font-weight:700;text-align:right;white-space:nowrap;color:${TH.dark};${cellB};border-bottom:1px solid #eef1f5">${fmt(c.up)}</td>`}
-        <td style="padding:${DP('10px 8px')};font-size:${SZ(12,'table')}px;text-align:center;white-space:nowrap;color:#555;${cellB};border-bottom:1px solid #eef1f5">${it.qty||1}</td>
-        <td style="padding:${DP('10px 8px')};font-size:${SZ(11,'table')}px;text-align:center;white-space:nowrap;color:#a8b0bd;${cellB};border-bottom:1px solid #eef1f5">${esc(it.uom||'Pcs')}</td>
-        ${hideP?'':`<td style="padding:${DP('10px 10px')};font-size:${SZ(12,'table')}px;text-align:right;white-space:nowrap;color:#a8b0bd;${cellB};border-bottom:1px solid #eef1f5">${vatAmt!==null?fmt(vatAmt):'—'}</td>
-        <td style="padding:${DP('10px 10px')};font-size:${SZ(13,'table')}px;font-weight:700;text-align:right;white-space:nowrap;color:${TH.dark};border-bottom:1px solid #eef1f5">${fmt(c.tp)}</td>`}
-      </tr>`;});
-      const cellBhd='border-right:1px solid rgba(255,255,255,.18)';
-      const shortSection=(s.items||[]).length<=5&&(s.items||[]).reduce((n,it)=>n+((it.desc||'').length),0)<=300;
-      sectionBlocks.push(`<div style="${shortSection?'page-break-inside:avoid':''}">
-      <div style="display:inline-block;background:${TH.dark};color:#fff;font-size:${SZ(12,'header')}px;font-weight:800;padding:7px 16px;border-radius:6px;margin:20px 0 12px;text-transform:uppercase;letter-spacing:.04em;page-break-after:avoid">${esc(s.name)}</div>
-      <table style="width:100%;border-collapse:collapse;font-size:${SZ(12,'table')}px;margin-bottom:6px;border:1px solid #e2e6ec">
-        <thead><tr style="background:${TH.dark}">
-          <th style="padding:${DP('10px 8px')};text-align:center;width:28px;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">#</th>
-          ${IMG?`<th style="padding:${DP('6px 8px')};text-align:center;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}"></th>`:''}
-          <th style="padding:${DP('10px')};text-align:left;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Brand</th>
-          <th style="padding:${DP('10px')};text-align:left;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Model</th>
-          <th style="padding:${DP('10px')};text-align:left;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Description</th>
-          ${hideP?'':`<th style="padding:${DP('10px')};text-align:right;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Unit (${sym()})</th>`}
-          <th style="padding:${DP('10px 8px')};text-align:center;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">Qty</th>
-          <th style="padding:${DP('10px 8px')};text-align:center;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em${hideP?'':';'+cellBhd}">UOM</th>
-          ${hideP?'':`<th style="padding:${DP('10px')};text-align:right;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em;${cellBhd}">VAT</th>
-          <th style="padding:${DP('10px')};text-align:right;width:1%;white-space:nowrap;font-weight:700;color:#fff;font-size:${SZ(11,'table')}px;text-transform:uppercase;letter-spacing:.03em">Total</th>`}
-        </tr></thead>
-        <tbody>${srows}</tbody>
-      </table>
-      </div>`);
-    });
+    const T=calcOpt(o);
+    const sectionBlocks=buildOptionSectionBlocks(o,TH,IMG,hideP);
     html+=`<div class="print-doc" style="font-family:${getPrintFont().css};${oi>0?(multi?'margin-top:28px':'margin-top:40px;page-break-before:always'):''}">
       <div style="height:7px;background:${TH.dark}"></div>
       <div class="pcard-body">
@@ -7204,6 +7296,22 @@ async function loadCompanyProfile(){
       <div class="fld" style="flex:1"><label>Founded year</label><input id="cpFoundedYear" type="number" value="${esc(p.founded_year||'')}" placeholder="2015"></div>
       <div class="fld" style="flex:2"><label>Notable clients</label><input id="cpNotableClients" value="${esc(p.notable_clients||'')}" placeholder="ADNOC, Etihad Rail, Yokogawa"></div>
     </div>
+    ${hasFeature('proposal_builder')?`
+    <div style="font-weight:600;font-size:14px;margin:18px 0 4px;border-top:1px solid var(--gray-100);padding-top:16px">Proposal Builder content library</div>
+    <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px">Write this once -- it's reused automatically on every quote's Professional Proposal. One line per bullet for the three "bullets" fields below.</div>
+    <div class="fld"><label>About Us (paragraph)</label><textarea id="cpAboutUs" rows="3" placeholder="Sysconic Technologies is a UAE-based systems integrator specialising in...">${esc(p.about_us_text||'')}</textarea></div>
+    <div class="fld"><label>Why Us (one bullet per line)</label><textarea id="cpWhyUs" rows="4" placeholder="Tier-one technology partners: Authorised partnerships with...&#10;Certified engineering team: Factory-trained installation and...">${esc(p.why_us_bullets||'')}</textarea></div>
+    <div style="display:flex;gap:12px">
+      <div class="fld" style="flex:1"><label>Scope of Work — our scope (one bullet per line)</label><textarea id="cpScopeOurs" rows="4" placeholder="Design & Engineering — Site survey verification...&#10;Supply & Logistics — Procurement, factory quality...">${esc(p.scope_ours_bullets||'')}</textarea></div>
+      <div class="fld" style="flex:1"><label>Scope of Work — client's scope (one bullet per line)</label><textarea id="cpScopeClient" rows="4" placeholder="Civil & Structural — Civil works, digging...&#10;Power & Network — Dedicated electrical supply...">${esc(p.scope_client_bullets||'')}</textarea></div>
+    </div>
+    <div class="fld"><label>Warranty & Support (paragraph)</label><textarea id="cpWarrantyText" rows="3" placeholder="All equipment supplied under this proposal is covered by a comprehensive warranty against manufacturing defects...">${esc(p.warranty_text||'')}</textarea></div>
+    <div style="display:flex;gap:12px">
+      <div class="fld" style="flex:1"><label>Default validity (days)</label><input id="cpValidityDays" value="${esc(p.default_validity_days||'')}" placeholder="30"></div>
+      <div class="fld" style="flex:1"><label>Default delivery timeline</label><input id="cpDeliveryWeeks" value="${esc(p.default_delivery_weeks||'')}" placeholder="4 - 6 weeks"></div>
+    </div>
+    <div class="fld"><label>Default payment terms</label><input id="cpPaymentTerms" value="${esc(p.default_payment_terms||'')}" placeholder="50% advance on order confirmation, 50% on completion and handover"></div>
+    `:''}
     <button class="btn btn-navy" onclick="saveCompanyProfile()">Save</button>
   `;
 }
@@ -7235,7 +7343,18 @@ async function saveCompanyProfile(){
     certifications:    document.getElementById('cpCertifications').value,
     founded_year:      document.getElementById('cpFoundedYear').value,
     notable_clients:   document.getElementById('cpNotableClients').value,
+    // Proposal Builder content library -- only present in the DOM when
+    // hasFeature('proposal_builder') is true, so read defensively.
+    about_us_text:        document.getElementById('cpAboutUs')?.value,
+    why_us_bullets:        document.getElementById('cpWhyUs')?.value,
+    scope_ours_bullets:    document.getElementById('cpScopeOurs')?.value,
+    scope_client_bullets:  document.getElementById('cpScopeClient')?.value,
+    warranty_text:         document.getElementById('cpWarrantyText')?.value,
+    default_validity_days: document.getElementById('cpValidityDays')?.value,
+    default_delivery_weeks:document.getElementById('cpDeliveryWeeks')?.value,
+    default_payment_terms: document.getElementById('cpPaymentTerms')?.value,
   };
+  Object.keys(body).forEach(k=>{if(body[k]===undefined)delete body[k];}); // don't send fields that weren't rendered
   const r=await api('PUT','/api/auth/company-profile',body);
   if(r.error){alert(r.error);return;}
   PRINTCO=null; // invalidate the Print tab's cached copy so it refetches fresh data
@@ -7247,25 +7366,72 @@ function platformHTML(){return`<div class="card">
   <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px">Every company using this platform. Suspending a company blocks their team from logging in (existing sessions may remain valid for a short while) until reactivated.</div>
   <div id="platformList"><div style="color:var(--gray-500)">Loading…</div></div>
 </div>`;}
+// Catalog of per-company add-on flags stored in companies.features (JSONB) and
+// checked client-side via hasFeature(). Kept as one list so the Platform
+// "Features" modal below and any future flag both show up here -- add a new
+// module's flag key + label to this map and it's immediately toggleable from
+// the UI instead of needing a manual SQL update.
+const FEATURE_CATALOG={
+  projects:'Projects',
+  project_performance:'Project Performance',
+  vouchers:'Payment Vouchers',
+  workflowEngine:'Workflow Engine (approvals)',
+  delivery_challans:'Delivery Challans',
+  fsm_module:'Field Service Management',
+  testimonials:'Testimonials',
+  diagrams:'AI System Diagrams',
+  proposal_builder:'Professional Proposal Builder (paid add-on)',
+};
+let PLATFORM_COMPANIES=[];
 async function loadPlatformCompanies(){
   const el=document.getElementById('platformList');if(!el)return;
   const r=await api('GET','/api/platform/companies');
   if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
   const list=r.companies||[];
+  PLATFORM_COMPANIES=list;
   if(!list.length){el.innerHTML='<div style="color:var(--gray-500)">No companies yet.</div>';return;}
-  el.innerHTML=`<div class="prod-hd" style="grid-template-columns:1.3fr 80px 80px 80px 100px 110px 100px 140px"><div>Company</div><div>Plan</div><div>Users</div><div>Quotes</div><div>Status</div><div>Created</div><div></div><div></div></div>`+
-    list.map(co=>`<div class="prod-row" style="grid-template-columns:1.3fr 80px 80px 80px 100px 110px 100px 140px">
+  el.innerHTML=`<div class="prod-hd" style="grid-template-columns:1.3fr 80px 80px 80px 100px 110px 100px 100px 140px"><div>Company</div><div>Plan</div><div>Users</div><div>Quotes</div><div>Status</div><div>Created</div><div></div><div></div><div></div></div>`+
+    list.map(co=>`<div class="prod-row" style="grid-template-columns:1.3fr 80px 80px 80px 100px 110px 100px 100px 140px">
       <div data-label="Company">${esc(co.name)}<div style="font-size:12px;color:var(--gray-500)">${esc(co.slug||'')}</div><div style="font-size:12px;color:var(--gray-500);margin-top:4px">Admin${(co.admins||[]).length===1?'':'s'}: ${(co.admins&&co.admins.length)?co.admins.map(a=>esc(a.name||a.email)+' ('+esc(a.email)+')').join(', '):'—'}</div></div>
       <div data-label="Plan" style="font-size:13px;color:var(--gray-500)">${esc(co.plan||'free')}</div>
       <div data-label="Users" style="font-size:13px;color:var(--gray-500)">${co.user_count}</div>
       <div data-label="Quotes" style="font-size:13px;color:var(--gray-500)">${co.quote_count}</div>
       <div data-label="Status" style="font-size:12px;color:${co.status==='suspended'?'var(--red)':'var(--green)'}">${co.status==='suspended'?'Suspended':'Active'}</div>
       <div data-label="Created" style="font-size:12px;color:var(--gray-500)">${co.created_at?new Date(co.created_at).toLocaleDateString():''}</div>
+      <div><button class="btn btn-sm" onclick="showCompanyFeaturesModal('${co.id}')" title="Enable or disable per-company add-ons">⚙ Features</button></div>
       <div><button class="btn btn-sm" onclick="showInviteToCompanyModal('${co.id}','${esc(co.name).replace(/'/g,"&#39;")}')">Invite</button></div>
       <div>${co.status==='suspended'
         ?`<button class="btn btn-sm" onclick="reactivateCompany('${co.id}')">Reactivate</button>`
         :`<button class="btn btn-sm btn-red" onclick="suspendCompany('${co.id}')">Suspend</button>`}</div>
     </div>`).join('');
+}
+function showCompanyFeaturesModal(cid){
+  const co=PLATFORM_COMPANIES.find(c=>c.id===cid);if(!co)return;
+  const current=co.features||{};
+  const rows=Object.entries(FEATURE_CATALOG).map(([key,label])=>`
+    <label style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--gray-100);cursor:pointer">
+      <input type="checkbox" id="feat-${key}" ${current[key]?'checked':''} style="width:16px;height:16px">
+      <span style="font-size:14px;color:var(--gray-900)">${esc(label)}</span>
+    </label>`).join('');
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="coFeatOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('coFeatOverlay').remove()">
+    <div class="modal">
+      <div class="modal-title">Features — ${esc(co.name)}</div>
+      <div class="modal-sub">Toggle which paid add-ons and modules this company has access to. Changes apply the next time their team signs in (or on their next token refresh).</div>
+      <div id="coFeatErr" class="auth-err" style="display:none"></div>
+      <div style="margin:6px 0 4px">${rows}</div>
+      <div class="modal-actions">
+        <button class="btn" onclick="document.getElementById('coFeatOverlay').remove()">Cancel</button>
+        <button class="btn btn-navy" onclick="saveCompanyFeatures('${cid}')">Save</button>
+      </div>
+    </div></div>`);
+}
+async function saveCompanyFeatures(cid){
+  const features={};
+  Object.keys(FEATURE_CATALOG).forEach(key=>{features[key]=!!document.getElementById(`feat-${key}`)?.checked;});
+  const r=await api('POST',`/api/platform/companies/${cid}/features`,{features});
+  if(r.error){const e=document.getElementById('coFeatErr');e.textContent=r.error;e.style.display='block';return;}
+  document.getElementById('coFeatOverlay').remove();
+  loadPlatformCompanies();
 }
 function showInviteToCompanyModal(cid,coName){
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="platInviteOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('platInviteOverlay').remove()">
