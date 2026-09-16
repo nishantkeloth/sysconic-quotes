@@ -234,12 +234,12 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 
 /* ── Column headers ── */
 .col-hd{display:grid;padding:9px 14px;background:var(--navy);border-radius:8px 8px 0 0;font-size:12px;font-weight:700;color:rgba(255,255,255,.85);text-transform:uppercase;letter-spacing:.05em}
-.col-hd.int{grid-template-columns:46px 28px 90px 130px 80px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 55px 95px 115px 128px 28px;min-width:1394px;font-size:10.5px;letter-spacing:.02em}
+.col-hd.int{grid-template-columns:46px 28px 90px 130px 80px minmax(140px,1fr) 75px 80px 65px 85px 55px 70px 85px 45px 55px 95px 115px 128px 28px;min-width:1539px;font-size:10.5px;letter-spacing:.02em}
 .col-hd.int div{padding:0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-right:1px solid rgba(255,255,255,.15)}
 .col-hd.int div:last-child{border-right:none}
 .item-row.int>*{border-right:1px solid var(--gray-100)}
 .item-row.int>*:last-child{border-right:none}
-.col-hd.int.img{grid-template-columns:46px 28px 44px 90px 130px 80px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 55px 95px 115px 128px 28px;min-width:1438px}
+.col-hd.int.img{grid-template-columns:46px 28px 44px 90px 130px 80px minmax(140px,1fr) 75px 80px 65px 85px 55px 70px 85px 45px 55px 95px 115px 128px 28px;min-width:1583px}
 .col-hd.cli{grid-template-columns:28px 90px 140px 1fr 60px 55px 95px 115px 28px}
 .col-hd.cli.img{grid-template-columns:28px 44px 90px 140px 1fr 60px 55px 95px 115px 28px}
 .col-hd div{padding:0 5px}
@@ -250,10 +250,10 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .item-row{display:grid;padding:9px 14px;align-items:start;border-bottom:1px solid var(--gray-100);transition:background .12s}
 .item-row:last-child{border-bottom:none}
 .item-row:hover{background:#f5f8ff}
-.item-row.int{grid-template-columns:46px 28px 90px 130px 80px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 55px 95px 115px 128px 28px;min-width:1394px}
+.item-row.int{grid-template-columns:46px 28px 90px 130px 80px minmax(140px,1fr) 75px 80px 65px 85px 55px 70px 85px 45px 55px 95px 115px 128px 28px;min-width:1539px}
 .item-row.int input[type=number]{padding:7px 5px;font-size:13px}
 .item-row.int .icalc{font-size:13px}
-.item-row.int.img{grid-template-columns:46px 28px 44px 90px 130px 80px minmax(140px,1fr) 75px 85px 55px 70px 85px 45px 55px 95px 115px 128px 28px;min-width:1438px}
+.item-row.int.img{grid-template-columns:46px 28px 44px 90px 130px 80px minmax(140px,1fr) 75px 80px 65px 85px 55px 70px 85px 45px 55px 95px 115px 128px 28px;min-width:1583px}
 .item-row.cli{grid-template-columns:28px 90px 140px 1fr 60px 55px 95px 115px 28px}
 .item-row.cli.img{grid-template-columns:28px 44px 90px 140px 1fr 60px 55px 95px 115px 28px}
 .item-row>*{padding:0 5px}
@@ -1570,8 +1570,8 @@ const fmtC=n=>A.cur+' '+fmt(n);
 const sym=()=>A.cur;
 
 // ── Data factories ───────────────────────────────────────────────────────────
-function mkItem(brand='',model='',desc='',qty=1,cost=0,disc=0,margin=0.2,discAdd=0,costUsd=0,vendor='',uom='Pcs'){
-  return{id:uid(),brand,model,desc,qty,cost,disc,margin,discAdd,costUsd,vendor,uom};
+function mkItem(brand='',model='',desc='',qty=1,cost=0,disc=0,margin=0.2,discAdd=0,costUsd=0,vendor='',uom='Pcs',supplierDisc=0,regCost=0){
+  return{id:uid(),brand,model,desc,qty,cost,disc,margin,discAdd,costUsd,vendor,uom,supplierDisc,regCost};
 }
 function mkOption(label='Option 1'){
   return{id:uid(),label,customer:'',ref:'QT-2026-001',
@@ -1585,11 +1585,18 @@ function mkOption(label='Option 1'){
 
 // ── Calculations ─────────────────────────────────────────────────────────────
 function calcItem(it){
+  // it.cost is "Net Cost" -- what this item actually costs you (Reg-Cost x
+  // (1-Sup-Disc%), or typed directly). Disc%/Add.Disc% are discounts given
+  // TO THE CUSTOMER, so they reduce the sell price (cad -> Unit Price) but
+  // never your actual cost -- gross profit/cost totals (tgp/tc below) use
+  // the true Net Cost, not the customer-discounted basis, so a customer
+  // discount correctly shows up as reduced margin rather than being
+  // invisible in cost/GP reporting.
   const cad=it.cost*(1-(it.disc||0)/100)*(1-(it.discAdd||0)/100);
   const pct=it.margin||0.2;
   const pt=A.activeQuote?.pricing_type||'markup';
   const up=Math.round(pt==='margin'?cad/(1-Math.min(0.95,Math.max(0,pct))):cad*(1+pct));
-  return{cad,up,tp:up*(it.qty||1),tgp:(up-cad)*(it.qty||1),tc:cad*(it.qty||1)};
+  return{cad,up,tp:up*(it.qty||1),tgp:(up-it.cost)*(it.qty||1),tc:it.cost*(it.qty||1)};
 }
 function liveCalc(el){
   const si=+el.dataset.si,ii=+el.dataset.ii,field=el.dataset.field;
@@ -1597,6 +1604,8 @@ function liveCalc(el){
   let v=parseFloat(el.value);if(isNaN(v))v=0;
   if(field==='cost')it.cost=v;
   else if(field==='costusd'){it.costUsd=v;it.cost=+(v*(A.rate||1)).toFixed(2);}
+  else if(field==='regcost'){it.regCost=v;it.cost=+(v*(1-(it.supplierDisc||0)/100)).toFixed(2);}
+  else if(field==='supdisc'){it.supplierDisc=v;it.cost=+((it.regCost||0)*(1-v/100)).toFixed(2);}
   else if(field==='disc')it.disc=v;
   else if(field==='discadd')it.discAdd=v;
   else if(field==='margin')it.margin=v/100;
@@ -1626,6 +1635,8 @@ function updateRowCalc(si,ii,activeEl){
   // it.margin correctly, this just makes the visible field reflect it
   // immediately instead of only catching up on the next full redraw.
   setVal(`margin-${si}-${ii}`,((it.margin||0)*100).toFixed(2));
+  setVal(`regcost-${si}-${ii}`,it.regCost||0);
+  setVal(`supdisc-${si}-${ii}`,it.supplierDisc||0);
   const o=opt();
   setText(`vat-${si}-${ii}`,o&&o.vatEnabled?fmtC(c.tp*(o.vatRate||5)/100):'—');
   setText(`total-${si}-${ii}`,fmtC(c.tp));
@@ -2475,7 +2486,7 @@ function cmpSectionHTML(sa,sb){
       sectionChanged=true;
       return;
     }
-    const fields=['brand','model','desc','qty','cost','disc','discAdd','margin'];
+    const fields=['brand','model','desc','qty','regCost','supplierDisc','cost','disc','discAdd','margin'];
     const changed=fields.some(f=>String(ia[f]??'')!==String(ib[f]??''));
     if(changed)sectionChanged=true;
     const cA=calcItem(ia), cB=calcItem(ib);
@@ -4114,7 +4125,7 @@ function editorHTML(){
   (o.sections||[]).forEach((s,si)=>{
     let rn=1;
     const IC=IMG?['']:[];
-    const hds=isInt?['','#',...IC,'Vendor','Model','Brand','Description','USD Cost','Cost','Disc%','Add.Disc%',(A.activeQuote?.pricing_type==='margin'?'Margin%':'Markup%'),'Qty','UOM','Unit Price','VAT','Total','']:['#',...IC,'Brand','Model','Description','Qty','UOM','Unit Price','Total',''];
+    const hds=isInt?['','#',...IC,'Vendor','Model','Brand','Description','Net USD Cost','Reg-Cost','Sup-Disc','Net Cost','Disc%','Add.Disc%',(A.activeQuote?.pricing_type==='margin'?'Margin%':'Markup%'),'Qty','UOM','Unit Price','VAT','Total','']:['#',...IC,'Brand','Model','Description','Qty','UOM','Unit Price','Total',''];
     let rows='';
     s.items.forEach((it,ii)=>{
       const c=calcItem(it);
@@ -4134,8 +4145,10 @@ function editorHTML(){
           </div>
           <textarea class="iinput" oninput="sec(${si}).items[${ii}].brand=this.value;schedSave()" onblur="captureProduct(${si},${ii})" placeholder="Brand">${esc(it.brand)}</textarea>
           <textarea class="iinput" oninput="sec(${si}).items[${ii}].desc=this.value;schedSave()" onblur="syncProductDescription(${si},${ii})" placeholder="Description">${esc(it.desc)}</textarea>
-          <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="costusd" value="${it.costUsd||0}" oninput="liveCalc(this)" onblur="syncProductCost(${si},${ii})" title="Cost in USD — auto-converts to Cost using Rate to AED" placeholder="0">
-          <input class="iinput" type="number" id="cost-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="cost" value="${it.cost}" oninput="liveCalc(this)" onblur="syncProductCost(${si},${ii})" placeholder="0">
+          <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="costusd" value="${it.costUsd||0}" oninput="liveCalc(this)" onblur="syncProductCost(${si},${ii})" title="Net Cost in USD — auto-converts to Net Cost using Rate to AED" placeholder="0">
+          <input class="iinput" type="number" id="regcost-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="regcost" value="${it.regCost||0}" oninput="liveCalc(this)" title="Regular/list cost from the supplier, before their discount — stays fixed until the supplier changes their price list" placeholder="0">
+          <input class="iinput" type="number" id="supdisc-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="supdisc" value="${it.supplierDisc||0}" oninput="liveCalc(this)" title="Supplier's current discount off Reg-Cost — update this whenever the supplier's terms change; recalculates Net Cost automatically" placeholder="0">
+          <input class="iinput" type="number" id="cost-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="cost" value="${it.cost}" oninput="liveCalc(this)" onblur="syncProductCost(${si},${ii})" title="Net Cost — what this item actually costs you. Auto-fills from Reg-Cost × (1-Sup-Disc%), or edit directly." placeholder="0">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="disc" value="${it.disc||0}" oninput="liveCalc(this)" placeholder="0">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="discadd" value="${it.discAdd||0}" oninput="liveCalc(this)" title="Additional discount, applied on top of Disc%" placeholder="0">
           <input class="iinput" type="number" id="margin-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="margin" value="${((it.margin||0.2)*100).toFixed(2)}" step="0.01" oninput="liveCalc(this)" placeholder="20.00">

@@ -129,6 +129,9 @@ def calc_item(it, pricing_type='markup'):
     # (cost x (1+pct), the default) or Margin (cost / (1-pct), capped at 95%)
     # depending on quote.pricing_type. int(x+0.5) == JS Math.round for the
     # positive values seen here (Python's round() half-even would drift).
+    # it['cost'] is already "Net Cost" -- Reg-Cost x (1-Sup-Disc%), applied
+    # client-side at data entry -- so no supplier-discount math happens here.
+    # disc/discAdd are customer-facing discounts applied on top of Net Cost.
     cad = _num(it.get('cost')) * (1 - _num(it.get('disc'))/100.0) * (1 - _num(it.get('discAdd'))/100.0)
     m = _num(it.get('margin'))
     if pricing_type == 'margin':

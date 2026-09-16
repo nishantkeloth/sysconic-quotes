@@ -185,6 +185,8 @@ def _num(v, d=0):
 def calc_item(it, pricing_type='markup'):
     # Mirrors index.html's calcItem(): Markup = cost x (1+pct) (default),
     # Margin = cost / (1-pct) capped at 95%. int(x+0.5) == JS Math.round.
+    # it['cost'] is already "Net Cost" (Reg-Cost x (1-Sup-Disc%), computed
+    # client-side) -- disc/discAdd are customer-facing discounts on top of it.
     cad = _num(it.get('cost')) * (1 - _num(it.get('disc'))/100.0) * (1 - _num(it.get('discAdd'))/100.0)
     m = _num(it.get('margin'))
     if pricing_type == 'margin':
@@ -242,10 +244,10 @@ SCOPE_TIERS = [  # (min_line_items, tier) — checked in order, first match wins
     (0,  'small'),
 ]
 SCOPE_TARGETS = {
-    'small':      {'feature_cards': 4, 'scope_cards': 4, 'control_testing': 2, 'architecture_items': 6,  'mobilization_phases': 3, 'exclusions': 3},
-    'medium':     {'feature_cards': 4, 'scope_cards': 4, 'control_testing': 2, 'architecture_items': 6,  'mobilization_phases': 4, 'exclusions': 3},
-    'large':      {'feature_cards': 6, 'scope_cards': 6, 'control_testing': 3, 'architecture_items': 9,  'mobilization_phases': 5, 'exclusions': 4},
-    'enterprise': {'feature_cards': 8, 'scope_cards': 8, 'control_testing': 4, 'architecture_items': 12, 'mobilization_phases': 6, 'exclusions': 5},
+    'small':      {'feature_cards': 4, 'scope_cards': 4, 'control_testing': 2, 'mobilization_phases': 3, 'exclusions': 3},
+    'medium':     {'feature_cards': 4, 'scope_cards': 4, 'control_testing': 2, 'mobilization_phases': 4, 'exclusions': 3},
+    'large':      {'feature_cards': 6, 'scope_cards': 6, 'control_testing': 3, 'mobilization_phases': 5, 'exclusions': 4},
+    'enterprise': {'feature_cards': 8, 'scope_cards': 8, 'control_testing': 4, 'mobilization_phases': 6, 'exclusions': 5},
 }
 
 def _scope_tier(equipment_summary):
@@ -291,14 +293,43 @@ def _company_facts_block(company):
         return ''
     return "\n\nCOMPANY FACTS -- this company has provided the following real policies and information. Ground the relevant sections in these facts instead of inventing your own generic equivalents; never contradict them:\n" + "\n\n".join(lines)
 
-def _build_system_prompt(tier, targets, company=None):
+def _solution_groups_block(groups):
+    """Renders the quote's REAL bill-of-materials sections (see 'groups' in
+    get_equipment_summary) as an instruction block naming the exact section
+    names the AI must use as solution_sections keys. This is what makes the
+    generated proposal organize itself around whatever is actually in THIS
+    quote (a Lobby LED Wall here, a rack-mount AV switcher there) instead of
+    always describing a generic, fixed set of subsystems -- mirrors how a
+    manually-written proposal is structured one write-up per real package,
+    each grounded in its own brands/models, never invented ones."""
+    if not groups:
+        return ''
+    lines = []
+    for g in groups:
+        bits = []
+        for v in g['variants']:
+            label = f" [{v['option_label']}]" if len(g['variants']) > 1 and v.get('option_label') else ''
+            desc = ', '.join(v['models']) if v['models'] else (', '.join(v['brands']) or 'no items yet')
+            bits.append(f"{desc}{label}")
+        lines.append(f'- "{g["name"]}": ' + ' | '.join(bits))
+    return ("\n\nREAL SOLUTION SECTIONS from this quote's bill of materials -- these are the exact "
+            "packages you must write about, one per section. Use these EXACT strings as the keys "
+            "of solution_sections below (character-for-character, do not rename, translate, merge, "
+            "reorder, or split them, and do not add or omit any):\n" + "\n".join(lines) +
+            "\nWhen a section lists more than one bracketed option, that's the SAME package offered "
+            "as priced alternatives (e.g. two sizes of the same display) -- write ONE shared "
+            "intro/benefits entry for it, not one per option; the priced line items for each option "
+            "are placed automatically and need no mention of price from you.")
+
+def _build_system_prompt(tier, targets, company=None, groups=None):
     summary_len = '2-4 sentences' if tier in ('small', 'medium') else '4-6 sentences, genuinely comprehensive'
-    note_len = '1-2 sentences' if tier in ('small', 'medium') else '2-4 sentences, covering how the subsystems integrate with each other'
     closing = ('Favor conciseness — this is a smaller job and padding it out with generic language will look inflated.'
                if tier == 'small' else
                'Favor genuine depth and specificity throughout — this is a substantial scope and the proposal should read as comprehensive, not a shortened summary.')
     company_facts = _company_facts_block(company)
-    return f"""You are a senior AV/IT solutions consultant drafting the TEXT CONTENT for a professional technical proposal document (not the pricing — that's handled separately). Given a project brief, optional reference material, and a summary of the actual equipment being proposed (brands/models/categories from a real bill of materials), draft compelling, specific, professional proposal content.{company_facts}
+    groups_block = _solution_groups_block(groups)
+    example_key = groups[0]['name'] if groups else 'Example Section Name'
+    return f"""You are a senior AV/IT solutions consultant drafting the TEXT CONTENT for a professional technical proposal document (not the pricing — that's handled separately). Given a project brief, optional reference material, and a summary of the actual equipment being proposed (brands/models/categories from a real bill of materials), draft compelling, specific, professional proposal content.{company_facts}{groups_block}
 
 This project's scope has been assessed as {tier.upper()} based on its real bill of materials (line item count, section count, and brand diversity). {_TIER_GUIDANCE[tier]}
 
@@ -307,12 +338,11 @@ Return ONLY valid JSON matching exactly this shape (no markdown fences, no comme
   "title": "Short punchy solution title, e.g. 'Signage & Interactive Flat Panel (IFP) Solution'",
   "subtitle": "One descriptive line about what the system does and where",
   "stats": [{{"label":"SHORT LABEL","value":"short value e.g. 3 or 20+"}} ...exactly 4 items, derived from the real equipment summary provided...],
-  "executive_summary": "{summary_len} professional paragraph summarizing the solution",
+  "executive_summary": "{summary_len} professional paragraph summarizing the solution, briefly touching every real solution section listed above by name",
   "feature_cards": [{{"title":"...", "description":"1-2 sentences"}} ...exactly {targets['feature_cards']} items, each describing a distinct key component/subsystem actually present in the equipment summary...],
   "scope_cards": [{{"title":"...", "description":"1-2 sentences"}} ...exactly {targets['scope_cards']} items describing distinct scope of work streams (supply, installation, integration, testing, training, etc.)...],
   "control_testing": [{{"title":"...","bullets":["...","..."]}} ...exactly {targets['control_testing']} items — distinct control/testing/assurance topics (e.g. Control & Automation, Testing & Commissioning, and for larger scopes also Redundancy & Failover, Cybersecurity & Network Hardening, Documentation & As-Builts)...],
-  "architecture_items": [{{"label":"Category e.g. Display","value":"brands/models e.g. Samsung QM43C"}} ...exactly {targets['architecture_items']} items, one per distinct subsystem/category actually present in the equipment summary — for larger scopes, break categories out more granularly (e.g. separate Displays / Video Processing / Audio DSP / Amplification / Control / Network / Cabling Infrastructure / Power & Racks) rather than lumping them together...],
-  "architecture_note": "{note_len}",
+  "solution_sections": {{"{example_key}": {{"intro":"1-2 sentences introducing this specific package, grounded in its real brands/models","key_benefits":["...","...","2-3 short bullets specific to this package, not generic"]}} ...one entry per REAL SOLUTION SECTION name listed above, using those exact strings as the object's keys, no more and no fewer...}},
   "mobilization_phases": [{{"title":"Project Initiation","duration":"e.g. 3-5 business days, scaled to this project's real scope","bullets":["...","...","..."]}} ...exactly {targets['mobilization_phases']} phases, standard AV project rollout phases scaled to project complexity...],
   "warranty_years": "e.g. 1 Year or 3 Years, infer from context or default to 1 Year",
   "support_bullets": ["...", "...", "... 4-6 short bullet points of what's covered during warranty (more for larger scopes)"],
@@ -354,7 +384,7 @@ def draft_proposal_content(brief, attachment_text, equipment_summary, currency, 
 
     tier = _scope_tier(equipment_summary)
     targets = SCOPE_TARGETS[tier]
-    system_prompt = _build_system_prompt(tier, targets, company)
+    system_prompt = _build_system_prompt(tier, targets, company, equipment_summary.get('groups'))
 
     user_msg = json.dumps({
         'project_brief': brief[:4000],
@@ -415,19 +445,48 @@ def get_equipment_summary(quote, which):
     brands = {}
     total_qty = 0
     section_names = []
+    # 'groups' -- sections collapsed by exact name (in first-seen order), so a
+    # section that recurs across multiple options (e.g. two lobby LED wall
+    # SIZE options under the same "Lobby LED Wall" name) is treated as one
+    # real-world package with several priced ALTERNATIVES, matching how a
+    # manually-written proposal presents size/spec variants of the same
+    # solution rather than as unrelated packages. Drives draft_proposal_content's
+    # per-section AI narrative (solution_sections) below -- never used for
+    # pricing, which always comes straight from the quote.
+    groups = []
+    group_index = {}
     for o in opts:
         for s in (o.get('sections') or []):
-            if s.get('name'): section_names.append(s['name'])
-            for it in (s.get('items') or []):
+            name = (s.get('name') or '').strip()
+            if name: section_names.append(name)
+            items = s.get('items') or []
+            g_brands = set()
+            g_models = []
+            for it in items:
                 b = (it.get('brand') or '').strip()
-                if b: brands[b] = brands.get(b, 0) + 1
+                m = (it.get('model') or '').strip()
+                if b: brands[b] = brands.get(b, 0) + 1; g_brands.add(b)
+                if b or m: g_models.append(f"{b} {m}".strip())
                 try: total_qty += int(_num(it.get('qty')))
                 except: pass
+            if name:
+                variant = {
+                    'option_label': o.get('label') or '',
+                    'brands': sorted(g_brands),
+                    'models': g_models[:8],  # cap so a huge section doesn't balloon the prompt payload
+                    'item_count': len(items),
+                }
+                if name not in group_index:
+                    group_index[name] = len(groups)
+                    groups.append({'name': name, 'variants': [variant]})
+                else:
+                    groups[group_index[name]]['variants'].append(variant)
     return {
         'sections': section_names,
         'brands': sorted(brands.keys()),
         'total_line_items': sum(len(s.get('items') or []) for o in opts for s in (o.get('sections') or [])),
         'total_qty': total_qty,
+        'groups': groups,
     }, opts
 
 # ── Small flowable builders (Etihad-Rail-reference-style visual language) ──────
@@ -743,6 +802,56 @@ def bom_table(sections, CW, cur, with_price, pricing_type='markup', TH=None, img
         tbl.setStyle(TableStyle(style))
         flow.append(tbl); flow.append(Spacer(1, 5*mm))
     return flow
+
+def _group_opt_sections(opts):
+    """Groups every option's sections by exact name, in first-seen order --
+    the render-time counterpart to get_equipment_summary()'s 'groups', but
+    computed straight from the real `opts` the PDF is already building from
+    (never from AI-drafted content), so the Proposed Solutions layout below
+    can never disagree with what's actually being priced. A name that recurs
+    across options (e.g. two lobby LED wall SIZE options under one "Lobby LED
+    Wall" section name) comes back as one entry with multiple (option, section)
+    pairs -- rendered as one narrative with several priced sub-tables, one per
+    option, matching how a manually-written proposal presents size/spec
+    alternatives of the same package."""
+    order = []
+    by_name = {}
+    for o in opts:
+        for s in (o.get('sections') or []):
+            name = (s.get('name') or '').strip()
+            if not name:
+                continue
+            if name not in by_name:
+                by_name[name] = []
+                order.append(name)
+            by_name[name].append((o, s))
+    return [(name, by_name[name]) for name in order]
+
+def _section_total_box(section, pricing_type, cur, o, TH, CW):
+    """Per-section Subtotal / VAT / Package total incl. VAT box -- the same
+    real-data calc_item()/VAT logic as calc_opt() (never AI-invented), just
+    scoped to one BOM section's own items instead of a whole option, so each
+    package in Proposed Solutions carries its own price recap the way a
+    manually-written proposal breaks out price per package (see calc_opt)."""
+    ts = sum(calc_item(it, pricing_type)[1] for it in (section.get('items') or []))
+    vat_on = bool(o.get('vatEnabled'))
+    rate = _num(o.get('vatRate') or 5)
+    vat = ts * rate / 100.0 if vat_on else 0.0
+    grand = ts + vat
+    S_b = ParagraphStyle('sect_b', fontName='Helvetica', fontSize=8.5, textColor=TH['txt'])
+    S_br = ParagraphStyle('sect_br', parent=S_b, alignment=TA_RIGHT)
+    rows = [
+        [Paragraph('Subtotal', S_b), Paragraph(f"{cur} {fmt(ts)}", S_br)],
+        [Paragraph(f"VAT {rate:g}%" if vat_on else "VAT", S_b),
+         Paragraph(f"{cur} {fmt(vat)}" if vat_on else "Not applied", S_br)],
+        [Paragraph('<b>Package total incl. VAT</b>', ParagraphStyle('sect_g', parent=S_b, textColor=white, fontSize=9.5)),
+         Paragraph(f"<b>{cur} {fmt(grand)}</b>", ParagraphStyle('sect_g2', parent=S_br, textColor=white, fontSize=9.5))],
+    ]
+    t = Table(rows, colWidths=[CW*0.72, CW*0.28])
+    t.setStyle(TableStyle([('BOX',(0,0),(-1,1),0.6,TH['grayb']),('LINEBELOW',(0,0),(-1,1),0.4,TH['grayb']),
+                           ('BACKGROUND',(0,2),(-1,2),TH['navy']),('TOPPADDING',(0,0),(-1,-1),5),
+                           ('BOTTOMPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),10)]))
+    return KeepTogether(t)
 
 # ── Cover page (drawn directly on the canvas — content is fixed, not flowing) ───
 MAX_COVER_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB decoded
@@ -1305,22 +1414,47 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
             t.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('RIGHTPADDING',(0,0),(-1,-1),8),('BOTTOMPADDING',(0,0),(-1,-1),8)]))
             E.append(t)
 
-        if _section_on(content, 'system_design') and content.get('architecture_items'):
+        # Proposed Solutions -- one write-up per REAL bill-of-materials section
+        # (see _group_opt_sections/get_equipment_summary's 'groups'), each with
+        # its own AI-written intro + key benefits (grounded in that section's
+        # real brands/models, see solution_sections in _build_system_prompt)
+        # immediately followed by that section's own priced bill of quantities
+        # and a per-package Subtotal/VAT/Total box. Replaces the old flat
+        # "Solution Architecture" grid (one generic label/value list for the
+        # whole BOM) and the separate "Bill of Materials" dump later in this
+        # function -- this is what makes the generated document organize
+        # itself around whatever is actually in THIS quote instead of always
+        # reading the same regardless of scope, matching how a manually
+        # written proposal presents one package at a time. The narrative
+        # (intro/benefits) is gated by the 'system_design' toggle same as
+        # before; the priced tables always render regardless of that toggle,
+        # same as the old unconditional Bill of Materials section did.
+        groups_render = _group_opt_sections(opts)
+        sol_map = content.get('solution_sections') or {}
+        show_solution_narrative = _section_on(content, 'system_design')
+        if groups_render:
             E.append(PageBreak())
-            E += [section_badge('SYSTEM DESIGN', TH)] + heading('Solution Architecture', S, TH)
-            # No cap here (previously hardcoded to [:6]) -- the grid below
-            # already wraps to as many rows of 3 as needed, so a larger-scope
-            # proposal's extra architecture_items (see SCOPE_TARGETS) render
-            # in full instead of being silently cut off past the 6th.
-            items = content['architecture_items']
-            S_al = ParagraphStyle('al', fontName='Helvetica-Bold', fontSize=8.5, textColor=TH['navy'])
-            S_av = ParagraphStyle('av', fontName='Helvetica', fontSize=8, textColor=TH['txt'], leading=10)
-            def _arch_cell(it):
-                return [Paragraph(f"<b>{esc_p(it.get('label',''))}</b>", S_al), Spacer(1, 1.5*mm),
-                        Paragraph(esc_p(it.get('value','')), S_av)]
-            E.append(_fixed_col_grid(items, CW, 3, _arch_cell, TH=TH, colgap=3*mm, pad=8, box_w=0.5))
-            if content.get('architecture_note'):
-                E.append(Spacer(1, 2*mm)); E.append(Paragraph(content['architecture_note'], S['body']))
+        for gi, (gname, pairs) in enumerate(groups_render):
+            if gi > 0: E.append(PageBreak())
+            E += [section_badge('SOLUTION', TH)] + heading(esc_p(gname), S, TH)
+            if show_solution_narrative:
+                sec_info = sol_map.get(gname) or {}
+                if sec_info.get('intro'):
+                    E.append(Paragraph(esc_p(sec_info['intro']), S['body']))
+                    E.append(Spacer(1, 2*mm))
+                if sec_info.get('key_benefits'):
+                    for b in sec_info['key_benefits']:
+                        E.append(Paragraph(f"•  {esc_p(b)}", S['body']))
+                    E.append(Spacer(1, 3*mm))
+            multi_variant = len(pairs) > 1
+            for o, s in pairs:
+                if multi_variant and o.get('label'):
+                    E.append(Paragraph(f"<b>{esc_p(o['label'])}</b>", ParagraphStyle('gvlabel', fontName='Helvetica-Bold', fontSize=9.5, textColor=TH['navy'])))
+                    E.append(Spacer(1, 1.5*mm))
+                E += bom_table([s], CW, cur, with_price=(kind == 'combined'), pricing_type=pt, TH=TH, img_cache=bom_img_cache)
+                if kind == 'combined':
+                    E.append(_section_total_box(s, pt, cur, o, TH, CW))
+                    E.append(Spacer(1, 4*mm))
 
         # System Schematic: one or more Mermaid diagrams rendered to PNG in the
         # browser (see index.html's diagCodeToPng) and shipped inside content —
@@ -1347,15 +1481,9 @@ def build_proposal_pdf(kind, content, quote, opts, company, logo_bytes, cur, doc
                 E.append(Spacer(1, 3*mm))
                 E.append(img_flow)
 
-        E.append(PageBreak())
-        E += [section_badge('BILL OF MATERIALS', TH)] + heading('Bill of Materials', S, TH)
-        for o in opts:
-            secs = o.get('sections') or []
-            if len(opts) > 1 and o.get('label'):
-                E.append(Paragraph(f"<b>{esc_p(o['label'])}</b>", ParagraphStyle('optl', fontName='Helvetica-Bold', fontSize=11, textColor=TH['navy'])))
-                E.append(Spacer(1, 2*mm))
-            E += bom_table(secs, CW, cur, with_price=(kind == 'combined'), pricing_type=pt, TH=TH, img_cache=bom_img_cache)
-
+        # (Bill of Materials used to be dumped again here as one flat pass
+        # over every section -- removed, since each section's priced table
+        # now renders inline under its own Proposed Solutions write-up above.)
         if kind == 'combined':
             for o in opts:
                 ts, vat_on, rate, vat, grand = calc_opt(o, pt)
@@ -1569,6 +1697,20 @@ def draft_proposal():
         content = draft_proposal_content(brief, attachment_text, equipment_summary, cur, model, company)
     except RuntimeError as e:
         return jsonify({'error': str(e)}), 502
+
+    # Defensive backfill: guarantee every REAL bill-of-materials section has a
+    # solution_sections entry, even if the AI mis-typed a key or dropped one
+    # under token pressure. The PDF renderer iterates the real sections from
+    # `opts` (never from AI-invented ones), so a missing/malformed entry here
+    # would otherwise render a package with no intro/benefits rather than
+    # silently failing -- this just fills the gap with empty strings.
+    sol = content.get('solution_sections')
+    if not isinstance(sol, dict): sol = {}
+    for g in (equipment_summary.get('groups') or []):
+        entry = sol.get(g['name'])
+        if not isinstance(entry, dict):
+            sol[g['name']] = {'intro': '', 'key_benefits': []}
+    content['solution_sections'] = sol
 
     # Quote-level "Professional Proposal" content (set once per quote via the
     # editor's Proposal content popup, stored in quotes.proposal_data) --

@@ -391,7 +391,15 @@ def _numf(v, d=0.0):
         return d
 
 def _calc_item_pp(it, pricing_type):
-    cad = _numf(it.get('cost')) * (1 - _numf(it.get('disc')) / 100.0) * (1 - _numf(it.get('discAdd')) / 100.0)
+    # it['cost'] is already "Net Cost" (Reg-Cost x (1-Sup-Disc%), computed
+    # client-side at data entry) -- the true cost to us. disc/discAdd are
+    # customer-facing discounts: they reduce the sell price (cad -> unit
+    # price) but never our actual cost, so unit_cost/total_cost here use the
+    # true Net Cost rather than the customer-discounted basis -- otherwise a
+    # customer discount would silently look "free" in margin/GP reporting.
+    # Mirrors index.html's calcItem().
+    true_cost = _numf(it.get('cost'))
+    cad = true_cost * (1 - _numf(it.get('disc')) / 100.0) * (1 - _numf(it.get('discAdd')) / 100.0)
     pct = _numf(it.get('margin'), 0.2)
     if pricing_type == 'margin':
         pct = min(0.95, max(0, pct))
@@ -399,7 +407,7 @@ def _calc_item_pp(it, pricing_type):
     else:
         up = round(cad * (1 + pct))
     qty = _numf(it.get('qty'), 1)
-    return {'unit_cost': cad, 'unit_price': up, 'total_price': up * qty, 'total_cost': cad * qty}
+    return {'unit_cost': true_cost, 'unit_price': up, 'total_price': up * qty, 'total_cost': true_cost * qty}
 
 def _freeze_commercial_baseline(company_id, user_id, project_id, quote, option):
     """Called once, the instant a quote transitions to 'awarded'. Freezes the
