@@ -237,7 +237,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .col-hd.int{grid-template-columns:46px 28px 90px 130px 80px minmax(140px,1fr) 75px 80px 65px 85px 55px 70px 85px 45px 55px 95px 115px 128px 28px;min-width:1539px;font-size:10.5px;letter-spacing:.02em}
 .col-hd.int div{padding:0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-right:1px solid rgba(255,255,255,.15)}
 .col-hd.int div:last-child{border-right:none}
-.item-row.int>*{border-right:1px solid var(--gray-100)}
+.item-row.int>*{border-right:1px solid var(--gray-100);min-width:0}
 .item-row.int>*:last-child{border-right:none}
 .col-hd.int.img{grid-template-columns:46px 28px 44px 90px 130px 80px minmax(140px,1fr) 75px 80px 65px 85px 55px 70px 85px 45px 55px 95px 115px 128px 28px;min-width:1583px}
 .col-hd.cli{grid-template-columns:28px 90px 140px 1fr 60px 55px 95px 115px 28px}
@@ -268,7 +268,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .iinput.editable-calc{background:var(--navy-light);color:var(--navy);font-weight:600;border-color:var(--navy-mid)}
 .iinput.editable-calc:hover{background:#c8d8f0;border-color:var(--navy)}
 .iinput.editable-calc:focus{background:var(--white);box-shadow:0 0 0 3px rgba(26,60,110,.12)}
-.icalc{padding:7px 8px;font-size:14px;font-weight:700;text-align:right;border-radius:6px;white-space:nowrap;font-family:'Courier New',monospace}
+.icalc{padding:7px 8px;font-size:14px;font-weight:700;text-align:right;border-radius:6px;white-space:nowrap;font-family:'Courier New',monospace;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .icalc.total{color:var(--navy);background:var(--navy-light);border:1px solid var(--navy-mid)}
 .icalc.gp{color:var(--green);background:var(--green-light);border:1px solid #6ee7b7}
 .icalc.cost{color:var(--gray-700);background:var(--gray-100);border:1px solid var(--gray-200)}
@@ -342,9 +342,9 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .img-opt:hover{border-color:var(--navy);box-shadow:0 2px 8px rgba(26,60,110,.15)}
 .img-opt img{width:100%;height:92px;object-fit:contain;background:#fff}
 .img-src{font-size:10px;color:var(--gray-500);padding:4px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-top:1px solid var(--gray-100)}
-.prod-hd{display:grid;grid-template-columns:44px 100px 150px 100px 1fr 80px 70px 110px;padding:9px 12px;background:var(--navy);border-radius:8px 8px 0 0;font-size:12px;font-weight:700;color:rgba(255,255,255,.85);text-transform:uppercase;letter-spacing:.05em}
+.prod-hd{display:grid;grid-template-columns:44px 100px 150px 100px 1fr 75px 65px 80px 70px 110px;padding:9px 12px;background:var(--navy);border-radius:8px 8px 0 0;font-size:12px;font-weight:700;color:rgba(255,255,255,.85);text-transform:uppercase;letter-spacing:.05em}
 .prod-hd div{padding:0 5px}
-.prod-row{display:grid;grid-template-columns:44px 100px 150px 100px 1fr 80px 70px 110px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--gray-100);font-size:14px}
+.prod-row{display:grid;grid-template-columns:44px 100px 150px 100px 1fr 75px 65px 80px 70px 110px;align-items:center;padding:8px 12px;border-bottom:1px solid var(--gray-100);font-size:14px}
 .prod-row.inactive{opacity:.5}
 .prod-row>div{padding:0 5px;overflow:hidden}
 .prod-row:hover{background:#f5f8ff}
@@ -1628,7 +1628,7 @@ function updateRowCalc(si,ii,activeEl){
   const c=calcItem(it);
   const setVal=(id,val)=>{const el=document.getElementById(id);if(el&&el!==activeEl)el.value=val;};
   const setText=(id,val)=>{const el=document.getElementById(id);if(el)el.textContent=val;};
-  setText(`cost-${si}-${ii}`,fmtC(it.cost));
+  setText(`cost-${si}-${ii}`,fmt(it.cost));
   setVal(`unitprice-${si}-${ii}`,c.up);
   // Keeps the Markup%/Margin% box in sync whenever Unit Price is hand-edited
   // to hit a rounded/adjusted figure — liveCalc() already back-calculates
@@ -4148,7 +4148,7 @@ function editorHTML(){
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="costusd" value="${it.costUsd||0}" oninput="liveCalc(this)" onblur="syncProductCost(${si},${ii})" title="Reg Cost in USD — auto-converts to Reg-Cost using Rate to AED, which then runs through Sup-Disc% to compute Net Cost" placeholder="0">
           <input class="iinput" type="number" id="regcost-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="regcost" value="${it.regCost||0}" oninput="liveCalc(this)" onblur="syncProductCost(${si},${ii})" title="Regular/list cost from the supplier, before their discount — stays fixed until the supplier changes their price list" placeholder="0">
           <input class="iinput" type="number" id="supdisc-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="supdisc" value="${it.supplierDisc||0}" oninput="liveCalc(this)" onblur="syncProductCost(${si},${ii})" title="Supplier's current discount off Reg-Cost — update this whenever the supplier's terms change; recalculates Net Cost automatically" placeholder="0">
-          <div class="icalc" id="cost-${si}-${ii}" style="color:var(--gray-500)" title="Net Cost — what this item actually costs you. Computed as Reg-Cost × (1-Sup-Disc%) — read-only, edit Reg-Cost or Sup-Disc to change it.">${fmtC(it.cost)}</div>
+          <div class="icalc" id="cost-${si}-${ii}" style="color:var(--gray-500)" title="Net Cost — what this item actually costs you. Computed as Reg-Cost × (1-Sup-Disc%) — read-only, edit Reg-Cost or Sup-Disc to change it.">${fmt(it.cost)}</div>
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="disc" value="${it.disc||0}" oninput="liveCalc(this)" placeholder="0">
           <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="discadd" value="${it.discAdd||0}" oninput="liveCalc(this)" title="Additional discount, applied on top of Disc%" placeholder="0">
           <input class="iinput" type="number" id="margin-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="margin" value="${((it.margin||0.2)*100).toFixed(2)}" step="0.01" oninput="liveCalc(this)" placeholder="20.00">
@@ -4716,12 +4716,15 @@ async function captureProduct(si,ii){
       if(!brand&&hit.brand){it.brand=hit.brand;fill=true;}
       if(hit.image_url&&it.img!==hit.image_url){it.img=hit.image_url;fill=true;}
       if(!it.desc&&hit.description){it.desc=hit.description;fill=true;}
+      if((!it.regCost||+it.regCost===0)&&+hit.default_reg_cost>0){it.regCost=+hit.default_reg_cost;fill=true;}
+      if((!it.supplierDisc||+it.supplierDisc===0)&&+hit.default_supplier_disc>0){it.supplierDisc=+hit.default_supplier_disc;fill=true;}
       if((!it.cost||+it.cost===0)&&+hit.default_cost>0){it.cost=+hit.default_cost;fill=true;}
+      else if(fill&&(it.regCost||it.supplierDisc)){it.cost=+((it.regCost||0)*(1-(it.supplierDisc||0)/100)).toFixed(2);}
       schedSave();
       if(fill&&document.activeElement===document.body)draw();else updThumb(si,ii);
       return;
     }
-    const cr=await api('POST','/api/products',{brand,model,description:it.desc||'',default_cost:+it.cost||0,default_margin:+it.margin||0.2});
+    const cr=await api('POST','/api/products',{brand,model,description:it.desc||'',default_cost:+it.cost||0,default_reg_cost:+it.regCost||0,default_supplier_disc:+it.supplierDisc||0,default_margin:+it.margin||0.2});
     if(cr.product){it.product_id=cr.product.id;schedSave();updThumb(si,ii);}
   }catch(e){}
 }
@@ -4735,7 +4738,7 @@ async function captureProduct(si,ii){
 async function syncProductCost(si,ii){
   const it=sec(si)?.items?.[ii];
   if(!it||!it.product_id||!(+it.cost>0))return;
-  try{ await api('POST',`/api/products/${it.product_id}/sync-cost`,{cost:+it.cost}); }catch(e){}
+  try{ await api('POST',`/api/products/${it.product_id}/sync-cost`,{cost:+it.cost,regCost:+it.regCost||0,supplierDisc:+it.supplierDisc||0}); }catch(e){}
 }
 
 // Pushes a quote line's description back to the product it's linked to, if
@@ -4857,7 +4860,10 @@ function pmPick(idx){
   const it=sec(PMD.si)?.items?.[PMD.ii];if(!it)return;
   it.brand=p.brand||'';it.model=p.model||'';
   if(p.description)it.desc=p.description;
-  if(+p.default_cost>0)it.cost=+p.default_cost;
+  if(+p.default_reg_cost>0)it.regCost=+p.default_reg_cost;
+  if(+p.default_supplier_disc>0)it.supplierDisc=+p.default_supplier_disc;
+  if(+p.default_reg_cost>0)it.cost=+((+p.default_reg_cost)*(1-(+p.default_supplier_disc||0)/100)).toFixed(2);
+  else if(+p.default_cost>0)it.cost=+p.default_cost;
   if(p.default_margin!=null)it.margin=+p.default_margin;
   if(p.image_url)it.img=p.image_url;
   it.product_id=p.id;
@@ -5026,14 +5032,16 @@ async function loadProducts(){
   PRODS.list=r.products||[];PRODS.total=r.total||0;
   const cnt=document.getElementById('prodCount');if(cnt)cnt.textContent=`${PRODS.total} product${PRODS.total!==1?'s':''}${PRODS.total>100?' — showing first 100, use search':''}`;
   if(!PRODS.list.length){el.innerHTML=`<div style="padding:28px;text-align:center;color:var(--gray-500)">No products yet.<br><br>Add one manually, import from Excel — or just start quoting: new models are added to the catalog automatically.</div>`;return;}
-  el.innerHTML=`<div class="prod-hd"><div></div><div>Brand</div><div>Model / SKU</div><div>Category</div><div>Description</div><div>Cost</div><div>Margin %</div><div></div></div>`+
+  el.innerHTML=`<div class="prod-hd"><div></div><div>Brand</div><div>Model / SKU</div><div>Category</div><div>Description</div><div>Reg-Cost</div><div>Sup-Disc</div><div>Net Cost</div><div>Margin %</div><div></div></div>`+
     PRODS.list.map(p=>`<div class="prod-row${p.is_active===false?' inactive':''}">
       <div class="prod-thumb ${p.image_url?'':'empty'}" title="${p.image_url?'Change image':'Pick image'}" onclick="openCatalogImage('${p.id}')">${p.image_url?`<img src="${esc(p.image_url)}">`:'📷'}</div>
       <div data-label="Brand">${esc(p.brand)}</div>
       <div data-label="Model">${esc(p.model)}${p.sku?`<div style="color:var(--gray-500);font-size:11px">${esc(p.sku)}</div>`:''}</div>
       <div data-label="Category" style="color:var(--gray-500);font-size:13px">${esc(p.category||'')}</div>
       <div data-label="Description" style="color:var(--gray-500);font-size:13px">${esc((p.description||'').slice(0,90))}${p.is_active===false?' <span style="color:var(--red,#c0392b);font-weight:600">(Inactive)</span>':''}</div>
-      <div data-label="Cost">${(+p.default_cost||0).toFixed(2)} ${esc(p.cost_currency||'AED')}</div>
+      <div data-label="Reg-Cost">${(+p.default_reg_cost||0).toFixed(2)}</div>
+      <div data-label="Sup-Disc">${(+p.default_supplier_disc||0).toFixed(1)}%</div>
+      <div data-label="Net Cost">${(+p.default_cost||0).toFixed(2)} ${esc(p.cost_currency||'AED')}</div>
       <div data-label="Margin %">${((+p.default_margin||0)*100).toFixed(1)}</div>
       <div style="display:flex;gap:6px;justify-content:flex-end"><button class="btn btn-sm" onclick="showProdModal('${p.id}')">Edit</button><button class="btn btn-sm btn-red" onclick="delProduct('${p.id}')">×</button></div>
     </div>`).join('');
@@ -5061,7 +5069,11 @@ async function showProdModal(pid){
       <div class="fld"><label>Description</label><input id="pfDesc" value="${esc(p?.description||'')}" placeholder="SMD1818 black frame LED…"></div>
       <div class="fld"><label>Specs</label><textarea id="pfSpecs" rows="3" placeholder="Pixel pitch, brightness, weight, power draw…">${esc(p?.specs||'')}</textarea></div>
       <div style="display:flex;gap:10px">
-        <div class="fld" style="flex:1"><label>Default cost</label><input id="pfCost" type="number" step="0.01" value="${p?(+p.default_cost||0):''}" placeholder="0.00"></div>
+        <div class="fld" style="flex:1"><label>Default Reg-Cost</label><input id="pfRegCost" type="number" step="0.01" value="${p?(+p.default_reg_cost||0):''}" placeholder="0.00" oninput="pfRecalcNetCost()" title="Regular/list cost from the supplier, before their discount"></div>
+        <div class="fld" style="width:110px"><label>Default Sup-Disc %</label><input id="pfSupDisc" type="number" step="0.1" value="${p?(+p.default_supplier_disc||0):''}" placeholder="0" oninput="pfRecalcNetCost()" title="Supplier's current discount off Reg-Cost"></div>
+      </div>
+      <div style="display:flex;gap:10px">
+        <div class="fld" style="flex:1"><label>Default Net Cost</label><input id="pfCost" type="number" step="0.01" value="${p?(+p.default_cost||0):''}" placeholder="0.00" title="What this product actually costs — auto-fills from Reg-Cost × (1-Sup-Disc%), or edit directly"></div>
         <div class="fld" style="width:110px"><label>Currency</label><select id="pfCurrency">${PROD_CURRENCIES.map(c=>`<option value="${c}" ${((p?.cost_currency||'AED')===c)?'selected':''}>${c}</option>`).join('')}</select></div>
       </div>
       <div class="fld"><label>Default margin %</label><input id="pfMargin" type="number" step="0.1" value="${p?((+p.default_margin||0)*100).toFixed(1):'20'}"></div>
@@ -5077,6 +5089,12 @@ async function showProdModal(pid){
       </div>
     </div></div>`);
 }
+function pfRecalcNetCost(){
+  const rc=+document.getElementById('pfRegCost')?.value||0;
+  const sd=+document.getElementById('pfSupDisc')?.value||0;
+  const costEl=document.getElementById('pfCost');
+  if(costEl&&rc>0)costEl.value=(rc*(1-sd/100)).toFixed(2);
+}
 async function saveProdModal(pid){
   const body={
     brand:document.getElementById('pfBrand').value,
@@ -5085,6 +5103,8 @@ async function saveProdModal(pid){
     category:document.getElementById('pfCategory').value,
     description:document.getElementById('pfDesc').value,
     specs:document.getElementById('pfSpecs').value,
+    default_reg_cost:+document.getElementById('pfRegCost').value||0,
+    default_supplier_disc:+document.getElementById('pfSupDisc').value||0,
     default_cost:+document.getElementById('pfCost').value||0,
     cost_currency:document.getElementById('pfCurrency').value,
     default_margin:(+document.getElementById('pfMargin').value||0)/100,
@@ -5100,8 +5120,8 @@ async function saveProdModal(pid){
 }
 function downloadProdTemplate(){
   const wb=XLSX.utils.book_new();
-  const ws=XLSX.utils.aoa_to_sheet([['BRAND','MODEL','SKU','CATEGORY','DESCRIPTION','COST','MARGIN %'],['Infiled','IL-FISS-ORMV 3.9Pro','INF-FISS-39','LED display','SMD1818 black frame LED, 1000x1000mm cabinet',6299.25,20]]);
-  ws['!cols']=[{wch:16},{wch:26},{wch:16},{wch:16},{wch:50},{wch:12},{wch:10}];
+  const ws=XLSX.utils.aoa_to_sheet([['BRAND','MODEL','SKU','CATEGORY','DESCRIPTION','REG-COST','SUP-DISC %','COST','MARGIN %'],['Infiled','IL-FISS-ORMV 3.9Pro','INF-FISS-39','LED display','SMD1818 black frame LED, 1000x1000mm cabinet',6999.17,10,6299.25,20]]);
+  ws['!cols']=[{wch:16},{wch:26},{wch:16},{wch:16},{wch:50},{wch:12},{wch:12},{wch:12},{wch:10}];
   XLSX.utils.book_append_sheet(wb,ws,'Products');
   XLSX.writeFile(wb,'sysconic-products-template.xlsx');
 }
@@ -5116,13 +5136,15 @@ function importProducts(event){
       for(let i=0;i<Math.min(rows.length,10);i++){const r=rows[i].map(x=>String(x).toUpperCase());if(r.some(x=>x.includes('MODEL'))){hi=i;break;}}
       if(hi===-1){alert('Could not find a MODEL column header in that file.');return;}
       const H=rows[hi].map(x=>String(x).toUpperCase().trim());
-      const col={brand:H.findIndex(h=>h.includes('BRAND')),model:H.findIndex(h=>h.includes('MODEL')),sku:H.findIndex(h=>h.includes('SKU')),category:H.findIndex(h=>h.includes('CATEGORY')),desc:H.findIndex(h=>h.includes('DESC')),cost:H.findIndex(h=>h.includes('COST')||h.includes('MSRP')),margin:H.findIndex(h=>h.includes('MARGIN'))};
+      const col={brand:H.findIndex(h=>h.includes('BRAND')),model:H.findIndex(h=>h.includes('MODEL')),sku:H.findIndex(h=>h.includes('SKU')),category:H.findIndex(h=>h.includes('CATEGORY')),desc:H.findIndex(h=>h.includes('DESC')),regCost:H.findIndex(h=>h.includes('REG-COST')||h.includes('REG COST')||h.includes('REGCOST')),supDisc:H.findIndex(h=>h.includes('SUP-DISC')||h.includes('SUP DISC')||h.includes('SUPPLIER DISC')),cost:H.findIndex(h=>(h.includes('COST')||h.includes('MSRP'))&&!h.includes('REG')),margin:H.findIndex(h=>h.includes('MARGIN'))};
       const products=[];
       for(let i=hi+1;i<rows.length;i++){
         const row=rows[i];if(!row||row.every(x=>x===''||x===null))continue;
         const g=x=>x>=0?String(row[x]??'').trim():'';
         let m=parseFloat(g(col.margin))||0;if(m>1)m=m/100;
-        products.push({brand:g(col.brand),model:g(col.model),sku:g(col.sku),category:g(col.category),description:g(col.desc),default_cost:parseFloat(g(col.cost))||0,default_margin:m||0.2});
+        const regCost=parseFloat(g(col.regCost))||0, supDisc=parseFloat(g(col.supDisc))||0;
+        const plainCost=parseFloat(g(col.cost))||0;
+        products.push({brand:g(col.brand),model:g(col.model),sku:g(col.sku),category:g(col.category),description:g(col.desc),default_reg_cost:regCost,default_supplier_disc:supDisc,default_cost:plainCost||(regCost>0?+(regCost*(1-supDisc/100)).toFixed(2):0),default_margin:m||0.2});
       }
       if(!products.length){alert('No product rows found below the header.');return;}
       if(products.length>500){alert('Maximum 500 rows per import — please split the file.');return;}

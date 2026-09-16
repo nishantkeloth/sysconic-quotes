@@ -135,6 +135,12 @@ def clean_product(d):
     if 'default_cost' in d:
         try: out['default_cost'] = max(0, float(d.get('default_cost') or 0))
         except: out['default_cost'] = 0
+    if 'default_reg_cost' in d:
+        try: out['default_reg_cost'] = max(0, float(d.get('default_reg_cost') or 0))
+        except: out['default_reg_cost'] = 0
+    if 'default_supplier_disc' in d:
+        try: out['default_supplier_disc'] = min(100, max(0, float(d.get('default_supplier_disc') or 0)))
+        except: out['default_supplier_disc'] = 0
     if 'default_margin' in d:
         try: out['default_margin'] = min(0.95, max(0, float(d.get('default_margin') or 0)))
         except: out['default_margin'] = 0.2
@@ -205,6 +211,8 @@ def create_product():
             for k in ('description', 'sku', 'category', 'vendor_part_number', 'lead_time', 'datasheet_url'):
                 if d.get(k) and not hit.get(k): fill[k] = d[k]
             if d.get('default_cost') and not hit.get('default_cost'): fill['default_cost'] = d['default_cost']
+            if d.get('default_reg_cost') and not hit.get('default_reg_cost'): fill['default_reg_cost'] = d['default_reg_cost']
+            if d.get('default_supplier_disc') and not hit.get('default_supplier_disc'): fill['default_supplier_disc'] = d['default_supplier_disc']
             if fill:
                 fill['updated_at'] = 'now()'
                 row = sb.table('products').update(fill).eq('id', hit['id']).execute()
@@ -261,20 +269,44 @@ def sync_product_cost(pid):
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
 
+    body = request.json or {}
     try:
-        cost = max(0, float((request.json or {}).get('cost') or 0))
+        cost = max(0, float(body.get('cost') or 0))
     except (TypeError, ValueError):
         return jsonify({'error': 'Invalid cost'}), 400
-    if cost <= 0:
-        return jsonify({'ok': True, 'updated': False})
+    try:
+        reg_cost = max(0, float(body.get('regCost') or 0))
+    except (TypeError, ValueError):
+        reg_cost = 0
+    try:
+        supplier_disc = min(100, max(0, float(body.get('supplierDisc') or 0)))
+    except (TypeError, ValueError):
+        supplier_disc = 0
 
-    existing = sb.table('products').select('id,default_cost').eq('id', pid).eq('company_id', claims['company_id']).execute()
+    existing = sb.table('products').select('id,default_cost,default_reg_cost,default_supplier_disc') \
+        .eq('id', pid).eq('company_id', claims['company_id']).execute()
     if not existing.data:
         return jsonify({'error': 'Not found'}), 404
-    if float(existing.data[0].get('default_cost') or 0) > 0:
+    row = existing.data[0]
+
+    # Each of the three fields only fills in when the catalog record is
+    # currently missing it -- never overwrites a deliberately set catalog
+    # value just because one quote line (which may carry a special/negotiated
+    # price) happened to be edited. They're independent: a line that only has
+    # Reg-Cost/Sup-Disc set (no separate Net Cost override) can still backfill
+    # those two even if, say, default_cost was already filled some other way.
+    fill = {}
+    if cost > 0 and not float(row.get('default_cost') or 0) > 0:
+        fill['default_cost'] = cost
+    if reg_cost > 0 and not float(row.get('default_reg_cost') or 0) > 0:
+        fill['default_reg_cost'] = reg_cost
+    if supplier_disc > 0 and not float(row.get('default_supplier_disc') or 0) > 0:
+        fill['default_supplier_disc'] = supplier_disc
+    if not fill:
         return jsonify({'ok': True, 'updated': False})
 
-    sb.table('products').update({'default_cost': cost, 'cost_updated_at': 'now()'}).eq('id', pid).execute()
+    fill['cost_updated_at'] = 'now()'
+    sb.table('products').update(fill).eq('id', pid).execute()
     return jsonify({'ok': True, 'updated': True})
 
 # ── Sync a quote line's description back to the product it's linked to ────────
