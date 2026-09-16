@@ -1603,7 +1603,7 @@ function liveCalc(el){
   const it=sec(si)?.items?.[ii];if(!it)return;
   let v=parseFloat(el.value);if(isNaN(v))v=0;
   if(field==='cost')it.cost=v;
-  else if(field==='costusd'){it.costUsd=v;it.cost=+(v*(A.rate||1)).toFixed(2);}
+  else if(field==='costusd'){it.costUsd=v;it.regCost=+(v*(A.rate||1)).toFixed(2);it.cost=+((it.regCost||0)*(1-(it.supplierDisc||0)/100)).toFixed(2);}
   else if(field==='regcost'){it.regCost=v;it.cost=+(v*(1-(it.supplierDisc||0)/100)).toFixed(2);}
   else if(field==='supdisc'){it.supplierDisc=v;it.cost=+((it.regCost||0)*(1-v/100)).toFixed(2);}
   else if(field==='disc')it.disc=v;
@@ -4125,7 +4125,7 @@ function editorHTML(){
   (o.sections||[]).forEach((s,si)=>{
     let rn=1;
     const IC=IMG?['']:[];
-    const hds=isInt?['','#',...IC,'Vendor','Model','Brand','Description','Net USD Cost','Reg-Cost','Sup-Disc','Net Cost','Disc%','Add.Disc%',(A.activeQuote?.pricing_type==='margin'?'Margin%':'Markup%'),'Qty','UOM','Unit Price','VAT','Total','']:['#',...IC,'Brand','Model','Description','Qty','UOM','Unit Price','Total',''];
+    const hds=isInt?['','#',...IC,'Vendor','Model','Brand','Description','<span style="font-size:9px">Reg Cost (USD)</span>','Reg-Cost','Sup-Disc','Net Cost','Disc%','Add.Disc%',(A.activeQuote?.pricing_type==='margin'?'Margin%':'Markup%'),'Qty','UOM','Unit Price','VAT','Total','']:['#',...IC,'Brand','Model','Description','Qty','UOM','Unit Price','Total',''];
     let rows='';
     s.items.forEach((it,ii)=>{
       const c=calcItem(it);
@@ -4145,7 +4145,7 @@ function editorHTML(){
           </div>
           <textarea class="iinput" oninput="sec(${si}).items[${ii}].brand=this.value;schedSave()" onblur="captureProduct(${si},${ii})" placeholder="Brand">${esc(it.brand)}</textarea>
           <textarea class="iinput" oninput="sec(${si}).items[${ii}].desc=this.value;schedSave()" onblur="syncProductDescription(${si},${ii})" placeholder="Description">${esc(it.desc)}</textarea>
-          <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="costusd" value="${it.costUsd||0}" oninput="liveCalc(this)" onblur="syncProductCost(${si},${ii})" title="Net Cost in USD — auto-converts to Net Cost using Rate to AED" placeholder="0">
+          <input class="iinput" type="number" data-si="${si}" data-ii="${ii}" data-field="costusd" value="${it.costUsd||0}" oninput="liveCalc(this)" onblur="syncProductCost(${si},${ii})" title="Reg Cost in USD — auto-converts to Reg-Cost using Rate to AED, which then runs through Sup-Disc% to compute Net Cost" placeholder="0">
           <input class="iinput" type="number" id="regcost-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="regcost" value="${it.regCost||0}" oninput="liveCalc(this)" title="Regular/list cost from the supplier, before their discount — stays fixed until the supplier changes their price list" placeholder="0">
           <input class="iinput" type="number" id="supdisc-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="supdisc" value="${it.supplierDisc||0}" oninput="liveCalc(this)" title="Supplier's current discount off Reg-Cost — update this whenever the supplier's terms change; recalculates Net Cost automatically" placeholder="0">
           <input class="iinput" type="number" id="cost-${si}-${ii}" data-si="${si}" data-ii="${ii}" data-field="cost" value="${it.cost}" oninput="liveCalc(this)" onblur="syncProductCost(${si},${ii})" title="Net Cost — what this item actually costs you. Auto-fills from Reg-Cost × (1-Sup-Disc%), or edit directly." placeholder="0">
