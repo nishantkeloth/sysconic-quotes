@@ -1587,16 +1587,15 @@ function mkOption(label='Option 1'){
 function calcItem(it){
   // it.cost is "Net Cost" -- what this item actually costs you (Reg-Cost x
   // (1-Sup-Disc%), or typed directly). Disc%/Add.Disc% are discounts given
-  // TO THE CUSTOMER, so they reduce the sell price (cad -> Unit Price) but
-  // never your actual cost -- gross profit/cost totals (tgp/tc below) use
-  // the true Net Cost, not the customer-discounted basis, so a customer
-  // discount correctly shows up as reduced margin rather than being
-  // invisible in cost/GP reporting.
+  // TO THE CUSTOMER, applied on top of Net Cost to derive the sell price
+  // (cad -> Unit Price). Gross profit/cost totals (tgp/tc below) are
+  // measured against that same discounted basis (cad), matching the markup
+  // it was calculated on, so Margin% tracks Markup% regardless of discounts.
   const cad=it.cost*(1-(it.disc||0)/100)*(1-(it.discAdd||0)/100);
   const pct=it.margin||0.2;
   const pt=A.activeQuote?.pricing_type||'markup';
   const up=Math.round(pt==='margin'?cad/(1-Math.min(0.95,Math.max(0,pct))):cad*(1+pct));
-  return{cad,up,tp:up*(it.qty||1),tgp:(up-it.cost)*(it.qty||1),tc:it.cost*(it.qty||1)};
+  return{cad,up,tp:up*(it.qty||1),tgp:(up-cad)*(it.qty||1),tc:cad*(it.qty||1)};
 }
 function liveCalc(el){
   const si=+el.dataset.si,ii=+el.dataset.ii,field=el.dataset.field;
