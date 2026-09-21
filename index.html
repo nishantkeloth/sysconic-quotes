@@ -3927,6 +3927,38 @@ function _insightsAgo(d){
   return Math.round(secs/3600)+'h ago';
 }
 
+let ZOHO_SALES_SYNCING=false;
+async function syncZohoSales(){
+  if(ZOHO_SALES_SYNCING)return;
+  ZOHO_SALES_SYNCING=true;draw();
+  const r=await api('POST','/api/integrations/sync-sales',{});
+  ZOHO_SALES_SYNCING=false;
+  if(r.error){alert('Zoho sales sync failed: '+r.error);draw();return;}
+  await loadInsightsPage(true);
+}
+function showZohoCustomerModal(customerName){
+  const z=(INSIGHTS.data&&INSIGHTS.data.zoho_sales)||{};
+  const invoices=(z.invoices||[]).filter(i=>i.customer_name===customerName);
+  const statusColor={paid:'var(--green)',overdue:'var(--red)',sent:'var(--amber)',draft:'var(--gray-500)'};
+  const rows=invoices.map(i=>`<div style="display:grid;grid-template-columns:1fr 100px 90px 110px 120px;gap:8px;font-size:13px;padding:8px 0;border-bottom:1px solid var(--gray-100);align-items:center">
+    <span>${esc(i.invoice_number||'—')}</span>
+    <span style="color:var(--gray-500)">${esc((i.invoice_date||'').slice(0,10))}</span>
+    <span style="color:${statusColor[(i.status||'').toLowerCase()]||'var(--gray-500)'};font-weight:700;text-transform:capitalize">${esc(i.status||'')}</span>
+    <span style="font-weight:700;text-align:right">AED ${fmt(i.total)}</span>
+    <span style="text-align:right;color:${i.balance>0?'var(--amber)':'var(--green)'}">${i.balance>0?'AED '+fmt(i.balance)+' due':'Paid'}</span>
+  </div>`).join('');
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="zohoCustOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('zohoCustOverlay').remove()">
+    <div style="max-width:680px;width:100%;max-height:80vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="font-size:19px;font-weight:700;color:var(--gray-900)">${esc(customerName)} — Invoices</div>
+        <span style="cursor:pointer;color:var(--gray-500);font-size:22px;line-height:1;padding:4px" onclick="document.getElementById('zohoCustOverlay').remove()">×</span>
+      </div>
+      <div class="vch-card">
+        ${rows||'<div style="color:var(--gray-500);padding:10px 0">No invoices found.</div>'}
+      </div>
+    </div>
+  </div>`);
+}
 function insightsHTML(){
   if(INSIGHTS.loading&&!INSIGHTS.data){
     return `<h2 style="margin:4px 0 20px">Insights</h2><div style="color:var(--gray-500);padding:40px;text-align:center">Loading…</div>`;
@@ -3955,6 +3987,32 @@ function insightsHTML(){
           <div class="mcard"><div class="mcard-label">Avg margin (awarded)</div><div class="mcard-val green">${s.avg_margin_pct}%</div></div>
           ${dealsCardsHtml}
         </div>
+      </div>`);
+  }
+
+  // ── Zoho Sales (every invoice in the Zoho Books org, not just ones tied
+  // to a tracked Project — see Financial Health below for that) ───────────
+  if(d.zoho_sales){
+    const z=d.zoho_sales;
+    const customers=z.customers||[];
+    const topCustomers=customers.slice(0,15);
+    sections.push(`
+      <div class="insights-sec">
+        <div class="insights-sec-title" style="display:flex;justify-content:space-between;align-items:center">
+          <span>🧾 Zoho Sales <span style="font-size:11px;color:var(--gray-500);font-weight:500">(all invoices, org-wide)</span></span>
+          <button class="btn" style="font-size:12px;padding:5px 10px" onclick="syncZohoSales()" ${ZOHO_SALES_SYNCING?'disabled':''}>${ZOHO_SALES_SYNCING?'⏳ Syncing…':'🔄 Sync Now'}</button>
+        </div>
+        <div class="dash-metrics">
+          <div class="mcard"><div class="mcard-label">Total invoiced</div><div class="mcard-val navy">AED ${fmt(z.total_invoiced)}</div><div class="mcard-sub">${z.invoice_count} invoice(s)</div></div>
+          <div class="mcard"><div class="mcard-label">Total collected</div><div class="mcard-val green">AED ${fmt(z.total_collected)}</div></div>
+          <div class="mcard"><div class="mcard-label">Outstanding</div><div class="mcard-val amber">AED ${fmt(z.total_invoiced-z.total_collected)}</div></div>
+          <div class="mcard"><div class="mcard-label">Customers</div><div class="mcard-val navy">${customers.length}</div></div>
+        </div>
+        ${topCustomers.length?`<div class="insights-list">
+          <div class="insights-list-title">By customer${customers.length>15?' (top 15 by value)':''} — click a row to see invoices</div>
+          ${topCustomers.map(c=>`<div class="insights-row" style="cursor:pointer" onclick="showZohoCustomerModal(${esc(JSON.stringify(c.customer))})"><span>${esc(c.customer)}</span><span style="color:var(--gray-500)">${c.count} invoice(s)</span><span style="color:var(--green)">AED ${fmt(c.collected)} collected</span><span style="font-weight:700">AED ${fmt(c.invoiced)}</span></div>`).join('')}
+        </div>`:`<div style="color:var(--gray-500);padding:16px 0">No invoices synced yet — click Sync Now above.</div>`}
+        ${z.last_synced_at?`<div style="font-size:11px;color:var(--gray-500);margin-top:8px">Last synced ${_insightsAgo(new Date(z.last_synced_at))}</div>`:''}
       </div>`);
   }
 

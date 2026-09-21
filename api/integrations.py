@@ -560,6 +560,31 @@ class ZohoAdapter:
             'raw': r,
         } for r in rows if r.get('invoice_id')]
 
+    def fetch_all_invoices(self, creds):
+        """Org-wide invoice pull for the Insights 'Zoho Sales' widget --
+        deliberately NOT filtered by project_id, unlike fetch_invoices()
+        above, so it captures every sale regardless of whether it's tied to
+        a tracked Project. Shares the same zoho_invoices table (see
+        migration-add-zoho-sales-sync.sql): rows written here never set
+        project_id, so an invoice already linked to a project by the
+        Project Performance sync keeps that link untouched on upsert, while
+        a plain sale with no project gets a project_id of NULL. customer_name/
+        customer_id are pulled out of the raw payload since that's how the
+        Insights breakdown groups totals per customer."""
+        rows = self._fetch_paginated(creds, '/invoices', {}, 'invoices')
+        return [{
+            'zoho_invoice_id': r.get('invoice_id'),
+            'invoice_number': r.get('invoice_number'),
+            'invoice_date': r.get('date'),
+            'due_date': r.get('due_date'),
+            'status': r.get('status'),
+            'total': r.get('total') or 0,
+            'balance': r.get('balance') or 0,
+            'customer_name': r.get('customer_name') or '',
+            'customer_id': r.get('customer_id') or '',
+            'raw': r,
+        } for r in rows if r.get('invoice_id')]
+
     def fetch_payments(self, creds, invoice_ids):
         """Zoho Books payments aren't project-scoped directly -- they're
         applied to invoices. Called with the invoice IDs already synced for
@@ -815,6 +840,44 @@ def sync_customers():
     count, err = _sync_contacts(claims['company_id'], provider, 'customers')
     if err: return jsonify({'error': err}), 502
     return jsonify({'synced': count})
+
+# ── Org-wide sales sync: powers the Insights "Zoho Sales" widget ────────────────
+# Distinct from the per-project invoice sync in pp_sync.py/projects.py -- this
+# pulls EVERY invoice in the Zoho Books org, not just ones tied to a tracked
+# Project, so Insights can show a true company-wide sales total broken down by
+# customer. Shares the same zoho_invoices table (see
+# migration-add-zoho-sales-sync.sql): rows written here never include a
+# project_id key at all, so upserting an invoice that's already linked to a
+# project (by the other sync) leaves that link completely untouched -- only
+# customer_name/customer_id/total/balance/status/raw get refreshed.
+@app.route('/api/integrations/sync-sales', methods=['POST'])
+def sync_sales():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+
+    company_id = claims['company_id']
+    creds = _get_creds_for(company_id, 'zoho')
+    adapter = ADAPTERS.get('zoho')
+    if not creds or not adapter or not adapter.is_configured(creds):
+        return jsonify({'error': 'Zoho Books is not connected. Connect it in Settings → Integrations first.'}), 400
+
+    try:
+        invoices = adapter.fetch_all_invoices(creds)
+    except Exception as e:
+        return jsonify({'error': f'Zoho sales sync failed: {str(e)[:300]}'}), 502
+
+    for inv in invoices:
+        inv['company_id'] = company_id
+        # Deliberately no project_id key here -- see comment above.
+
+    if invoices:
+        try:
+            sb.table('zoho_invoices').upsert(invoices, on_conflict='company_id,zoho_invoice_id').execute()
+        except Exception as e:
+            return jsonify({'error': f'Could not save synced invoices: {str(e)[:300]}'}), 502
+
+    return jsonify({'synced': len(invoices)})
 
 # ── Push a single locally-created customer to Zoho Books ────────────────────────
 # Used by the Deals module (api/quotes.py -> index.html): when a deal is created

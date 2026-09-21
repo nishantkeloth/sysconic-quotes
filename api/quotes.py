@@ -1595,6 +1595,47 @@ def insights_summary():
             'won_count': len(won_deals),
         }
 
+    # ── Zoho Sales (org-wide invoices synced via /api/integrations/sync-sales) ──
+    # Distinct from Financial Health below, which only covers invoices tied to
+    # a tracked Project -- this covers every invoice in the Zoho Books org,
+    # broken down by customer, for a true company-wide sales total with
+    # invoice-level drill-down. Only shown if the company has actually
+    # connected Zoho (checked directly against company_integrations rather
+    # than importing api/integrations.py's _connected_providers(), since each
+    # Vercel route file has to be fully self-contained -- see the note at the
+    # top of api/integrations.py's ZohoAdapter).
+    zc = sb.table('company_integrations').select('status').eq('company_id', company_id).eq('provider', 'zoho').execute().data
+    if zc and zc[0].get('status') == 'connected':
+        inv_rows = sb.table('zoho_invoices').select(
+            'invoice_number,invoice_date,status,total,balance,customer_name,synced_at'
+        ).eq('company_id', company_id).order('invoice_date', desc=True).execute().data or []
+        by_customer = {}
+        for r in inv_rows:
+            name = (r.get('customer_name') or '').strip() or 'Unknown customer'
+            c = by_customer.setdefault(name, {'customer': name, 'invoiced': 0.0, 'collected': 0.0, 'count': 0})
+            total = _numf(r.get('total'))
+            balance = _numf(r.get('balance'))
+            c['invoiced'] += total
+            c['collected'] += (total - balance)
+            c['count'] += 1
+        customers = sorted(by_customer.values(), key=lambda c: c['invoiced'], reverse=True)
+        synced_ats = [r['synced_at'] for r in inv_rows if r.get('synced_at')]
+        out['zoho_sales'] = {
+            'total_invoiced': sum(c['invoiced'] for c in customers),
+            'total_collected': sum(c['collected'] for c in customers),
+            'invoice_count': len(inv_rows),
+            'customers': customers,
+            'invoices': [{
+                'invoice_number': r.get('invoice_number'),
+                'invoice_date': r.get('invoice_date'),
+                'status': r.get('status'),
+                'total': _numf(r.get('total')),
+                'balance': _numf(r.get('balance')),
+                'customer_name': (r.get('customer_name') or '').strip() or 'Unknown customer',
+            } for r in inv_rows],
+            'last_synced_at': max(synced_ats) if synced_ats else None,
+        }
+
     # ── Financial Health (Project Performance, synced from Zoho Books) ────
     if _has_feature(claims, 'project_performance'):
         pq = sb.table('projects').select(
