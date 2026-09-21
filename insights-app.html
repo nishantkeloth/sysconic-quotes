@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+<title>QTcal Insights</title>
+<meta name="theme-color" content="#1a3c6e">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Insights">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icons/insights-icon-192.png">
+<link rel="icon" type="image/png" href="/icons/insights-icon-192.png">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{
+  --navy:#1a3c6e;--navy-dark:#0f2544;--navy-light:#dde8f7;
+  --green:#047857;--amber:#b45309;--red:#b91c1c;
+  --gray-100:#f1f3f6;--gray-200:#e3e7ee;--gray-500:#5a6475;--gray-900:#0f172a;
+  --white:#fff;--radius:12px;
+  --safe-top:env(safe-area-inset-top,0px);--safe-bottom:env(safe-area-inset-bottom,0px);
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--gray-100);color:var(--gray-900);-webkit-font-smoothing:antialiased}
+.screen{min-height:100vh;display:flex;flex-direction:column}
+
+/* ── Login ─────────────────────────────────────────────────────────── */
+.login-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:24px;padding-top:calc(24px + var(--safe-top))}
+.login-card{width:100%;max-width:360px;background:var(--white);border-radius:16px;padding:28px 24px;box-shadow:0 8px 30px rgba(15,23,42,.08)}
+.login-logo{width:56px;height:56px;border-radius:14px;margin:0 auto 16px;display:block}
+.login-title{font-size:20px;font-weight:800;text-align:center;color:var(--navy-dark);margin-bottom:4px}
+.login-sub{font-size:13px;color:var(--gray-500);text-align:center;margin-bottom:22px}
+.fld{margin-bottom:14px}
+.fld label{display:block;font-size:12px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.03em;margin-bottom:6px}
+.fld input{width:100%;padding:13px 14px;font-size:16px;border:1.5px solid var(--gray-200);border-radius:10px;font-family:inherit}
+.fld input:focus{outline:none;border-color:var(--navy)}
+.btn{width:100%;padding:14px;font-size:15px;font-weight:700;border:none;border-radius:10px;background:var(--navy);color:#fff;cursor:pointer}
+.btn:active{background:var(--navy-dark)}
+.btn:disabled{opacity:.6}
+.err-msg{background:#fee2e2;color:var(--red);font-size:13px;padding:10px 12px;border-radius:8px;margin-bottom:14px}
+
+/* ── Dashboard chrome ──────────────────────────────────────────────── */
+.topbar{position:sticky;top:0;z-index:10;background:var(--navy);color:#fff;padding:calc(14px + var(--safe-top)) 16px 14px;display:flex;justify-content:space-between;align-items:center}
+.topbar-title{font-size:17px;font-weight:800}
+.topbar-sub{font-size:11px;opacity:.75;margin-top:2px}
+.topbar-actions{display:flex;gap:10px;align-items:center}
+.icon-btn{background:rgba(255,255,255,.15);border:none;color:#fff;width:34px;height:34px;border-radius:9px;font-size:15px;display:flex;align-items:center;justify-content:center}
+.content{flex:1;padding:14px 14px calc(30px + var(--safe-bottom))}
+.sec{margin-bottom:22px}
+.sec-title{font-size:14px;font-weight:800;color:var(--navy);margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.range-sel{font-size:12px;padding:6px 8px;border:1.5px solid var(--gray-200);border-radius:8px;font-family:inherit;background:var(--white)}
+
+/* ── Cards ─────────────────────────────────────────────────────────── */
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+.card{background:var(--white);border-radius:12px;padding:14px;box-shadow:0 1px 3px rgba(15,23,42,.06)}
+.card-label{font-size:10.5px;font-weight:700;color:var(--gray-500);text-transform:uppercase;letter-spacing:.03em;margin-bottom:6px}
+.card-val{font-size:19px;font-weight:800;line-height:1.15}
+.card-val.navy{color:var(--navy)}.card-val.green{color:var(--green)}.card-val.amber{color:var(--amber)}
+.card-sub{font-size:11px;color:var(--gray-500);margin-top:3px}
+.chart-card{background:var(--white);border-radius:12px;padding:14px;margin-bottom:12px}
+.chart-card .card-label{margin-bottom:8px}
+.chart-box{position:relative;height:190px}
+
+/* ── Lists ─────────────────────────────────────────────────────────── */
+.list{background:var(--white);border-radius:12px;overflow:hidden}
+.list-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 14px;border-top:1px solid var(--gray-100)}
+.list-row:first-child{border-top:none}
+.list-row-name{font-size:13.5px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.list-row-meta{font-size:11px;color:var(--gray-500);text-align:right}
+.list-row-val{font-size:13.5px;font-weight:800;color:var(--navy);text-align:right;white-space:nowrap}
+
+/* ── Loading / empty ───────────────────────────────────────────────── */
+.center-msg{text-align:center;color:var(--gray-500);font-size:13px;padding:40px 20px}
+.spinner{width:26px;height:26px;border:3px solid var(--gray-200);border-top-color:var(--navy);border-radius:50%;animation:spin .7s linear infinite;margin:0 auto 12px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Invoice sheet ─────────────────────────────────────────────────── */
+.sheet-overlay{position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:100;display:flex;align-items:flex-end}
+.sheet{background:var(--white);width:100%;max-height:82vh;border-radius:18px 18px 0 0;padding:18px 16px calc(20px + var(--safe-bottom));overflow-y:auto}
+.sheet-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.sheet-title{font-size:16px;font-weight:800;color:var(--gray-900)}
+.sheet-close{background:var(--gray-100);border:none;width:30px;height:30px;border-radius:50%;font-size:16px;color:var(--gray-500)}
+.inv-row{padding:10px 0;border-top:1px solid var(--gray-100);font-size:12.5px}
+.inv-row:first-child{border-top:none}
+.inv-row-top{display:flex;justify-content:space-between;font-weight:700}
+.inv-row-bottom{display:flex;justify-content:space-between;color:var(--gray-500);margin-top:2px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+// ── State ────────────────────────────────────────────────────────────────
+const API='';
+const S={
+  token:localStorage.getItem('qtcal_mobile_token')||null,
+  user:JSON.parse(localStorage.getItem('qtcal_mobile_user')||'null'),
+  company:JSON.parse(localStorage.getItem('qtcal_mobile_company')||'null'),
+  data:null, loading:false, error:null, loginError:null, loggingIn:false,
+  zohoRange:'all', sheetCustomer:null,
+};
+const esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const fmt=n=>isNaN(n)?'0.00':(+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+
+function saveAuth(r){
+  S.token=r.token;S.user=r.user;S.company=r.company;
+  localStorage.setItem('qtcal_mobile_token',r.token);
+  localStorage.setItem('qtcal_mobile_user',JSON.stringify(r.user));
+  localStorage.setItem('qtcal_mobile_company',JSON.stringify(r.company));
+}
+function clearAuth(){
+  S.token=null;S.user=null;S.company=null;S.data=null;
+  localStorage.removeItem('qtcal_mobile_token');
+  localStorage.removeItem('qtcal_mobile_user');
+  localStorage.removeItem('qtcal_mobile_company');
+}
+
+// Mirrors index.html's api() helper: short-lived access token, silent
+// refresh-and-retry once on 401 via the httpOnly refresh cookie set by
+// /api/auth/login on this same origin.
+async function api(method,path,body,_retried){
+  const o={method,headers:{'Content-Type':'application/json'},credentials:'same-origin'};
+  if(S.token)o.headers['Authorization']='Bearer '+S.token;
+  if(body)o.body=JSON.stringify(body);
+  let r;
+  try{ r=await fetch(API+path,o); }
+  catch(e){ return {error:'Network error — could not reach the server.'}; }
+  if(r.status===401&&!_retried&&path!=='/api/auth/refresh'&&path!=='/api/auth/login'){
+    const ref=await api('POST','/api/auth/refresh');
+    if(ref&&ref.token){ saveAuth(ref); return api(method,path,body,true); }
+    clearAuth(); render();
+    return {error:'Session expired. Please sign in again.'};
+  }
+  let text=''; try{ text=await r.text(); }catch(e){ return {error:'Server error ('+r.status+')'}; }
+  if(!text)return {};
+  try{ return JSON.parse(text); }
+  catch(e){ return {error:'Server error ('+r.status+'): '+text.slice(0,150)}; }
+}
+
+async function doLogin(email,password){
+  S.loggingIn=true; S.loginError=null; render();
+  const r=await api('POST','/api/auth/login',{email,password});
+  S.loggingIn=false;
+  if(r.error){ S.loginError=r.error; render(); return; }
+  saveAuth(r); render();
+  loadInsights();
+}
+async function doLogout(){
+  await api('POST','/api/auth/logout');
+  clearAuth(); render();
+}
+async function loadInsights(force){
+  if(!force&&S.data&&!S.loading)return;
+  S.loading=true; S.error=null; render();
+  const r=await api('GET','/api/insights/summary');
+  S.loading=false;
+  if(r.error){ S.error=r.error; } else { S.data=r; }
+  render();
+}
+let ZOHO_SYNCING=false;
+async function syncZohoSales(){
+  if(ZOHO_SYNCING)return;
+  ZOHO_SYNCING=true; render();
+  const r=await api('POST','/api/integrations/sync-sales',{});
+  ZOHO_SYNCING=false;
+  if(r.error){ alert('Sync failed: '+r.error); render(); return; }
+  await loadInsights(true);
+}
+
+// ── Zoho Sales range filtering (same logic as the desktop app) ─────────────
+function rangeBounds(range){
+  const now=new Date(); const y=now.getFullYear(), m=now.getMonth();
+  if(range==='this_month')return[new Date(y,m,1), new Date(y,m+1,1)];
+  if(range==='last_month')return[new Date(y,m-1,1), new Date(y,m,1)];
+  if(range==='this_year')return[new Date(y,0,1), new Date(y+1,0,1)];
+  if(range==='last_year')return[new Date(y-1,0,1), new Date(y,0,1)];
+  return null;
+}
+function zohoFiltered(zRaw){
+  if(!zRaw)return null;
+  const bounds=rangeBounds(S.zohoRange);
+  const invoices=(zRaw.invoices||[]).filter(i=>{
+    if(!bounds)return true;
+    if(!i.invoice_date)return false;
+    const d=new Date(i.invoice_date);
+    return d>=bounds[0]&&d<bounds[1];
+  });
+  const byCust={}; let ti=0, tc=0;
+  invoices.forEach(i=>{
+    const name=i.customer_name||'Unknown customer';
+    const c=byCust[name]||(byCust[name]={customer:name,invoiced:0,collected:0,count:0});
+    const t=i.total||0, b=i.balance||0;
+    c.invoiced+=t; c.collected+=(t-b); c.count+=1; ti+=t; tc+=(t-b);
+  });
+  const customers=Object.values(byCust).sort((a,b)=>b.invoiced-a.invoiced);
+  return {invoices, customers, total_invoiced:ti, total_collected:tc, invoice_count:invoices.length, last_synced_at:zRaw.last_synced_at};
+}
+
+function openInvoiceSheet(customerName){ S.sheetCustomer=customerName; render(); }
+function closeInvoiceSheet(){ S.sheetCustomer=null; render(); }
+
+// ── Rendering ────────────────────────────────────────────────────────────
+function loginHTML(){
+  return `<div class="screen">
+    <div class="login-wrap">
+      <div class="login-card">
+        <svg class="login-logo" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+          <rect width="64" height="64" rx="14" fill="#1a3c6e"/>
+          <circle cx="27" cy="27" r="15" fill="none" stroke="#fff" stroke-width="5"/>
+          <line x1="37" y1="37" x2="46" y2="46" stroke="#fff" stroke-width="5" stroke-linecap="round"/>
+          <path d="M46 14 L48 20 L54 22 L48 24 L46 30 L44 24 L38 22 L44 20 Z" fill="#f59e0b"/>
+        </svg>
+        <div class="login-title">QTcal Insights</div>
+        <div class="login-sub">Sign in with your QTcal account</div>
+        ${S.loginError?`<div class="err-msg">${esc(S.loginError)}</div>`:''}
+        <form onsubmit="event.preventDefault();doLogin(document.getElementById('liEmail').value,document.getElementById('liPass').value)">
+          <div class="fld"><label>Email</label><input id="liEmail" type="email" autocomplete="username" required></div>
+          <div class="fld"><label>Password</label><input id="liPass" type="password" autocomplete="current-password" required></div>
+          <button class="btn" type="submit" ${S.loggingIn?'disabled':''}>${S.loggingIn?'Signing in…':'Sign in'}</button>
+        </form>
+      </div>
+    </div>
+  </div>`;
+}
+
+function salesSectionHTML(s,deals){
+  return `<div class="sec">
+    <div class="sec-title"><span>📈 Sales &amp; Pipeline</span></div>
+    <div class="cards">
+      <div class="card"><div class="card-label">Total quotes</div><div class="card-val navy">${s.total_quotes}</div><div class="card-sub">${s.awarded_count} awarded</div></div>
+      <div class="card"><div class="card-label">Win rate</div><div class="card-val amber">${s.win_rate_pct}%</div><div class="card-sub">of ${s.closed_count} closed</div></div>
+      <div class="card"><div class="card-label">Awarded value</div><div class="card-val green">AED ${fmt(s.awarded_value)}</div></div>
+      <div class="card"><div class="card-label">Pending value</div><div class="card-val amber">AED ${fmt(s.pending_value)}</div></div>
+      <div class="card"><div class="card-label">Draft value</div><div class="card-val navy">AED ${fmt(s.draft_value)}</div></div>
+      <div class="card"><div class="card-label">Avg margin</div><div class="card-val green">${s.avg_margin_pct}%</div></div>
+      ${deals?`<div class="card"><div class="card-label">Open deals</div><div class="card-val navy">${deals.open_count}</div><div class="card-sub">AED ${fmt(deals.open_value)}</div></div>
+      <div class="card"><div class="card-label">Deals won</div><div class="card-val green">${deals.won_count}</div></div>`:''}
+    </div>
+    <div class="chart-card"><div class="card-label">Pipeline mix</div><div class="chart-box"><canvas id="mPipelineChart"></canvas></div></div>
+  </div>`;
+}
+
+function zohoSectionHTML(zRaw){
+  const z=zohoFiltered(zRaw);
+  const top=(z.customers||[]).slice(0,10);
+  const rangeOpts=[['all','All time'],['this_month','This month'],['last_month','Last month'],['this_year','This year'],['last_year','Last year']];
+  return `<div class="sec">
+    <div class="sec-title">
+      <span>🧾 Zoho Sales</span>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select class="range-sel" onchange="S.zohoRange=this.value;render()">
+          ${rangeOpts.map(([v,l])=>`<option value="${v}" ${S.zohoRange===v?'selected':''}>${l}</option>`).join('')}
+        </select>
+        <button class="icon-btn" style="background:var(--navy);width:auto;padding:0 10px;font-size:11px;font-weight:700" onclick="syncZohoSales()" ${ZOHO_SYNCING?'disabled':''}>${ZOHO_SYNCING?'⏳':'🔄 Sync'}</button>
+      </div>
+    </div>
+    <div class="cards">
+      <div class="card"><div class="card-label">Invoiced</div><div class="card-val navy">AED ${fmt(z.total_invoiced)}</div><div class="card-sub">${z.invoice_count} invoice(s)</div></div>
+      <div class="card"><div class="card-label">Collected</div><div class="card-val green">AED ${fmt(z.total_collected)}</div></div>
+      <div class="card"><div class="card-label">Outstanding</div><div class="card-val amber">AED ${fmt(z.total_invoiced-z.total_collected)}</div></div>
+      <div class="card"><div class="card-label">Customers</div><div class="card-val navy">${(z.customers||[]).length}</div></div>
+    </div>
+    <div class="chart-card"><div class="card-label">Sales trend — last 12 months</div><div class="chart-box"><canvas id="mTrendChart"></canvas></div></div>
+    ${top.length?`<div class="chart-card"><div class="card-label">Top customers</div><div class="chart-box" style="height:${Math.max(140,top.length*30)}px"><canvas id="mCustChart"></canvas></div></div>`:''}
+    ${top.length?`<div class="list">
+      ${top.map(c=>`<div class="list-row" onclick="openInvoiceSheet(${esc(JSON.stringify(c.customer))})">
+        <span class="list-row-name">${esc(c.customer)}</span>
+        <span class="list-row-meta">${c.count} inv.</span>
+        <span class="list-row-val">AED ${fmt(c.invoiced)}</span>
+      </div>`).join('')}
+    </div>`:`<div class="center-msg">${(zRaw.invoices||[]).length?'No invoices in this period.':'No invoices synced yet — tap Sync above.'}</div>`}
+    ${z.last_synced_at?`<div style="font-size:10.5px;color:var(--gray-500);margin-top:8px;text-align:center">Last synced ${new Date(z.last_synced_at).toLocaleString()}</div>`:''}
+  </div>`;
+}
+
+function financialSectionHTML(k){
+  return `<div class="sec">
+    <div class="sec-title"><span>💰 Financial Health</span></div>
+    <div class="cards">
+      <div class="card"><div class="card-label">Active projects</div><div class="card-val navy">${k.active_projects}</div><div class="card-sub">AED ${fmt(k.total_active_value)}</div></div>
+      <div class="card"><div class="card-label">Portfolio GP%</div><div class="card-val green">${k.portfolio_gp_pct}%</div></div>
+      <div class="card"><div class="card-label">At risk / Critical</div><div class="card-val ${k.critical_projects>0?'amber':'navy'}">${k.projects_at_risk} / ${k.critical_projects}</div></div>
+      <div class="card"><div class="card-label">Receivables</div><div class="card-val amber">AED ${fmt(k.outstanding_receivables)}</div></div>
+    </div>
+  </div>`;
+}
+
+function fsmSectionHTML(f){
+  return `<div class="sec">
+    <div class="sec-title"><span>🔧 AMC &amp; Field Service</span></div>
+    <div class="cards">
+      <div class="card"><div class="card-label">Contracts expiring (90d)</div><div class="card-val ${f.expiring_30d?'amber':'navy'}">${f.contracts_expiring_90d}</div></div>
+      <div class="card"><div class="card-label">Open tickets</div><div class="card-val navy">${f.open_tickets}</div></div>
+      <div class="card"><div class="card-label">SLA breaches</div><div class="card-val ${f.sla_breaches?'amber':'green'}">${f.sla_breaches}</div></div>
+      <div class="card"><div class="card-label">PM visits due (7d)</div><div class="card-val amber">${f.pm_due_7d}</div></div>
+    </div>
+  </div>`;
+}
+
+function invoiceSheetHTML(){
+  if(!S.sheetCustomer)return '';
+  const zRaw=S.data&&S.data.zoho_sales;
+  const z=zohoFiltered(zRaw)||{invoices:[]};
+  const invoices=z.invoices.filter(i=>(i.customer_name||'Unknown customer')===S.sheetCustomer);
+  const statusColor={paid:'var(--green)',overdue:'var(--red)',sent:'var(--amber)',draft:'var(--gray-500)'};
+  return `<div class="sheet-overlay" onclick="if(event.target===this)closeInvoiceSheet()">
+    <div class="sheet">
+      <div class="sheet-head">
+        <div class="sheet-title">${esc(S.sheetCustomer)}</div>
+        <button class="sheet-close" onclick="closeInvoiceSheet()">✕</button>
+      </div>
+      ${invoices.length?invoices.map(i=>`<div class="inv-row">
+        <div class="inv-row-top"><span>${esc(i.invoice_number||'—')}</span><span>AED ${fmt(i.total)}</span></div>
+        <div class="inv-row-bottom">
+          <span>${esc((i.invoice_date||'').slice(0,10))} · <span style="color:${statusColor[(i.status||'').toLowerCase()]||'var(--gray-500)'};font-weight:700;text-transform:capitalize">${esc(i.status||'')}</span></span>
+          <span style="color:${i.balance>0?'var(--amber)':'var(--green)'}">${i.balance>0?'AED '+fmt(i.balance)+' due':'Paid'}</span>
+        </div>
+      </div>`).join(''):'<div class="center-msg">No invoices found.</div>'}
+    </div>
+  </div>`;
+}
+
+function dashboardHTML(){
+  const d=S.data||{};
+  let body='';
+  if(S.loading&&!S.data){
+    body=`<div class="center-msg"><div class="spinner"></div>Loading Insights…</div>`;
+  }else{
+    if(S.error)body+=`<div class="err-msg">${esc(S.error)}</div>`;
+    if(d.sales)body+=salesSectionHTML(d.sales,d.deals);
+    if(d.zoho_sales)body+=zohoSectionHTML(d.zoho_sales);
+    if(d.financial)body+=financialSectionHTML(d.financial);
+    if(d.fsm)body+=fsmSectionHTML(d.fsm);
+    if(!d.sales&&!d.zoho_sales&&!d.financial&&!d.fsm&&!S.error)body='<div class="center-msg">No data available yet.</div>';
+  }
+  return `<div class="screen">
+    <div class="topbar">
+      <div>
+        <div class="topbar-title">Insights</div>
+        <div class="topbar-sub">${esc((S.company&&S.company.name)||'')}</div>
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-btn" title="Refresh" onclick="loadInsights(true)">${S.loading?'⏳':'🔄'}</button>
+        <button class="icon-btn" title="Sign out" onclick="doLogout()">⎋</button>
+      </div>
+    </div>
+    <div class="content">${body}</div>
+  </div>
+  ${invoiceSheetHTML()}`;
+}
+
+function render(){
+  document.getElementById('app').innerHTML=S.token?dashboardHTML():loginHTML();
+  if(S.token)setTimeout(initCharts,40);
+}
+
+// ── Charts ───────────────────────────────────────────────────────────────
+let CHARTS={};
+function destroyCharts(){ Object.values(CHARTS).forEach(c=>{try{c.destroy();}catch(e){}}); CHARTS={}; }
+function initCharts(){
+  if(typeof Chart==='undefined')return;
+  destroyCharts();
+  const d=S.data||{};
+
+  const pipeEl=document.getElementById('mPipelineChart');
+  if(pipeEl&&d.sales){
+    const s=d.sales;
+    CHARTS.pipeline=new Chart(pipeEl,{
+      type:'doughnut',
+      data:{labels:['Awarded','Pending','Draft'],datasets:[{data:[s.awarded_value||0,s.pending_value||0,s.draft_value||0],backgroundColor:['#047857','#b45309','#1a3c6e'],borderWidth:0}]},
+      options:{maintainAspectRatio:false,cutout:'62%',plugins:{legend:{position:'bottom',labels:{boxWidth:10,font:{size:10},padding:10}}}}
+    });
+  }
+
+  const trendEl=document.getElementById('mTrendChart');
+  if(trendEl&&d.zoho_sales){
+    const now=new Date(); const months=[];
+    for(let i=11;i>=0;i--){
+      const dt=new Date(now.getFullYear(),now.getMonth()-i,1);
+      months.push({key:dt.getFullYear()+'-'+dt.getMonth(),label:dt.toLocaleDateString('en-US',{month:'short'}),total:0});
+    }
+    const byKey={};months.forEach(m=>byKey[m.key]=m);
+    (d.zoho_sales.invoices||[]).forEach(inv=>{
+      if(!inv.invoice_date)return;
+      const dt=new Date(inv.invoice_date);
+      const key=dt.getFullYear()+'-'+dt.getMonth();
+      if(byKey[key])byKey[key].total+=(inv.total||0);
+    });
+    CHARTS.trend=new Chart(trendEl,{
+      type:'line',
+      data:{labels:months.map(m=>m.label),datasets:[{data:months.map(m=>m.total),borderColor:'#1a3c6e',backgroundColor:'rgba(26,60,110,.08)',fill:true,tension:.35,pointRadius:2}]},
+      options:{maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true,ticks:{font:{size:9},callback:v=>fmt(v)}},x:{grid:{display:false},ticks:{font:{size:9}}}}}
+    });
+  }
+
+  const custEl=document.getElementById('mCustChart');
+  if(custEl&&d.zoho_sales){
+    const z=zohoFiltered(d.zoho_sales);
+    const top=(z.customers||[]).slice(0,8);
+    CHARTS.customers=new Chart(custEl,{
+      type:'bar',
+      data:{labels:top.map(c=>c.customer.length>16?c.customer.slice(0,14)+'…':c.customer),datasets:[{data:top.map(c=>c.invoiced),backgroundColor:'#1a3c6e',borderRadius:4,maxBarThickness:16}]},
+      options:{indexAxis:'y',maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{beginAtZero:true,ticks:{font:{size:9},callback:v=>fmt(v)}},y:{grid:{display:false},ticks:{font:{size:9}}}}}
+    });
+  }
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────────
+render();
+if(S.token)loadInsights();
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>navigator.serviceWorker.register('/insights-sw.js').catch(()=>{}));
+}
+</script>
+</body>
+</html>

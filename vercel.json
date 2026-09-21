@@ -28,7 +28,11 @@
 { "src": "api/vouchers.py", "use": "@vercel/python" },
 { "src": "api/workflows.py", "use": "@vercel/python" },
     { "src": "api/pdf-render.js", "use": "@vercel/node", "config": { "maxLambdaSize": "250mb", "maxDuration": 30, "memory": 3009 } },
-        { "src": "index.html",    "use": "@vercel/static" }
+        { "src": "index.html",    "use": "@vercel/static" },
+        { "src": "insights-app.html", "use": "@vercel/static" },
+        { "src": "manifest.json", "use": "@vercel/static" },
+        { "src": "insights-sw.js", "use": "@vercel/static" },
+        { "src": "icons/*.png", "use": "@vercel/static" }
   ],
   "routes": [
     { "src": "/api/pdf/render2", "dest": "api/pdf-render.js" },
@@ -90,6 +94,10 @@
 { "src": "/api/vouchers",      "dest": "api/vouchers.py" },
 { "src": "/api/workflows/(.*)", "dest": "api/workflows.py" },
 { "src": "/api/workflows",      "dest": "api/workflows.py" },
+{ "src": "/insights-app.html", "dest": "insights-app.html" },
+{ "src": "/manifest.json", "dest": "manifest.json" },
+{ "src": "/insights-sw.js", "dest": "insights-sw.js" },
+{ "src": "/icons/(.*)", "dest": "icons/$1" },
 { "src": "/(.*)",            "dest": "index.html" }
   ],
   "crons": [
