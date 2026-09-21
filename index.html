@@ -4028,7 +4028,7 @@ function dashHTML(){
     <div class="mcard"><div class="mcard-label">Win rate</div><div class="mcard-val amber">${qs.length>0?Math.round(awarded/qs.length*100):0}%</div></div>
   </div>
   <div class="filter-bar">
-    <input class="search-inp" placeholder="🔍 Search quotes..." value="${esc(A.searchQ)}" oninput="A.searchQ=this.value;draw()">
+    <input id="quoteSearchInp" class="search-inp" placeholder="🔍 Search quotes..." value="${esc(A.searchQ)}" oninput="A.searchQ=this.value;draw()">
     <select class="filter-sel" onchange="A.filterStatus=this.value;draw()">
       <option value="all">All status</option>
       ${['draft','sent','awarded','lost'].map(s=>`<option value="${s}" ${A.filterStatus===s?'selected':''}>${STATUS_LABELS[s]}</option>`).join('')}
@@ -4122,7 +4122,7 @@ function editorHTML(){
     <div class="field-grid g4" style="margin-bottom:14px">
       <div class="fld2"><label>Quote title</label><input value="${esc(q.title)}" oninput="A.activeQuote.title=this.value;schedSave()"></div>
       <div class="fld2" style="position:relative"><label>Customer</label><input id="custInput" value="${esc(q.customer)}" autocomplete="off" style="padding-right:36px" oninput="A.activeQuote.customer=this.value;schedSave();zohoSearch(this.value)" onblur="setTimeout(hideCustDrop,180)" placeholder="Type or search Zoho Books…"><button class="cust-search-btn" title="Search customers in Zoho Books" onclick="openCustModal()">🔍</button><div id="custDrop" class="cust-drop" style="display:none"></div></div>
-      <div class="fld2"><label>Option label</label><input value="${esc(o.label)}" oninput="opts()[A.activeOpt].label=this.value;draw()"></div>
+      <div class="fld2"><label>Option label</label><input id="optLabelInp" value="${esc(o.label)}" oninput="opts()[A.activeOpt].label=this.value;draw()"></div>
       <div class="fld2"><label>Quote ref</label><input value="${esc(q.quote_ref||o.ref||'')}" readonly title="Auto-generated — configure the prefix or number range in Company Profile → Quotation numbering"></div>
     </div>
     <div class="field-grid g4">
@@ -8421,7 +8421,7 @@ function fsmKbListHTML(){
   </div>`).join('');
   return `<div>
     <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
-      <input class="iinput" style="max-width:280px" placeholder="Search title, content, tags…" value="${esc(search)}" oninput="A.fsmKbSearch=this.value;draw()">
+      <input id="fsmKbSearchInp" class="iinput" style="max-width:280px" placeholder="Search title, content, tags…" value="${esc(search)}" oninput="A.fsmKbSearch=this.value;draw()">
       <select class="iinput" style="max-width:220px" onchange="A.fsmKbCat=this.value;draw()">
         <option value="">All categories</option>
         ${Object.keys(FSM_KB_CATEGORY_LABEL).map(k=>`<option value="${k}" ${cat===k?'selected':''}>${FSM_KB_CATEGORY_LABEL[k]}</option>`).join('')}
