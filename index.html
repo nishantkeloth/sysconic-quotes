@@ -8,6 +8,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/11.12.0/mermaid.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/svg-pan-zoom/3.6.1/svg-pan-zoom.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -3201,6 +3202,7 @@ function draw(){
   _restoreFocus();
   setTimeout(initTA,30);
   if(A.page==='insights'&&!INSIGHTS.data&&!INSIGHTS.loading)setTimeout(loadInsightsPage,50);
+  if(A.page==='insights'&&INSIGHTS.data)setTimeout(initInsightsCharts,60);
   if(A.page==='team'){setTimeout(loadTeam,50);}
   if(A.page==='integrations'){setTimeout(loadIntegrations,50);setTimeout(loadSyncConfig,50);}
   if(A.page==='platform'){setTimeout(loadPlatformCompanies,50);}
@@ -3989,6 +3991,72 @@ function showZohoCustomerModal(customerName){
     </div>
   </div>`);
 }
+// Charts live inside the innerHTML that draw() wipes and rebuilds on every
+// render, so any Chart.js instance from the previous render is gone the
+// moment its <canvas> is torn out -- this has to re-create every chart from
+// scratch each time draw() runs on the Insights page (see the setTimeout
+// call in draw()), destroying the old instance first only as a defensive
+// no-op (the canvas itself is already gone, but Chart.js still tracks the
+// instance in memory until told to clean up).
+let INSIGHTS_CHARTS={};
+function _destroyInsightsCharts(){
+  Object.values(INSIGHTS_CHARTS).forEach(c=>{try{c.destroy();}catch(e){}});
+  INSIGHTS_CHARTS={};
+}
+function initInsightsCharts(){
+  if(typeof Chart==='undefined')return;
+  _destroyInsightsCharts();
+  const d=(INSIGHTS.data)||{};
+
+  // Sales & Pipeline: Awarded / Pending / Draft value split
+  const pipeEl=document.getElementById('pipelineDonutChart');
+  if(pipeEl&&d.sales){
+    const s=d.sales;
+    INSIGHTS_CHARTS.pipeline=new Chart(pipeEl,{
+      type:'doughnut',
+      data:{labels:['Awarded','Pending','Draft'],datasets:[{data:[s.awarded_value||0,s.pending_value||0,s.draft_value||0],backgroundColor:['#047857','#b45309','#1a3c6e'],borderWidth:0}]},
+      options:{maintainAspectRatio:false,cutout:'62%',plugins:{legend:{position:'bottom',labels:{boxWidth:11,font:{size:11},padding:12}},tooltip:{callbacks:{label:c=>` ${c.label}: AED ${fmt(c.parsed)}`}}}}
+    });
+  }
+
+  // Zoho Sales: monthly invoiced trend, last 12 months (always full history,
+  // independent of the By Customer range filter -- a trend needs the trend).
+  const trendEl=document.getElementById('zohoTrendChart');
+  if(trendEl&&d.zoho_sales){
+    const now=new Date();
+    const months=[];
+    for(let i=11;i>=0;i--){
+      const dt=new Date(now.getFullYear(),now.getMonth()-i,1);
+      months.push({key:dt.getFullYear()+'-'+dt.getMonth(),label:dt.toLocaleDateString('en-US',{month:'short',year:'2-digit'}),total:0});
+    }
+    const byKey={};months.forEach(m=>byKey[m.key]=m);
+    (d.zoho_sales.invoices||[]).forEach(inv=>{
+      if(!inv.invoice_date)return;
+      const dt=new Date(inv.invoice_date);
+      const key=dt.getFullYear()+'-'+dt.getMonth();
+      if(byKey[key])byKey[key].total+=(inv.total||0);
+    });
+    INSIGHTS_CHARTS.trend=new Chart(trendEl,{
+      type:'line',
+      data:{labels:months.map(m=>m.label),datasets:[{label:'Invoiced',data:months.map(m=>m.total),borderColor:'#1a3c6e',backgroundColor:'rgba(26,60,110,.08)',fill:true,tension:.35,pointRadius:3,pointBackgroundColor:'#1a3c6e'}]},
+      options:{maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` AED ${fmt(c.parsed.y)}`}}},scales:{y:{beginAtZero:true,ticks:{callback:v=>fmt(v)}},x:{grid:{display:false}}}}
+    });
+  }
+
+  // Zoho Sales: top customers by invoiced value, respecting the same range
+  // filter as the By Customer table below it.
+  const custEl=document.getElementById('zohoCustChart');
+  if(custEl&&d.zoho_sales){
+    const z=_zohoSalesFiltered(d.zoho_sales);
+    const top=(z.customers||[]).slice(0,8);
+    INSIGHTS_CHARTS.customers=new Chart(custEl,{
+      type:'bar',
+      data:{labels:top.map(c=>c.customer.length>24?c.customer.slice(0,22)+'…':c.customer),datasets:[{label:'Invoiced',data:top.map(c=>c.invoiced),backgroundColor:'#1a3c6e',borderRadius:4,maxBarThickness:22}]},
+      options:{indexAxis:'y',maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` AED ${fmt(c.parsed.x)}`}}},scales:{x:{beginAtZero:true,ticks:{callback:v=>fmt(v)}},y:{grid:{display:false}}}}
+    });
+  }
+}
+
 function insightsHTML(){
   if(INSIGHTS.loading&&!INSIGHTS.data){
     return `<h2 style="margin:4px 0 20px">Insights</h2><div style="color:var(--gray-500);padding:40px;text-align:center">Loading…</div>`;
@@ -4008,14 +4076,20 @@ function insightsHTML(){
     sections.push(`
       <div class="insights-sec">
         <div class="insights-sec-title">📈 Sales &amp; Pipeline</div>
-        <div class="dash-metrics">
-          <div class="mcard"><div class="mcard-label">Total quotes</div><div class="mcard-val navy">${s.total_quotes}</div><div class="mcard-sub">${s.awarded_count} awarded</div></div>
-          <div class="mcard"><div class="mcard-label">Awarded value</div><div class="mcard-val green">AED ${fmt(s.awarded_value)}</div><div class="mcard-sub">${s.awarded_count} quote(s)</div></div>
-          <div class="mcard"><div class="mcard-label">Pending value</div><div class="mcard-val amber">AED ${fmt(s.pending_value)}</div><div class="mcard-sub">${s.pending_count} quote(s) sent</div></div>
-          <div class="mcard"><div class="mcard-label">Draft value</div><div class="mcard-val navy">AED ${fmt(s.draft_value)}</div><div class="mcard-sub">${s.draft_count} quote(s)</div></div>
-          <div class="mcard"><div class="mcard-label">Win rate</div><div class="mcard-val amber">${s.win_rate_pct}%</div><div class="mcard-sub">of ${s.closed_count} closed</div></div>
-          <div class="mcard"><div class="mcard-label">Avg margin (awarded)</div><div class="mcard-val green">${s.avg_margin_pct}%</div></div>
-          ${dealsCardsHtml}
+        <div style="display:grid;grid-template-columns:1fr 260px;gap:16px;align-items:stretch">
+          <div class="dash-metrics" style="margin-bottom:0">
+            <div class="mcard"><div class="mcard-label">Total quotes</div><div class="mcard-val navy">${s.total_quotes}</div><div class="mcard-sub">${s.awarded_count} awarded</div></div>
+            <div class="mcard"><div class="mcard-label">Awarded value</div><div class="mcard-val green">AED ${fmt(s.awarded_value)}</div><div class="mcard-sub">${s.awarded_count} quote(s)</div></div>
+            <div class="mcard"><div class="mcard-label">Pending value</div><div class="mcard-val amber">AED ${fmt(s.pending_value)}</div><div class="mcard-sub">${s.pending_count} quote(s) sent</div></div>
+            <div class="mcard"><div class="mcard-label">Draft value</div><div class="mcard-val navy">AED ${fmt(s.draft_value)}</div><div class="mcard-sub">${s.draft_count} quote(s)</div></div>
+            <div class="mcard"><div class="mcard-label">Win rate</div><div class="mcard-val amber">${s.win_rate_pct}%</div><div class="mcard-sub">of ${s.closed_count} closed</div></div>
+            <div class="mcard"><div class="mcard-label">Avg margin (awarded)</div><div class="mcard-val green">${s.avg_margin_pct}%</div></div>
+            ${dealsCardsHtml}
+          </div>
+          <div style="background:var(--white);border:1.5px solid var(--gray-200);border-radius:12px;padding:14px;display:flex;flex-direction:column">
+            <div class="mcard-label" style="margin-bottom:8px">Pipeline mix</div>
+            <div style="flex:1;position:relative;min-height:160px"><canvas id="pipelineDonutChart"></canvas></div>
+          </div>
         </div>
       </div>`);
   }
@@ -4043,6 +4117,16 @@ function insightsHTML(){
           <div class="mcard"><div class="mcard-label">Total collected</div><div class="mcard-val green">AED ${fmt(z.total_collected)}</div></div>
           <div class="mcard"><div class="mcard-label">Outstanding</div><div class="mcard-val amber">AED ${fmt(z.total_invoiced-z.total_collected)}</div></div>
           <div class="mcard"><div class="mcard-label">Customers</div><div class="mcard-val navy">${customers.length}</div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:16px;margin-bottom:16px">
+          <div style="background:var(--white);border:1.5px solid var(--gray-200);border-radius:12px;padding:14px">
+            <div class="mcard-label" style="margin-bottom:8px">Sales trend — last 12 months</div>
+            <div style="height:220px;position:relative"><canvas id="zohoTrendChart"></canvas></div>
+          </div>
+          <div style="background:var(--white);border:1.5px solid var(--gray-200);border-radius:12px;padding:14px">
+            <div class="mcard-label" style="margin-bottom:8px">Top customers</div>
+            <div style="height:220px;position:relative">${topCustomers.length?'<canvas id="zohoCustChart"></canvas>':'<div style="color:var(--gray-500);font-size:13px;padding:20px 0;text-align:center">No data for this period</div>'}</div>
+          </div>
         </div>
         ${topCustomers.length?`<div class="insights-list">
           <div class="insights-list-title">By customer${customers.length>15?' (top 15 by value)':''} — click a row to see invoices</div>
