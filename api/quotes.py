@@ -1548,7 +1548,14 @@ def insights_summary():
     out = {}
 
     # ── Sales & Pipeline (Quotes) ────────────────────────────────────────
-    qq = sb.table('quotes').select('status,total_sell,total_gp').eq('company_id', company_id)
+    # 'quotes' below carries the minimal per-quote fields (status/value/date)
+    # so the frontend can apply the same date-range filter (All time / This
+    # month / This quarter / This year / etc) client-side, exactly like the
+    # Zoho Sales section does with its own invoice list -- no extra round
+    # trip needed when the user just changes the range dropdown. The
+    # top-level aggregates below remain the all-time totals, used for the
+    # very first render before any range filter is applied.
+    qq = sb.table('quotes').select('status,total_sell,total_gp,created_at').eq('company_id', company_id)
     if not _can_view_all_quotes(claims):
         qq = qq.eq('created_by', claims['user_id'])
     quotes = qq.execute().data or []
@@ -1573,6 +1580,12 @@ def insights_summary():
         'win_rate_pct': round(len(awarded) / closed_count * 100) if closed_count else 0,
         'closed_count': closed_count,
         'avg_margin_pct': round(awarded_gp / awarded_value * 1000) / 10 if awarded_value else 0,
+        'quotes': [{
+            'status': q.get('status'),
+            'total_sell': _numf(q.get('total_sell')),
+            'total_gp': _numf(q.get('total_gp')),
+            'created_at': q.get('created_at'),
+        } for q in quotes],
     }
 
     # ── Deals ────────────────────────────────────────────────────────────

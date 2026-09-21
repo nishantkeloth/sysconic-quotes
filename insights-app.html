@@ -97,7 +97,7 @@ const S={
   user:JSON.parse(localStorage.getItem('qtcal_mobile_user')||'null'),
   company:JSON.parse(localStorage.getItem('qtcal_mobile_company')||'null'),
   data:null, loading:false, error:null, loginError:null, loggingIn:false,
-  zohoRange:'all', sheetCustomer:null,
+  zohoRange:'all', salesRange:'all', sheetCustomer:null,
 };
 const esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const fmt=n=>isNaN(n)?'0.00':(+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -179,6 +179,35 @@ function rangeBounds(range){
   if(range==='last_year')return[new Date(y-1,0,1), new Date(y,0,1)];
   return null;
 }
+function salesFiltered(sRaw){
+  if(!sRaw)return null;
+  const bounds=rangeBounds(S.salesRange);
+  const quotes=(sRaw.quotes||[]).filter(q=>{
+    if(!bounds)return true;
+    if(!q.created_at)return false;
+    const d=new Date(q.created_at);
+    return d>=bounds[0]&&d<bounds[1];
+  });
+  const awarded=quotes.filter(q=>q.status==='awarded');
+  const lost=quotes.filter(q=>q.status==='lost');
+  const draftQ=quotes.filter(q=>q.status==='draft');
+  const pendingQ=quotes.filter(q=>q.status==='sent');
+  const closedCount=awarded.length+lost.length;
+  const awardedValue=awarded.reduce((s,q)=>s+(q.total_sell||0),0);
+  const awardedGp=awarded.reduce((s,q)=>s+(q.total_gp||0),0);
+  return {
+    total_quotes:quotes.length,
+    awarded_count:awarded.length,
+    awarded_value:awardedValue,
+    pending_value:pendingQ.reduce((s,q)=>s+(q.total_sell||0),0),
+    pending_count:pendingQ.length,
+    draft_value:draftQ.reduce((s,q)=>s+(q.total_sell||0),0),
+    draft_count:draftQ.length,
+    win_rate_pct:closedCount?Math.round(awarded.length/closedCount*100):0,
+    closed_count:closedCount,
+    avg_margin_pct:awardedValue?Math.round(awardedGp/awardedValue*1000)/10:0,
+  };
+}
 function zohoFiltered(zRaw){
   if(!zRaw)return null;
   const bounds=rangeBounds(S.zohoRange);
@@ -226,9 +255,16 @@ function loginHTML(){
   </div>`;
 }
 
-function salesSectionHTML(s,deals){
+function salesSectionHTML(sRaw,deals){
+  const s=salesFiltered(sRaw);
+  const rangeOpts=[['all','All time'],['this_month','This month'],['last_month','Last month'],['this_quarter','This quarter'],['last_quarter','Last quarter'],['this_year','This year'],['last_year','Last year']];
   return `<div class="sec">
-    <div class="sec-title"><span>📈 Sales &amp; Pipeline</span></div>
+    <div class="sec-title">
+      <span>📈 Sales &amp; Pipeline</span>
+      <select class="range-sel" onchange="S.salesRange=this.value;render()">
+        ${rangeOpts.map(([v,l])=>`<option value="${v}" ${S.salesRange===v?'selected':''}>${l}</option>`).join('')}
+      </select>
+    </div>
     <div class="cards">
       <div class="card"><div class="card-label">Total quotes</div><div class="card-val navy">${s.total_quotes}</div><div class="card-sub">${s.awarded_count} awarded</div></div>
       <div class="card"><div class="card-label">Win rate</div><div class="card-val amber">${s.win_rate_pct}%</div><div class="card-sub">of ${s.closed_count} closed</div></div>
@@ -367,7 +403,7 @@ function initCharts(){
 
   const pipeEl=document.getElementById('mPipelineChart');
   if(pipeEl&&d.sales){
-    const s=d.sales;
+    const s=salesFiltered(d.sales);
     CHARTS.pipeline=new Chart(pipeEl,{
       type:'doughnut',
       data:{labels:['Awarded','Pending','Draft'],datasets:[{data:[s.awarded_value||0,s.pending_value||0,s.draft_value||0],backgroundColor:['#047857','#b45309','#1a3c6e'],borderWidth:0}]},

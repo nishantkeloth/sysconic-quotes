@@ -3941,6 +3941,35 @@ function _zohoSalesRangeBounds(range){
   if(range==='last_year')return[new Date(y-1,0,1), new Date(y,0,1)];
   return null; // all time
 }
+function _salesFiltered(sRaw){
+  if(!sRaw)return null;
+  const bounds=_zohoSalesRangeBounds(A.salesRange||'all');
+  const quotes=(sRaw.quotes||[]).filter(q=>{
+    if(!bounds)return true;
+    if(!q.created_at)return false;
+    const d=new Date(q.created_at);
+    return d>=bounds[0]&&d<bounds[1];
+  });
+  const awarded=quotes.filter(q=>q.status==='awarded');
+  const lost=quotes.filter(q=>q.status==='lost');
+  const draftQ=quotes.filter(q=>q.status==='draft');
+  const pendingQ=quotes.filter(q=>q.status==='sent');
+  const closedCount=awarded.length+lost.length;
+  const awardedValue=awarded.reduce((s,q)=>s+(q.total_sell||0),0);
+  const awardedGp=awarded.reduce((s,q)=>s+(q.total_gp||0),0);
+  return {
+    total_quotes:quotes.length,
+    awarded_count:awarded.length,
+    awarded_value:awardedValue,
+    pending_value:pendingQ.reduce((s,q)=>s+(q.total_sell||0),0),
+    pending_count:pendingQ.length,
+    draft_value:draftQ.reduce((s,q)=>s+(q.total_sell||0),0),
+    draft_count:draftQ.length,
+    win_rate_pct:closedCount?Math.round(awarded.length/closedCount*100):0,
+    closed_count:closedCount,
+    avg_margin_pct:awardedValue?Math.round(awardedGp/awardedValue*1000)/10:0,
+  };
+}
 function _zohoSalesFiltered(zRaw){
   if(!zRaw)return null;
   const bounds=_zohoSalesRangeBounds(A.zohoSalesRange||'all');
@@ -4014,7 +4043,7 @@ function initInsightsCharts(){
   // Sales & Pipeline: Awarded / Pending / Draft value split
   const pipeEl=document.getElementById('pipelineDonutChart');
   if(pipeEl&&d.sales){
-    const s=d.sales;
+    const s=_salesFiltered(d.sales);
     INSIGHTS_CHARTS.pipeline=new Chart(pipeEl,{
       type:'doughnut',
       data:{labels:['Awarded','Pending','Draft'],datasets:[{data:[s.awarded_value||0,s.pending_value||0,s.draft_value||0],backgroundColor:['#047857','#b45309','#1a3c6e'],borderWidth:0}]},
@@ -4069,7 +4098,8 @@ function insightsHTML(){
 
   // ── Sales & Pipeline (Quotes + Deals) ──────────────────────────────────
   if(d.sales){
-    const s=d.sales;
+    const s=_salesFiltered(d.sales);
+    const salesRangeOpts=[['all','All time'],['this_month','This month'],['last_month','Last month'],['this_quarter','This quarter'],['last_quarter','Last quarter'],['this_year','This year'],['last_year','Last year']];
     let dealsCardsHtml='';
     if(d.deals){
       dealsCardsHtml=`
@@ -4078,7 +4108,12 @@ function insightsHTML(){
     }
     sections.push(`
       <div class="insights-sec">
-        <div class="insights-sec-title">📈 Sales &amp; Pipeline</div>
+        <div class="insights-sec-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <span>📈 Sales &amp; Pipeline</span>
+          <select class="filter-sel" style="font-size:12px;padding:5px 8px" onchange="A.salesRange=this.value;draw()">
+            ${salesRangeOpts.map(([v,label])=>`<option value="${v}" ${(A.salesRange||'all')===v?'selected':''}>${label}</option>`).join('')}
+          </select>
+        </div>
         <div style="display:grid;grid-template-columns:1fr 260px;gap:16px;align-items:stretch">
           <div class="dash-metrics" style="margin-bottom:0">
             <div class="mcard"><div class="mcard-label">Total quotes</div><div class="mcard-val navy">${s.total_quotes}</div><div class="mcard-sub">${s.awarded_count} awarded</div></div>
