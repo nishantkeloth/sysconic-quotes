@@ -4046,7 +4046,7 @@ function insightsHTML(){
         </div>
         ${topCustomers.length?`<div class="insights-list">
           <div class="insights-list-title">By customer${customers.length>15?' (top 15 by value)':''} — click a row to see invoices</div>
-          ${topCustomers.map(c=>`<div class="insights-row" style="cursor:pointer" onclick="showZohoCustomerModal(${esc(JSON.stringify(c.customer))})"><span>${esc(c.customer)}</span><span style="color:var(--gray-500)">${c.count} invoice(s)</span><span style="color:var(--green)">AED ${fmt(c.collected)} collected</span><span style="font-weight:700">AED ${fmt(c.invoiced)}</span></div>`).join('')}
+          ${topCustomers.map(c=>`<div class="insights-row" style="cursor:pointer;display:grid;grid-template-columns:1fr 90px 170px 150px;gap:12px;align-items:center" onclick="showZohoCustomerModal(${esc(JSON.stringify(c.customer))})"><span>${esc(c.customer)}</span><span style="color:var(--gray-500);text-align:right">${c.count} invoice(s)</span><span style="color:var(--green);text-align:right">AED ${fmt(c.collected)} collected</span><span style="font-weight:700;text-align:right">AED ${fmt(c.invoiced)}</span></div>`).join('')}
         </div>`:`<div style="color:var(--gray-500);padding:16px 0">${(d.zoho_sales.invoices||[]).length?'No invoices in this period.':'No invoices synced yet — click Sync Now above.'}</div>`}
         ${z.last_synced_at?`<div style="font-size:11px;color:var(--gray-500);margin-top:8px">Last synced ${_insightsAgo(new Date(z.last_synced_at))}</div>`:''}
       </div>`);
