@@ -3170,18 +3170,35 @@ function gridWheelScroll(e,el){
   el.scrollLeft+=e.deltaY;
 }
 function draw(){
+  const _appEl=document.getElementById('app');
+  let _focusRestore=null;
+  const _ae=document.activeElement;
+  if(_ae&&_ae.id&&_appEl&&_appEl.contains(_ae)&&(_ae.tagName==='INPUT'||_ae.tagName==='TEXTAREA')){
+    _focusRestore={id:_ae.id,start:_ae.selectionStart,end:_ae.selectionEnd};
+  }
+  function _restoreFocus(){
+    if(!_focusRestore)return;
+    const el=document.getElementById(_focusRestore.id);
+    if(el){
+      el.focus();
+      if(typeof el.setSelectionRange==='function'&&_focusRestore.start!=null){
+        try{el.setSelectionRange(_focusRestore.start,_focusRestore.end);}catch(e){}
+      }
+    }
+  }
   document.getElementById('app').innerHTML='';
-  if(A.screen==='portalLogin'||A.screen==='portalAcceptInvite'||A.screen==='portalApp'){document.getElementById('app').innerHTML=portalHTML();return;}
-  if(A.screen==='login'||A.screen==='register'){document.getElementById('app').innerHTML=authHTML();return;}
-  if(A.screen==='feedbackForm'){document.getElementById('app').innerHTML=feedbackFormHTML();return;}if(A.screen==='acceptInvite'){document.getElementById('app').innerHTML=acceptInviteHTML();return;}
-  if(A.screen==='forgotPassword'){document.getElementById('app').innerHTML=forgotPasswordHTML();return;}
-  if(A.screen==='resetPassword'){document.getElementById('app').innerHTML=resetPasswordHTML();return;}
+  if(A.screen==='portalLogin'||A.screen==='portalAcceptInvite'||A.screen==='portalApp'){document.getElementById('app').innerHTML=portalHTML();_restoreFocus();return;}
+  if(A.screen==='login'||A.screen==='register'){document.getElementById('app').innerHTML=authHTML();_restoreFocus();return;}
+  if(A.screen==='feedbackForm'){document.getElementById('app').innerHTML=feedbackFormHTML();_restoreFocus();return;}if(A.screen==='acceptInvite'){document.getElementById('app').innerHTML=acceptInviteHTML();_restoreFocus();return;}
+  if(A.screen==='forgotPassword'){document.getElementById('app').innerHTML=forgotPasswordHTML();_restoreFocus();return;}
+  if(A.screen==='resetPassword'){document.getElementById('app').innerHTML=resetPasswordHTML();_restoreFocus();return;}
   const PAGE_KEY_MAP={insights:'insights',dashboard:'quotes',deals:'deals',products:'products',customers:'customers',vendorMaster:'vendors',projects:'projects',projectPerformance:'projectPerformance',projectPerformanceDetail:'projectPerformance',reviewQueue:'reviewQueue',testimonials:'testimonials',vouchers:'vouchers'};
   if(PAGE_KEY_MAP[A.page]&&!hasPageAccess(PAGE_KEY_MAP[A.page])){
     const fallbackOrder=['insights','dashboard','deals','products','customers','vendorMaster','projects','projectPerformance','reviewQueue','testimonials','vouchers'];
     A.page=fallbackOrder.find(p=>hasPageAccess(PAGE_KEY_MAP[p]))||'dashboard';
   }
   document.getElementById('app').innerHTML=appHTML();
+  _restoreFocus();
   setTimeout(initTA,30);
   if(A.page==='insights'&&!INSIGHTS.data&&!INSIGHTS.loading)setTimeout(loadInsightsPage,50);
   if(A.page==='team'){setTimeout(loadTeam,50);}
