@@ -1554,13 +1554,20 @@ def insights_summary():
     quotes = qq.execute().data or []
     awarded = [q for q in quotes if q.get('status') == 'awarded']
     lost = [q for q in quotes if q.get('status') == 'lost']
-    open_q = [q for q in quotes if q.get('status') in ('draft', 'sent')]
+    draft_q = [q for q in quotes if q.get('status') == 'draft']
+    pending_q = [q for q in quotes if q.get('status') == 'sent']
+    open_q = draft_q + pending_q
     closed_count = len(awarded) + len(lost)
     awarded_value = sum(_numf(q.get('total_sell')) for q in awarded)
     awarded_gp = sum(_numf(q.get('total_gp')) for q in awarded)
     out['sales'] = {
         'total_quotes': len(quotes),
         'awarded_count': len(awarded),
+        'awarded_value': awarded_value,
+        'pending_value': sum(_numf(q.get('total_sell')) for q in pending_q),
+        'pending_count': len(pending_q),
+        'draft_value': sum(_numf(q.get('total_sell')) for q in draft_q),
+        'draft_count': len(draft_q),
         'open_pipeline_value': sum(_numf(q.get('total_sell')) for q in open_q),
         'open_quote_count': len(open_q),
         'win_rate_pct': round(len(awarded) / closed_count * 100) if closed_count else 0,

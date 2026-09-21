@@ -3948,7 +3948,9 @@ function insightsHTML(){
         <div class="insights-sec-title">📈 Sales &amp; Pipeline</div>
         <div class="dash-metrics">
           <div class="mcard"><div class="mcard-label">Total quotes</div><div class="mcard-val navy">${s.total_quotes}</div><div class="mcard-sub">${s.awarded_count} awarded</div></div>
-          <div class="mcard"><div class="mcard-label">Open pipeline value</div><div class="mcard-val navy">AED ${fmt(s.open_pipeline_value)}</div><div class="mcard-sub">${s.open_quote_count} quote(s)</div></div>
+          <div class="mcard"><div class="mcard-label">Awarded value</div><div class="mcard-val green">AED ${fmt(s.awarded_value)}</div><div class="mcard-sub">${s.awarded_count} quote(s)</div></div>
+          <div class="mcard"><div class="mcard-label">Pending value</div><div class="mcard-val amber">AED ${fmt(s.pending_value)}</div><div class="mcard-sub">${s.pending_count} quote(s) sent</div></div>
+          <div class="mcard"><div class="mcard-label">Draft value</div><div class="mcard-val navy">AED ${fmt(s.draft_value)}</div><div class="mcard-sub">${s.draft_count} quote(s)</div></div>
           <div class="mcard"><div class="mcard-label">Win rate</div><div class="mcard-val amber">${s.win_rate_pct}%</div><div class="mcard-sub">of ${s.closed_count} closed</div></div>
           <div class="mcard"><div class="mcard-label">Avg margin (awarded)</div><div class="mcard-val green">${s.avg_margin_pct}%</div></div>
           ${dealsCardsHtml}
