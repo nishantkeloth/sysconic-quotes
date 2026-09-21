@@ -170,8 +170,11 @@ async function syncZohoSales(){
 // ── Zoho Sales range filtering (same logic as the desktop app) ─────────────
 function rangeBounds(range){
   const now=new Date(); const y=now.getFullYear(), m=now.getMonth();
+  const q=Math.floor(m/3);
   if(range==='this_month')return[new Date(y,m,1), new Date(y,m+1,1)];
   if(range==='last_month')return[new Date(y,m-1,1), new Date(y,m,1)];
+  if(range==='this_quarter')return[new Date(y,q*3,1), new Date(y,q*3+3,1)];
+  if(range==='last_quarter')return[new Date(y,q*3-3,1), new Date(y,q*3,1)];
   if(range==='this_year')return[new Date(y,0,1), new Date(y+1,0,1)];
   if(range==='last_year')return[new Date(y-1,0,1), new Date(y,0,1)];
   return null;
@@ -243,7 +246,7 @@ function salesSectionHTML(s,deals){
 function zohoSectionHTML(zRaw){
   const z=zohoFiltered(zRaw);
   const top=(z.customers||[]).slice(0,10);
-  const rangeOpts=[['all','All time'],['this_month','This month'],['last_month','Last month'],['this_year','This year'],['last_year','Last year']];
+  const rangeOpts=[['all','All time'],['this_month','This month'],['last_month','Last month'],['this_quarter','This quarter'],['last_quarter','Last quarter'],['this_year','This year'],['last_year','Last year']];
   return `<div class="sec">
     <div class="sec-title">
       <span>🧾 Zoho Sales</span>
