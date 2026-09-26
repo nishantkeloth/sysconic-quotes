@@ -1628,7 +1628,7 @@ def _build_insights_payload(claims):
     zc = sb.table('company_integrations').select('status').eq('company_id', company_id).eq('provider', 'zoho').execute().data
     if zc and zc[0].get('status') == 'connected':
         inv_rows = sb.table('zoho_invoices').select(
-            'invoice_number,invoice_date,status,total,balance,customer_name,synced_at'
+            'id,invoice_number,invoice_date,due_date,status,total,balance,customer_name,synced_at'
         ).eq('company_id', company_id).order('invoice_date', desc=True).execute().data or []
         by_customer = {}
         for r in inv_rows:
@@ -1647,8 +1647,10 @@ def _build_insights_payload(claims):
             'invoice_count': len(inv_rows),
             'customers': customers,
             'invoices': [{
+                'id': r.get('id'),
                 'invoice_number': r.get('invoice_number'),
                 'invoice_date': r.get('invoice_date'),
+                'due_date': r.get('due_date'),
                 'status': r.get('status'),
                 'total': _numf(r.get('total')),
                 'balance': _numf(r.get('balance')),
@@ -1797,6 +1799,148 @@ def insights_public():
     payload = _build_insights_payload(fake_claims)
     payload['company_name'] = company.get('name')
     return jsonify(payload)
+
+
+# ── Quote-to-invoice reconciliation (Business Performance Dashboard) ────────
+# QTCal quotes/projects and Zoho invoices have no reliable existing link (see
+# migration-add-quote-invoice-matches.sql's header comment for the full
+# rationale). Rather than guess an "awarded-but-uninvoiced" figure from
+# nothing, this suggests candidate matches by customer-name overlap + amount
+# closeness + date proximity -- mirrors the confidence-scoring approach
+# api/projects.py already uses for PO-line-to-quoted-line matching
+# (_match_baseline_line) -- and an admin confirms or rejects each one before
+# it counts toward any total.
+_QIM_WORD_RE = re.compile(r'[a-z0-9]+')
+
+def _qim_tokens(s):
+    return set(_QIM_WORD_RE.findall((s or '').lower()))
+
+def _qim_score(quote, invoice):
+    """Returns (score 0..1, basis dict). All three signals are weighted so a
+    strong customer-name match carries the most weight (free-text customer
+    names are the only thing connecting these two systems at all), amount
+    plausibility second (an invoice can legitimately be a partial-invoice
+    fraction of the quote, so this rewards "positive amount up to slightly
+    over the quote total" rather than requiring an exact match), and date
+    proximity last (a loose sanity check, not a hard requirement)."""
+    q_tokens, i_tokens = _qim_tokens(quote.get('customer')), _qim_tokens(invoice.get('customer_name'))
+    overlap = (len(q_tokens & i_tokens) / len(q_tokens | i_tokens)) if (q_tokens and i_tokens) else 0.0
+
+    q_total, i_total = _numf(quote.get('total_sell')), _numf(invoice.get('total'))
+    amount_ratio, amount_score = None, 0.0
+    if q_total > 0 and i_total > 0:
+        amount_ratio = i_total / q_total
+        # A partial invoice (a fraction of the quote) is still a plausible
+        # match -- score it by how much of the quote it covers. An invoice
+        # noticeably larger than the quote is more likely an unrelated job.
+        amount_score = amount_ratio if amount_ratio <= 1.05 else max(0.0, 1.0 - (amount_ratio - 1.05))
+
+    days_apart, date_score = None, 0.0
+    q_date, i_date = _insights_parse_dt(quote.get('created_at')), _insights_parse_dt(invoice.get('invoice_date'))
+    if q_date and i_date:
+        days_apart = abs((i_date - q_date).days)
+        date_score = max(0.0, 1.0 - days_apart / 180.0)  # falls to 0 past ~6 months apart
+
+    score = overlap * 0.5 + amount_score * 0.35 + date_score * 0.15
+    basis = {'customer_overlap': round(overlap, 2), 'amount_ratio': round(amount_ratio, 2) if amount_ratio is not None else None, 'days_apart': days_apart}
+    return score, basis
+
+_QIM_SUGGEST_THRESHOLD = 0.35
+_QIM_MAX_PER_QUOTE = 3
+
+@app.route('/api/insights/quote-invoice-matches/generate', methods=['POST'])
+def generate_quote_invoice_matches():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if claims.get('role') != 'admin': return jsonify({'error': 'Admin only'}), 403
+    company_id = claims['company_id']
+
+    quotes = sb.table('quotes').select('id,customer,total_sell,created_at')\
+        .eq('company_id', company_id).eq('status', 'awarded').execute().data or []
+    invoices = sb.table('zoho_invoices').select('id,customer_name,total,invoice_date')\
+        .eq('company_id', company_id).execute().data or []
+    if not quotes or not invoices:
+        return jsonify({'created': 0, 'considered_quotes': len(quotes), 'candidate_invoices': len(invoices)})
+
+    existing = sb.table('quote_invoice_matches').select('quote_id,zoho_invoice_id,status')\
+        .eq('company_id', company_id).execute().data or []
+    existing_pairs = {(m['quote_id'], m['zoho_invoice_id']) for m in existing}
+    # An invoice already confirmed against one quote is spoken for -- never
+    # suggest it for another, or the same revenue could be confirmed twice.
+    confirmed_invoice_ids = {m['zoho_invoice_id'] for m in existing if m['status'] == 'confirmed'}
+    candidate_invoices = [i for i in invoices if i['id'] not in confirmed_invoice_ids]
+
+    to_insert = []
+    for q in quotes:
+        scored = []
+        for inv in candidate_invoices:
+            if (q['id'], inv['id']) in existing_pairs:
+                continue  # already suggested/confirmed/rejected this exact pair before
+            score, basis = _qim_score(q, inv)
+            if score >= _QIM_SUGGEST_THRESHOLD:
+                scored.append((score, inv, basis))
+        scored.sort(key=lambda t: t[0], reverse=True)
+        for score, inv, basis in scored[:_QIM_MAX_PER_QUOTE]:
+            to_insert.append({
+                'company_id': company_id, 'quote_id': q['id'], 'zoho_invoice_id': inv['id'],
+                'match_score': round(score, 4), 'match_basis': basis, 'status': 'suggested',
+            })
+
+    if to_insert:
+        sb.table('quote_invoice_matches').insert(to_insert).execute()
+    return jsonify({'created': len(to_insert), 'considered_quotes': len(quotes), 'candidate_invoices': len(candidate_invoices)})
+
+@app.route('/api/insights/quote-invoice-matches', methods=['GET'])
+def list_quote_invoice_matches():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    company_id = claims['company_id']
+    q = sb.table('quote_invoice_matches').select('*').eq('company_id', company_id)
+    status = (request.args.get('status') or '').strip()
+    if status in ('suggested', 'confirmed', 'rejected'):
+        q = q.eq('status', status)
+    rows = q.order('created_at', desc=True).execute().data or []
+
+    quote_ids = list({r['quote_id'] for r in rows})
+    invoice_ids = list({r['zoho_invoice_id'] for r in rows})
+    quotes_by_id = {r['id']: r for r in (sb.table('quotes').select('id,title,customer,total_sell,quote_ref')
+        .in_('id', quote_ids).execute().data or [])} if quote_ids else {}
+    invoices_by_id = {r['id']: r for r in (sb.table('zoho_invoices').select('id,invoice_number,invoice_date,total,balance,customer_name')
+        .in_('id', invoice_ids).execute().data or [])} if invoice_ids else {}
+
+    return jsonify({'matches': [{
+        'id': r['id'], 'status': r['status'], 'match_score': r.get('match_score'), 'match_basis': r.get('match_basis'),
+        'created_at': r.get('created_at'), 'quote': quotes_by_id.get(r['quote_id']), 'invoice': invoices_by_id.get(r['zoho_invoice_id']),
+    } for r in rows]})
+
+@app.route('/api/insights/quote-invoice-matches/<mid>/confirm', methods=['POST'])
+def confirm_quote_invoice_match(mid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if claims.get('role') != 'admin': return jsonify({'error': 'Admin only'}), 403
+    company_id = claims['company_id']
+    row = sb.table('quote_invoice_matches').select('*').eq('id', mid).eq('company_id', company_id).execute().data
+    if not row: return jsonify({'error': 'Not found'}), 404
+    m = row[0]
+    sb.table('quote_invoice_matches').update({
+        'status': 'confirmed', 'confirmed_by': claims['user_id'], 'confirmed_at': datetime.utcnow().isoformat(),
+    }).eq('id', mid).execute()
+    # Enforce "an invoice counts once": any other still-pending suggestion
+    # against this same invoice is no longer valid now that it's spoken for.
+    sb.table('quote_invoice_matches').update({'status': 'rejected'})\
+        .eq('zoho_invoice_id', m['zoho_invoice_id']).eq('status', 'suggested').neq('id', mid).execute()
+    return jsonify({'ok': True})
+
+@app.route('/api/insights/quote-invoice-matches/<mid>/reject', methods=['POST'])
+def reject_quote_invoice_match(mid):
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if claims.get('role') != 'admin': return jsonify({'error': 'Admin only'}), 403
+    company_id = claims['company_id']
+    existing = sb.table('quote_invoice_matches').select('id').eq('id', mid).eq('company_id', company_id).execute().data
+    if not existing: return jsonify({'error': 'Not found'}), 404
+    sb.table('quote_invoice_matches').update({'status': 'rejected'}).eq('id', mid).execute()
+    return jsonify({'ok': True})
 
 
 # ── Deals ────────────────────────────────────────────────────────────────────

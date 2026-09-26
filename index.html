@@ -3203,6 +3203,8 @@ function draw(){
   setTimeout(initTA,30);
   if(A.page==='insights'&&!INSIGHTS.data&&!INSIGHTS.loading)setTimeout(loadInsightsPage,50);
   if(A.page==='insights'&&INSIGHTS.data)setTimeout(initInsightsCharts,60);
+  if(A.page==='insights'&&A.quotes==null)loadQuotes().then(draw); // Quote-to-Invoice panel needs full quote list (id/ref/customer), not the lightweight d.sales.quotes array
+  if(A.page==='insights'&&!BIZ_MATCHES.data&&!BIZ_MATCHES.loading)setTimeout(()=>loadBizMatches(false),50);
   if(A.page==='team'){setTimeout(loadTeam,50);}
   if(A.page==='integrations'){setTimeout(loadIntegrations,50);setTimeout(loadSyncConfig,50);}
   if(A.page==='platform'){setTimeout(loadPlatformCompanies,50);}
@@ -4023,6 +4025,338 @@ function showZohoCustomerModal(customerName){
     </div>
   </div>`);
 }
+
+// ── Business Performance (year-based Zoho financial view) ──────────────────
+// Extends the Zoho Sales section above with year filters, YoY growth, a
+// monthly invoiced-vs-collected trend, receivables ageing, and quote-to-
+// invoice reconciliation. Computed entirely client-side from the same
+// zoho_sales.invoices array the Zoho Sales section already has -- no new
+// backend aggregation endpoint, per this app's established convention of
+// shipping raw records and filtering/aggregating in JS (see
+// _zohoSalesFiltered above).
+//
+// Honesty note (see QTCal_Zoho_Dashboard_Requirements doc §4): the synced
+// invoice record only has total/balance, not a VAT sub-total, and there is
+// no credit-note or customer-payment sync yet. So here:
+//   - "Invoiced" is gross incl. VAT -- deliberately never labeled "net sales"
+//     or "excl. VAT" anywhere in this section.
+//   - "Collected" is the proxy (invoiced total − current balance), tied to
+//     invoice date, not a real payment-date figure -- always labeled "proxy".
+//   - Credit notes are not netted out anywhere (none are synced yet).
+// Current outstanding / overdue / ageing ARE accurate, real "as of now"
+// figures -- they only need total+balance+due_date, all already synced.
+function _bizNonDraft(inv){ return (inv.status||'').toLowerCase()!=='draft'; }
+
+function _bizFyMonth(){ return A.bizFyMonth||1; } // 1=January; configurable in-session, defaults to calendar year
+
+// Maps a calendar date to a fiscal-year label given the fiscal start month.
+// With fyMonth=1 this is just getFullYear(). With e.g. fyMonth=4 (April),
+// Jan-Mar 2026 belongs to FY2025 (the year the fiscal year STARTED in).
+function _bizFyLabel(d){
+  const fm=_bizFyMonth();
+  if(fm===1)return d.getFullYear();
+  return (d.getMonth()+1)>=fm ? d.getFullYear() : d.getFullYear()-1;
+}
+function _bizFyBounds(fyLabel){
+  const fm=_bizFyMonth();
+  return [new Date(fyLabel,fm-1,1), new Date(fyLabel+1,fm-1,1)];
+}
+function _bizAllInvoices(){
+  const zRaw=INSIGHTS.data&&INSIGHTS.data.zoho_sales;
+  return (zRaw&&zRaw.invoices)||[];
+}
+function _bizInRange(dateStr,from,to){
+  if(!dateStr)return false;
+  const d=new Date(dateStr);
+  if(from&&d<from)return false;
+  if(to&&d>=to)return false;
+  return true;
+}
+
+// Per-year rollup across ALL synced invoices (not range-filtered) -- what the
+// year-wise table and YoY chart need: every year side by side.
+function _bizYearRows(){
+  const invoices=_bizAllInvoices().filter(_bizNonDraft);
+  const byYear={};
+  invoices.forEach(inv=>{
+    if(!inv.invoice_date)return;
+    const y=_bizFyLabel(new Date(inv.invoice_date));
+    const row=byYear[y]||(byYear[y]={year:y,invoiced:0,collected:0,unpaid:0,count:0});
+    const total=inv.total||0, balance=inv.balance||0;
+    row.invoiced+=total; row.collected+=(total-balance); row.unpaid+=balance; row.count+=1;
+  });
+  const years=Object.keys(byYear).map(Number).sort((a,b)=>b-a);
+  const nowFy=_bizFyLabel(new Date());
+  return years.map(y=>{
+    const row=byYear[y], prev=byYear[y-1];
+    const yoy=(prev&&prev.invoiced>0)?Math.round((row.invoiced-prev.invoiced)/Math.abs(prev.invoiced)*1000)/10:null;
+    return {...row, yoy_pct:yoy, is_current:y===nowFy};
+  });
+}
+
+// Bounds for the currently-selected period. compareFrom/To is the matching
+// prior-year window so YTD compares to the SAME dates last year, not the
+// full prior year (per spec).
+function _bizPeriodBounds(){
+  const mode=A.bizPeriod||'ytd';
+  const now=new Date();
+  const y=A.bizYear||_bizFyLabel(now);
+  if(mode==='all')return {from:null,to:null,label:'All time',compareFrom:null,compareTo:null,compareLabel:null};
+  if(mode==='year'){
+    const [from,to]=_bizFyBounds(y), [cf,ct]=_bizFyBounds(y-1);
+    return {from,to,label:'FY'+y,compareFrom:cf,compareTo:ct,compareLabel:'FY'+(y-1)};
+  }
+  if(mode==='prev_year'){
+    const [from,to]=_bizFyBounds(y-1), [cf,ct]=_bizFyBounds(y-2);
+    return {from,to,label:'FY'+(y-1),compareFrom:cf,compareTo:ct,compareLabel:'FY'+(y-2)};
+  }
+  if(mode==='custom'){
+    const from=A.bizCustomFrom?new Date(A.bizCustomFrom):null;
+    const to=A.bizCustomTo?new Date(new Date(A.bizCustomTo).getTime()+86400000):null; // inclusive end date
+    return {from,to,label:(A.bizCustomFrom||'…')+' – '+(A.bizCustomTo||'…'),compareFrom:null,compareTo:null,compareLabel:null};
+  }
+  // ytd (default): fiscal-year start for `y` through today
+  const [fyStart]=_bizFyBounds(y);
+  const from=fyStart, to=new Date(now.getTime()+1);
+  const daysElapsed=Math.floor((now-fyStart)/86400000);
+  const [pfyStart]=_bizFyBounds(y-1);
+  const cf=pfyStart, ct=new Date(pfyStart.getTime()+(daysElapsed+1)*86400000);
+  return {from,to,label:'FY'+y+' YTD',compareFrom:cf,compareTo:ct,compareLabel:'FY'+(y-1)+' YTD (same dates)'};
+}
+
+function _bizPeriodTotals(bounds){
+  const invoices=_bizAllInvoices().filter(_bizNonDraft);
+  const sum=(from,to)=>{
+    let invoiced=0,collected=0,count=0;
+    invoices.forEach(inv=>{
+      if(!_bizInRange(inv.invoice_date,from,to))return;
+      invoiced+=(inv.total||0); collected+=((inv.total||0)-(inv.balance||0)); count+=1;
+    });
+    return {invoiced,collected,count};
+  };
+  const cur=sum(bounds.from,bounds.to);
+  let yoy=null;
+  if(bounds.compareFrom!==undefined&&bounds.compareFrom!==null){
+    const prev=sum(bounds.compareFrom,bounds.compareTo);
+    yoy = prev.invoiced>0 ? Math.round((cur.invoiced-prev.invoiced)/Math.abs(prev.invoiced)*1000)/10 : null;
+  }
+  return {...cur, yoy_pct:yoy};
+}
+
+// "As of now" stock figures -- deliberately NOT period-filtered: outstanding
+// and overdue are current balances, never a historical year-end snapshot.
+function _bizAsOfNow(){
+  const invoices=_bizAllInvoices().filter(_bizNonDraft);
+  const now=new Date();
+  let outstanding=0, overdue=0;
+  const buckets={not_due:0,b1_30:0,b31_60:0,b61_90:0,b90_plus:0};
+  invoices.forEach(inv=>{
+    const bal=inv.balance||0;
+    if(bal<=0)return;
+    outstanding+=bal;
+    if(!inv.due_date){buckets.not_due+=bal;return;} // no due date synced -- can't age it; park rather than guess
+    const daysOver=Math.floor((now-new Date(inv.due_date))/86400000);
+    if(daysOver<=0)buckets.not_due+=bal;
+    else{
+      overdue+=bal;
+      if(daysOver<=30)buckets.b1_30+=bal;
+      else if(daysOver<=60)buckets.b31_60+=bal;
+      else if(daysOver<=90)buckets.b61_90+=bal;
+      else buckets.b90_plus+=bal;
+    }
+  });
+  return {outstanding,overdue,buckets,as_of:now};
+}
+
+// Monthly series for a given fiscal year (invoiced vs. collected proxy).
+function _bizMonthlySeries(y){
+  const invoices=_bizAllInvoices().filter(_bizNonDraft);
+  const [from]=_bizFyBounds(y);
+  const months=[];
+  for(let i=0;i<12;i++){
+    const dt=new Date(from.getFullYear(),from.getMonth()+i,1);
+    months.push({key:dt.getFullYear()+'-'+dt.getMonth(),label:dt.toLocaleDateString('en-US',{month:'short'}),invoiced:0,collected:0});
+  }
+  const byKey={};months.forEach(m=>byKey[m.key]=m);
+  invoices.forEach(inv=>{
+    if(!inv.invoice_date)return;
+    const dt=new Date(inv.invoice_date);
+    const key=dt.getFullYear()+'-'+dt.getMonth();
+    if(byKey[key]){byKey[key].invoiced+=(inv.total||0); byKey[key].collected+=((inv.total||0)-(inv.balance||0));}
+  });
+  return months;
+}
+
+function downloadCsv(filename,rows){
+  const escCsv=v=>{
+    const s=(v==null?'':String(v));
+    return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+  };
+  const csv=rows.map(r=>r.map(escCsv).join(',')).join('\r\n');
+  const blob=new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob); a.download=filename; a.click();
+  URL.revokeObjectURL(a.href);
+}
+function exportBizYearTableCsv(){
+  const rows=_bizYearRows();
+  const head=['Year','Invoiced (incl. VAT, AED)','Collected (proxy, AED)','Unpaid on this year\'s invoices (AED)','Invoice count','YoY growth %'];
+  const body=rows.map(r=>[r.year,r.invoiced.toFixed(2),r.collected.toFixed(2),r.unpaid.toFixed(2),r.count,r.yoy_pct==null?'N/A':r.yoy_pct]);
+  downloadCsv('business-performance-by-year.csv',[head,...body]);
+}
+
+function showInvoiceListModal(title,invoices,subtitle){
+  const statusColor={paid:'var(--green)',overdue:'var(--red)',sent:'var(--amber)',draft:'var(--gray-500)'};
+  const rows=(invoices||[]).map(i=>`<div style="display:grid;grid-template-columns:1fr 100px 90px 110px 120px;gap:8px;font-size:13px;padding:8px 0;border-bottom:1px solid var(--gray-100);align-items:center">
+    <span>${esc(i.invoice_number||'—')} <span style="color:var(--gray-500)">· ${esc(i.customer_name||'')}</span></span>
+    <span style="color:var(--gray-500)">${esc((i.invoice_date||'').slice(0,10))}</span>
+    <span style="color:${statusColor[(i.status||'').toLowerCase()]||'var(--gray-500)'};font-weight:700;text-transform:capitalize">${esc(i.status||'')}</span>
+    <span style="font-weight:700;text-align:right">AED ${fmt(i.total)}</span>
+    <span style="text-align:right;color:${i.balance>0?'var(--amber)':'var(--green)'}">${i.balance>0?'AED '+fmt(i.balance)+' due':'Paid'}</span>
+  </div>`).join('');
+  const total=(invoices||[]).reduce((s,i)=>s+(i.total||0),0);
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="bizDrillOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('bizDrillOverlay').remove()">
+    <div style="max-width:700px;width:100%;max-height:80vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <div style="font-size:19px;font-weight:700;color:var(--gray-900)">${esc(title)}</div>
+        <span style="cursor:pointer;color:var(--gray-500);font-size:22px;line-height:1;padding:4px" onclick="document.getElementById('bizDrillOverlay').remove()">×</span>
+      </div>
+      ${subtitle?`<div style="font-size:12px;color:var(--gray-500);margin-bottom:12px">${esc(subtitle)}</div>`:''}
+      <div class="vch-card">
+        ${rows||'<div style="color:var(--gray-500);padding:10px 0">No invoices found.</div>'}
+        ${invoices&&invoices.length?`<div style="display:flex;justify-content:space-between;padding-top:10px;margin-top:6px;border-top:2px solid var(--gray-200);font-weight:700"><span>${invoices.length} invoice(s)</span><span>AED ${fmt(total)}</span></div>`:''}
+      </div>
+    </div>
+  </div>`);
+}
+function bizDrillYear(y){
+  const invoices=_bizAllInvoices().filter(_bizNonDraft).filter(inv=>_bizFyLabel(new Date(inv.invoice_date))===y);
+  showInvoiceListModal('FY'+y+' invoices',invoices,'By invoice date · gross value incl. VAT');
+}
+function bizDrillMonth(y,monthIdx){
+  const [from]=_bizFyBounds(y);
+  const dt=new Date(from.getFullYear(),from.getMonth()+monthIdx,1);
+  const nextDt=new Date(dt.getFullYear(),dt.getMonth()+1,1);
+  const invoices=_bizAllInvoices().filter(_bizNonDraft).filter(inv=>_bizInRange(inv.invoice_date,dt,nextDt));
+  showInvoiceListModal(dt.toLocaleDateString('en-US',{month:'long',year:'numeric'})+' invoices',invoices);
+}
+function bizDrillAging(bucket){
+  const now=new Date();
+  const labels={not_due:'Not yet due',b1_30:'1–30 days overdue',b31_60:'31–60 days overdue',b61_90:'61–90 days overdue',b90_plus:'90+ days overdue'};
+  const invoices=_bizAllInvoices().filter(_bizNonDraft).filter(inv=>{
+    const bal=inv.balance||0; if(bal<=0)return false;
+    if(!inv.due_date)return bucket==='not_due';
+    const daysOver=Math.floor((now-new Date(inv.due_date))/86400000);
+    if(bucket==='not_due')return daysOver<=0;
+    if(bucket==='b1_30')return daysOver>0&&daysOver<=30;
+    if(bucket==='b31_60')return daysOver>30&&daysOver<=60;
+    if(bucket==='b61_90')return daysOver>60&&daysOver<=90;
+    return daysOver>90;
+  });
+  showInvoiceListModal(labels[bucket]+' — outstanding invoices',invoices,'By current unpaid balance, aged by due date');
+}
+function bizDrillOutstanding(){
+  const invoices=_bizAllInvoices().filter(_bizNonDraft).filter(inv=>(inv.balance||0)>0);
+  showInvoiceListModal('Current outstanding invoices',invoices,'As of '+new Date().toLocaleString());
+}
+
+// ── Quote-to-invoice reconciliation panel ──────────────────────────────────
+let BIZ_MATCHES={loading:false,error:null,data:null};
+async function loadBizMatches(force){
+  if(!force&&BIZ_MATCHES.data)return;
+  BIZ_MATCHES={loading:true,error:null,data:BIZ_MATCHES.data};
+  draw();
+  const r=await api('GET','/api/insights/quote-invoice-matches');
+  if(r.error)BIZ_MATCHES={loading:false,error:r.error,data:null};
+  else BIZ_MATCHES={loading:false,error:null,data:r.matches||[]};
+  draw();
+}
+let BIZ_MATCH_GENERATING=false;
+async function generateBizMatches(){
+  if(BIZ_MATCH_GENERATING)return;
+  BIZ_MATCH_GENERATING=true; draw();
+  const r=await api('POST','/api/insights/quote-invoice-matches/generate',{});
+  BIZ_MATCH_GENERATING=false;
+  if(r.error){alert('Could not generate matches: '+r.error);draw();return;}
+  await loadBizMatches(true);
+}
+async function bizConfirmMatch(id){
+  const r=await api('POST','/api/insights/quote-invoice-matches/'+id+'/confirm',{});
+  if(r.error){alert(r.error);return;}
+  await loadBizMatches(true);
+}
+async function bizRejectMatch(id){
+  const r=await api('POST','/api/insights/quote-invoice-matches/'+id+'/reject',{});
+  if(r.error){alert(r.error);return;}
+  await loadBizMatches(true);
+}
+
+// Combines the awarded-quote list (A.quotes, already loaded for the Quotes
+// dashboard) with confirmed/suggested matches into one reconciliation status
+// per quote. A quote with zero matches of any kind is "Unlinked — mapping
+// required" -- never guessed.
+function _bizQuoteReconciliation(){
+  const awarded=(A.quotes||[]).filter(q=>q.status==='awarded');
+  const matches=BIZ_MATCHES.data||[];
+  return awarded.map(q=>{
+    const own=matches.filter(m=>m.quote&&m.quote.id===q.id);
+    const confirmed=own.filter(m=>m.status==='confirmed');
+    const suggested=own.filter(m=>m.status==='suggested');
+    const invoicedAmt=confirmed.reduce((s,m)=>s+((m.invoice&&m.invoice.total)||0),0);
+    const remaining=Math.max(0,(q.total_sell||0)-invoicedAmt);
+    let bucket;
+    if(confirmed.length===0&&suggested.length===0)bucket='unlinked';
+    else if(confirmed.length===0)bucket='suggested';
+    else if(remaining<=0.01)bucket='full';
+    else bucket='partial';
+    return {quote:q, confirmed, suggested, invoicedAmt, remaining, bucket};
+  });
+}
+function bizQuoteRowHTML(r){
+  const q=r.quote;
+  const badgeMap={unlinked:['Unlinked — mapping required','var(--gray-500)'],suggested:['Suggested — needs review','var(--amber)'],partial:['Partially invoiced','var(--amber)'],full:['Fully invoiced','var(--green)']};
+  const [label,color]=badgeMap[r.bucket];
+  let extra='';
+  if(r.bucket==='suggested'){
+    extra=r.suggested.map(m=>`<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:4px 0 4px 14px;color:var(--gray-500)">
+      <span>↳ ${esc((m.invoice&&m.invoice.invoice_number)||'')} · AED ${fmt(m.invoice&&m.invoice.total)} · match ${Math.round((m.match_score||0)*100)}%</span>
+      <span style="display:flex;gap:6px"><button class="btn btn-sm" onclick="bizConfirmMatch('${m.id}')">✓ Confirm</button><button class="btn btn-sm btn-red" onclick="bizRejectMatch('${m.id}')">✕ Reject</button></span>
+    </div>`).join('');
+  } else if(r.bucket==='partial'||r.bucket==='full'){
+    extra=r.confirmed.map(m=>`<div style="font-size:12px;padding:4px 0 4px 14px;color:var(--gray-500)">↳ ${esc((m.invoice&&m.invoice.invoice_number)||'')} · AED ${fmt(m.invoice&&m.invoice.total)} (confirmed)</div>`).join('');
+  }
+  return `<div class="insights-row" style="flex-direction:column;align-items:stretch;gap:2px">
+    <div style="display:grid;grid-template-columns:1fr 140px 130px 170px;gap:12px;align-items:center">
+      <span>${esc(q.quote_ref||q.title||'')} <span style="color:var(--gray-500)">· ${esc(q.customer||'')}</span></span>
+      <span style="text-align:right;color:var(--gray-500)">AED ${fmt(q.total_sell)}</span>
+      <span style="text-align:right;font-weight:700;color:${r.bucket==='full'?'var(--green)':'var(--amber)'}">${r.bucket==='unlinked'?'—':'AED '+fmt(r.remaining)+' left'}</span>
+      <span style="text-align:right;font-size:12px;font-weight:700;color:${color}">${label}</span>
+    </div>
+    ${extra}
+  </div>`;
+}
+function bizQuoteReconciliationHTML(){
+  if(BIZ_MATCHES.loading&&!BIZ_MATCHES.data)return `<div class="insights-list-title" style="margin-top:22px">🔗 Quote-to-Invoice Reconciliation</div><div style="color:var(--gray-500);padding:16px 0">Loading match suggestions…</div>`;
+  if(BIZ_MATCHES.error)return `<div class="insights-list-title" style="margin-top:22px">🔗 Quote-to-Invoice Reconciliation</div><div class="auth-err">${esc(BIZ_MATCHES.error)}</div>`;
+  const rows=_bizQuoteReconciliation();
+  const counts={unlinked:0,suggested:0,partial:0,full:0};
+  rows.forEach(r=>counts[r.bucket]++);
+  const isAdmin=A.user?.role==='admin';
+  return `<div class="insights-sec-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-top:22px">
+      <span>🔗 Quote-to-Invoice Reconciliation <span style="font-size:11px;color:var(--gray-500);font-weight:500">(awarded QTCal quotes vs. linked Zoho invoices)</span></span>
+      ${isAdmin?`<button class="btn" style="font-size:12px;padding:5px 10px" onclick="generateBizMatches()" ${BIZ_MATCH_GENERATING?'disabled':''}>${BIZ_MATCH_GENERATING?'⏳ Finding…':'🔍 Find matches'}</button>`:''}
+    </div>
+    <div class="dash-metrics" style="margin-bottom:10px">
+      <div class="mcard"><div class="mcard-label">Fully invoiced</div><div class="mcard-val green">${counts.full}</div></div>
+      <div class="mcard"><div class="mcard-label">Partially invoiced</div><div class="mcard-val amber">${counts.partial}</div></div>
+      <div class="mcard"><div class="mcard-label">Suggested — needs review</div><div class="mcard-val amber">${counts.suggested}</div></div>
+      <div class="mcard"><div class="mcard-label">Unlinked</div><div class="mcard-val navy">${counts.unlinked}</div></div>
+    </div>
+    <div class="insights-list">
+      ${rows.length?rows.map(bizQuoteRowHTML).join(''):'<div style="color:var(--gray-500);padding:16px 0">No awarded quotes yet.</div>'}
+    </div>`;
+}
+
 // Charts live inside the innerHTML that draw() wipes and rebuilds on every
 // render, so any Chart.js instance from the previous render is gone the
 // moment its <canvas> is torn out -- this has to re-create every chart from
@@ -4086,6 +4420,46 @@ function initInsightsCharts(){
       data:{labels:top.map(c=>c.customer.length>24?c.customer.slice(0,22)+'…':c.customer),datasets:[{label:'Invoiced',data:top.map(c=>c.invoiced),backgroundColor:'#1a3c6e',borderRadius:4,maxBarThickness:22}]},
       options:{indexAxis:'y',maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>` AED ${fmt(c.parsed.x)}`}}},scales:{x:{beginAtZero:true,ticks:{callback:v=>fmt(v)}},y:{grid:{display:false}}}}
     });
+  }
+
+  // Business Performance: year-on-year comparison (invoiced, gross incl. VAT)
+  const bizYearEl=document.getElementById('bizYearChart');
+  if(bizYearEl&&d.zoho_sales){
+    const rows=_bizYearRows().slice().reverse(); // chronological for the chart
+    INSIGHTS_CHARTS.bizYear=new Chart(bizYearEl,{
+      type:'bar',
+      data:{labels:rows.map(r=>String(r.year)),datasets:[{label:'Invoiced',data:rows.map(r=>r.invoiced),backgroundColor:'#1a3c6e',borderRadius:4,maxBarThickness:36}]},
+      options:{maintainAspectRatio:false,onClick:(evt,els)=>{if(els&&els.length)bizDrillYear(rows[els[0].index].year);},plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>{const r=rows[c.dataIndex];return [` Invoiced: AED ${fmt(c.parsed.y)}`, r.yoy_pct==null?' YoY: N/A':` YoY: ${r.yoy_pct>=0?'+':''}${r.yoy_pct}%`];}}}},scales:{y:{beginAtZero:true,ticks:{callback:v=>fmt(v)}},x:{grid:{display:false}}}}
+    });
+  }
+  // Business Performance: monthly invoiced vs. collected for the selected
+  // year, or (All time mode) the year-wise series as a two-series comparison
+  // instead of a single, meaningless 12-month window.
+  const bizMonthEl=document.getElementById('bizMonthChart');
+  if(bizMonthEl&&d.zoho_sales){
+    const mode=A.bizPeriod||'ytd';
+    if(mode==='all'){
+      const rows=_bizYearRows().slice().reverse();
+      INSIGHTS_CHARTS.bizMonth=new Chart(bizMonthEl,{
+        type:'bar',
+        data:{labels:rows.map(r=>String(r.year)),datasets:[
+          {label:'Invoiced',data:rows.map(r=>r.invoiced),backgroundColor:'#1a3c6e',borderRadius:4,maxBarThickness:26},
+          {label:'Collected (proxy)',data:rows.map(r=>r.collected),backgroundColor:'#047857',borderRadius:4,maxBarThickness:26},
+        ]},
+        options:{maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{boxWidth:11,font:{size:11}}},tooltip:{callbacks:{label:c=>` ${c.dataset.label}: AED ${fmt(c.parsed.y)}`}}},scales:{y:{beginAtZero:true,ticks:{callback:v=>fmt(v)}},x:{grid:{display:false}}}}
+      });
+    }else{
+      const y=A.bizYear||_bizFyLabel(new Date());
+      const months=_bizMonthlySeries(y);
+      INSIGHTS_CHARTS.bizMonth=new Chart(bizMonthEl,{
+        type:'line',
+        data:{labels:months.map(m=>m.label),datasets:[
+          {label:'Invoiced',data:months.map(m=>m.invoiced),borderColor:'#1a3c6e',backgroundColor:'rgba(26,60,110,.08)',fill:true,tension:.3,pointRadius:3},
+          {label:'Collected (proxy)',data:months.map(m=>m.collected),borderColor:'#047857',backgroundColor:'rgba(4,120,87,.08)',fill:true,tension:.3,pointRadius:3},
+        ]},
+        options:{maintainAspectRatio:false,onClick:(evt,els)=>{if(els&&els.length)bizDrillMonth(y,els[0].index);},plugins:{legend:{position:'bottom',labels:{boxWidth:11,font:{size:11}}},tooltip:{callbacks:{label:c=>` ${c.dataset.label}: AED ${fmt(c.parsed.y)}`}}},scales:{y:{beginAtZero:true,ticks:{callback:v=>fmt(v)}},x:{grid:{display:false}}}}
+      });
+    }
   }
 }
 
@@ -4171,6 +4545,101 @@ function insightsHTML(){
           ${topCustomers.map(c=>`<div class="insights-row" style="cursor:pointer;display:grid;grid-template-columns:1fr 90px 170px 150px;gap:12px;align-items:center" onclick="showZohoCustomerModal(${esc(JSON.stringify(c.customer))})"><span>${esc(c.customer)}</span><span style="color:var(--gray-500);text-align:right">${c.count} invoice(s)</span><span style="color:var(--green);text-align:right">AED ${fmt(c.collected)} collected</span><span style="font-weight:700;text-align:right">AED ${fmt(c.invoiced)}</span></div>`).join('')}
         </div>`:`<div style="color:var(--gray-500);padding:16px 0">${(d.zoho_sales.invoices||[]).length?'No invoices in this period.':'No invoices synced yet — click Sync Now above.'}</div>`}
         ${z.last_synced_at?`<div style="font-size:11px;color:var(--gray-500);margin-top:8px">Last synced ${_insightsAgo(new Date(z.last_synced_at))}</div>`:''}
+      </div>`);
+  }
+
+  // ── Business Performance (year-based Zoho financial view) ───────────────
+  if(d.zoho_sales){
+    const periodOpts=[['ytd','Year to date'],['year','Full year'],['prev_year','Previous year'],['custom','Custom range'],['all','All time']];
+    const mode=A.bizPeriod||'ytd';
+    const yearRows=_bizYearRows();
+    const availYears=yearRows.map(r=>r.year);
+    const curYear=A.bizYear||_bizFyLabel(new Date());
+    if(!availYears.includes(curYear))availYears.unshift(curYear);
+    const bounds=_bizPeriodBounds();
+    const totals=_bizPeriodTotals(bounds);
+    const asOf=_bizAsOfNow();
+    const awardedTotal=(d.sales&&d.sales.awarded_value)||0;
+    const confirmedLinked=(BIZ_MATCHES.data||[]).filter(m=>m.status==='confirmed').reduce((s,m)=>s+((m.invoice&&m.invoice.total)||0),0);
+    const awardedUninvoiced=Math.max(0,awardedTotal-confirmedLinked);
+
+    sections.push(`
+      <div class="insights-sec">
+        <div class="insights-sec-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <span>📊 Business Performance <span style="font-size:11px;color:var(--gray-500);font-weight:500">(Zoho invoices, by year)</span></span>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <select class="filter-sel" style="font-size:12px;padding:5px 8px" onchange="A.bizPeriod=this.value;draw()">
+              ${periodOpts.map(([v,label])=>`<option value="${v}" ${mode===v?'selected':''}>${label}</option>`).join('')}
+            </select>
+            ${mode!=='custom'&&mode!=='all'?`<select class="filter-sel" style="font-size:12px;padding:5px 8px" onchange="A.bizYear=parseInt(this.value);draw()">
+              ${availYears.map(y=>`<option value="${y}" ${curYear===y?'selected':''}>FY${y}</option>`).join('')}
+            </select>`:''}
+            ${mode==='custom'?`<input type="date" class="filter-sel" style="font-size:12px;padding:5px 8px" value="${A.bizCustomFrom||''}" onchange="A.bizCustomFrom=this.value;draw()">
+              <input type="date" class="filter-sel" style="font-size:12px;padding:5px 8px" value="${A.bizCustomTo||''}" onchange="A.bizCustomTo=this.value;draw()">`:''}
+            <button class="btn" style="font-size:12px;padding:5px 10px" onclick="exportBizYearTableCsv()">⬇ CSV</button>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--gray-500);margin:-4px 0 10px">Showing <strong>${esc(bounds.label)}</strong>${bounds.compareLabel?` · YoY vs ${esc(bounds.compareLabel)}`:''} · figures below are period-flow (tied to invoice date) unless marked "as of now"</div>
+        <div class="dash-metrics">
+          <div class="mcard" title="Sum of invoice totals incl. VAT, dated within the selected period. Labeled 'invoiced', not 'net sales' -- no VAT sub-total is synced yet.">
+            <div class="mcard-label">Invoiced (incl. VAT)</div><div class="mcard-val navy">AED ${fmt(totals.invoiced)}</div>
+            <div class="mcard-sub">${totals.count} invoice(s) · period flow${totals.yoy_pct!=null?` · YoY ${totals.yoy_pct>=0?'+':''}${totals.yoy_pct}%`:(bounds.compareLabel?' · YoY N/A':'')}</div>
+          </div>
+          <div class="mcard" title="Proxy: invoiced total minus current balance, for invoices dated in the selected period. Not sourced from actual payment/receipt dates -- customer-payment sync is a follow-up.">
+            <div class="mcard-label">Collected <span style="font-weight:400">(proxy)</span></div><div class="mcard-val green">AED ${fmt(totals.collected)}</div>
+            <div class="mcard-sub">period flow, invoice-date basis</div>
+          </div>
+          <div class="mcard" style="cursor:pointer" onclick="bizDrillOutstanding()" title="All unpaid invoice balances, as of right now. Not a historical year-end snapshot.">
+            <div class="mcard-label">Outstanding</div><div class="mcard-val amber">AED ${fmt(asOf.outstanding)}</div>
+            <div class="mcard-sub">as of now · click to view</div>
+          </div>
+          <div class="mcard" style="cursor:pointer" onclick="bizDrillAging('b1_30')" title="Unpaid balance past its due date, as of right now.">
+            <div class="mcard-label">Overdue</div><div class="mcard-val ${asOf.overdue>0?'red':'green'}">AED ${fmt(asOf.overdue)}</div>
+            <div class="mcard-sub">as of now · click to view</div>
+          </div>
+          <div class="mcard" title="Awarded quote value minus CONFIRMED linked invoices only -- never a guess. See Quote-to-Invoice panel below.">
+            <div class="mcard-label">Awarded, uninvoiced</div><div class="mcard-val navy">AED ${fmt(awardedUninvoiced)}</div>
+            <div class="mcard-sub">backlog · as of now</div>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:16px;margin-bottom:16px">
+          <div style="background:var(--white);border:1.5px solid var(--gray-200);border-radius:12px;padding:14px">
+            <div class="mcard-label" style="margin-bottom:8px">Year-on-year comparison — click a bar for its invoices</div>
+            <div style="height:220px;position:relative"><canvas id="bizYearChart"></canvas></div>
+          </div>
+          <div style="background:var(--white);border:1.5px solid var(--gray-200);border-radius:12px;padding:14px">
+            <div class="mcard-label" style="margin-bottom:8px">${mode==='all'?'Invoiced vs. collected by year':'FY'+curYear+' — invoiced vs. collected by month'}</div>
+            <div style="height:220px;position:relative"><canvas id="bizMonthChart"></canvas></div>
+          </div>
+        </div>
+
+        <div class="insights-list">
+          <div class="insights-list-title">Year-wise table — click a year for its invoices</div>
+          <div class="insights-row" style="font-weight:700;font-size:11px;text-transform:uppercase;color:var(--gray-500);display:grid;grid-template-columns:70px 1fr 1fr 1fr 90px 90px">
+            <span>Year</span><span style="text-align:right">Invoiced (VAT incl.)</span><span style="text-align:right">Collected (proxy)</span><span style="text-align:right">Unpaid (this yr's inv.)</span><span style="text-align:right">Count</span><span style="text-align:right">YoY</span>
+          </div>
+          ${yearRows.length?yearRows.map(r=>`<div class="insights-row" style="cursor:pointer;display:grid;grid-template-columns:70px 1fr 1fr 1fr 90px 90px;align-items:center" onclick="bizDrillYear(${r.year})">
+            <span style="font-weight:700">${r.year}${r.is_current?' <span style="font-size:10px;color:var(--gray-500);font-weight:500">(YTD)</span>':''}</span>
+            <span style="text-align:right">AED ${fmt(r.invoiced)}</span>
+            <span style="text-align:right;color:var(--green)">AED ${fmt(r.collected)}</span>
+            <span style="text-align:right;color:${r.unpaid>0?'var(--amber)':'var(--gray-500)'}">AED ${fmt(r.unpaid)}</span>
+            <span style="text-align:right">${r.count}</span>
+            <span style="text-align:right;font-weight:700;color:${r.yoy_pct==null?'var(--gray-500)':r.yoy_pct>=0?'var(--green)':'var(--red)'}">${r.yoy_pct==null?'N/A':(r.yoy_pct>=0?'+':'')+r.yoy_pct+'%'}</span>
+          </div>`).join(''):'<div style="color:var(--gray-500);padding:16px 0">No invoices synced yet.</div>'}
+        </div>
+
+        <div class="insights-list">
+          <div class="insights-list-title">Receivables ageing — by due date, current balance · click a bucket for its invoices</div>
+          <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px">
+            ${[['not_due','Not yet due','navy'],['b1_30','1–30 days','amber'],['b31_60','31–60 days','amber'],['b61_90','61–90 days','red'],['b90_plus','90+ days','red']].map(([k,label,cls])=>`
+              <div class="mcard" style="cursor:pointer" onclick="bizDrillAging('${k}')"><div class="mcard-label">${label}</div><div class="mcard-val ${cls}">AED ${fmt(asOf.buckets[k])}</div></div>
+            `).join('')}
+          </div>
+          <div style="font-size:11px;color:var(--gray-500);margin-top:8px">As of ${asOf.as_of.toLocaleString()}</div>
+        </div>
+
+        ${bizQuoteReconciliationHTML()}
       </div>`);
   }
 

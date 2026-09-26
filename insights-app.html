@@ -103,7 +103,9 @@ const S={
   // be opened directly (a home-screen shortcut), not switched to mid-session.
   shareToken:new URLSearchParams(location.search).get('share')||null,
   data:null, loading:false, error:null, loginError:null, loggingIn:false,
-  zohoRange:'all', salesRange:'all', sheetCustomer:null,
+  zohoRange:'all', salesRange:'all',
+  sheet:null, // generic bottom sheet: {title, invoices, subtitle} | null -- see openSheet()/closeSheet()
+  bizPeriod:'ytd', bizYear:null, quotes:null,
 };
 const esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const fmt=n=>isNaN(n)?'0.00':(+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -150,6 +152,7 @@ async function doLogin(email,password){
   if(r.error){ S.loginError=r.error; render(); return; }
   saveAuth(r); render();
   loadInsights();
+  loadMobileQuotes(); loadBizMatches();
 }
 async function doLogout(){
   await api('POST','/api/auth/logout');
@@ -247,8 +250,214 @@ function zohoFiltered(zRaw){
   return {invoices, customers, total_invoiced:ti, total_collected:tc, invoice_count:invoices.length, last_synced_at:zRaw.last_synced_at};
 }
 
-function openInvoiceSheet(customerName){ S.sheetCustomer=customerName; render(); }
-function closeInvoiceSheet(){ S.sheetCustomer=null; render(); }
+// Generic bottom sheet -- shows any invoice list with a title/subtitle.
+// openInvoiceSheet() kept as the customer-row entry point (filters the
+// current Zoho-range-filtered invoice set by customer); everything in the
+// new Business Performance section below calls openSheet() directly with
+// its own pre-filtered invoice array (a year, a month, an ageing bucket).
+function openSheet(title,invoices,subtitle){ S.sheet={title,invoices:invoices||[],subtitle}; render(); }
+function closeSheet(){ S.sheet=null; render(); }
+function openInvoiceSheet(customerName){
+  const z=zohoFiltered(S.data&&S.data.zoho_sales)||{invoices:[]};
+  openSheet(customerName, z.invoices.filter(i=>(i.customer_name||'Unknown customer')===customerName));
+}
+
+// ── Business Performance (year-based Zoho financial view) ──────────────────
+// Mirrors the desktop index.html implementation (same helper names/logic,
+// same honesty caveats: "invoiced" is gross incl. VAT, "collected" is the
+// proxy invoiced-minus-balance, both labeled as such -- see that file's
+// comment block above _bizYearRows for the full rationale). No fiscal-year
+// start-month picker here either (matches desktop): defaults to calendar
+// year until a future slice adds that as a real, persisted company setting.
+function _bizFyLabel(d){ return d.getFullYear(); }
+function _bizFyBounds(y){ return [new Date(y,0,1), new Date(y+1,0,1)]; }
+function _bizAllInvoices(){ const z=S.data&&S.data.zoho_sales; return (z&&z.invoices)||[]; }
+function _bizNonDraft(inv){ return (inv.status||'').toLowerCase()!=='draft'; }
+function _bizInRange(dateStr,from,to){
+  if(!dateStr)return false;
+  const d=new Date(dateStr);
+  if(from&&d<from)return false;
+  if(to&&d>=to)return false;
+  return true;
+}
+function _bizYearRows(){
+  const invoices=_bizAllInvoices().filter(_bizNonDraft);
+  const byYear={};
+  invoices.forEach(inv=>{
+    if(!inv.invoice_date)return;
+    const y=new Date(inv.invoice_date).getFullYear();
+    const row=byYear[y]||(byYear[y]={year:y,invoiced:0,collected:0,unpaid:0,count:0});
+    const total=inv.total||0, balance=inv.balance||0;
+    row.invoiced+=total; row.collected+=(total-balance); row.unpaid+=balance; row.count+=1;
+  });
+  const years=Object.keys(byYear).map(Number).sort((a,b)=>b-a);
+  const nowY=new Date().getFullYear();
+  return years.map(y=>{
+    const row=byYear[y], prev=byYear[y-1];
+    const yoy=(prev&&prev.invoiced>0)?Math.round((row.invoiced-prev.invoiced)/Math.abs(prev.invoiced)*1000)/10:null;
+    return {...row, yoy_pct:yoy, is_current:y===nowY};
+  });
+}
+function _bizPeriodBounds(){
+  const mode=S.bizPeriod||'ytd';
+  const now=new Date();
+  const y=S.bizYear||now.getFullYear();
+  if(mode==='all')return {from:null,to:null,label:'All time',compareFrom:null,compareTo:null,compareLabel:null};
+  if(mode==='year'){
+    const [from,to]=_bizFyBounds(y), [cf,ct]=_bizFyBounds(y-1);
+    return {from,to,label:'FY'+y,compareFrom:cf,compareTo:ct,compareLabel:'FY'+(y-1)};
+  }
+  if(mode==='prev_year'){
+    const [from,to]=_bizFyBounds(y-1), [cf,ct]=_bizFyBounds(y-2);
+    return {from,to,label:'FY'+(y-1),compareFrom:cf,compareTo:ct,compareLabel:'FY'+(y-2)};
+  }
+  const [fyStart]=_bizFyBounds(y);
+  const from=fyStart, to=new Date(now.getTime()+1);
+  const daysElapsed=Math.floor((now-fyStart)/86400000);
+  const [pfyStart]=_bizFyBounds(y-1);
+  return {from,to,label:'FY'+y+' YTD',compareFrom:pfyStart,compareTo:new Date(pfyStart.getTime()+(daysElapsed+1)*86400000),compareLabel:'FY'+(y-1)+' YTD'};
+}
+function _bizPeriodTotals(bounds){
+  const invoices=_bizAllInvoices().filter(_bizNonDraft);
+  const sum=(from,to)=>{
+    let invoiced=0,collected=0,count=0;
+    invoices.forEach(inv=>{
+      if(!_bizInRange(inv.invoice_date,from,to))return;
+      invoiced+=(inv.total||0); collected+=((inv.total||0)-(inv.balance||0)); count+=1;
+    });
+    return {invoiced,collected,count};
+  };
+  const cur=sum(bounds.from,bounds.to);
+  let yoy=null;
+  if(bounds.compareFrom){
+    const prev=sum(bounds.compareFrom,bounds.compareTo);
+    yoy=prev.invoiced>0?Math.round((cur.invoiced-prev.invoiced)/Math.abs(prev.invoiced)*1000)/10:null;
+  }
+  return {...cur, yoy_pct:yoy};
+}
+function _bizAsOfNow(){
+  const invoices=_bizAllInvoices().filter(_bizNonDraft);
+  const now=new Date();
+  let outstanding=0, overdue=0;
+  const buckets={not_due:0,b1_30:0,b31_60:0,b61_90:0,b90_plus:0};
+  invoices.forEach(inv=>{
+    const bal=inv.balance||0; if(bal<=0)return;
+    outstanding+=bal;
+    if(!inv.due_date){buckets.not_due+=bal;return;}
+    const daysOver=Math.floor((now-new Date(inv.due_date))/86400000);
+    if(daysOver<=0)buckets.not_due+=bal;
+    else{
+      overdue+=bal;
+      if(daysOver<=30)buckets.b1_30+=bal;
+      else if(daysOver<=60)buckets.b31_60+=bal;
+      else if(daysOver<=90)buckets.b61_90+=bal;
+      else buckets.b90_plus+=bal;
+    }
+  });
+  return {outstanding,overdue,buckets,as_of:now};
+}
+function _bizMonthlySeries(y){
+  const invoices=_bizAllInvoices().filter(_bizNonDraft);
+  const months=[];
+  for(let i=0;i<12;i++){
+    months.push({key:y+'-'+i,label:new Date(y,i,1).toLocaleDateString('en-US',{month:'short'}),invoiced:0,collected:0});
+  }
+  const byKey={};months.forEach(m=>byKey[m.key]=m);
+  invoices.forEach(inv=>{
+    if(!inv.invoice_date)return;
+    const dt=new Date(inv.invoice_date);
+    const key=dt.getFullYear()+'-'+dt.getMonth();
+    if(byKey[key]){byKey[key].invoiced+=(inv.total||0); byKey[key].collected+=((inv.total||0)-(inv.balance||0));}
+  });
+  return months;
+}
+function bizDrillYear(y){
+  const invoices=_bizAllInvoices().filter(_bizNonDraft).filter(inv=>new Date(inv.invoice_date).getFullYear()===y);
+  openSheet('FY'+y+' invoices',invoices,'By invoice date · gross incl. VAT');
+}
+function bizDrillMonth(y,idx){
+  const from=new Date(y,idx,1), to=new Date(y,idx+1,1);
+  const invoices=_bizAllInvoices().filter(_bizNonDraft).filter(inv=>_bizInRange(inv.invoice_date,from,to));
+  openSheet(from.toLocaleDateString('en-US',{month:'long',year:'numeric'}),invoices);
+}
+function bizDrillAging(bucket){
+  const now=new Date();
+  const labels={not_due:'Not yet due',b1_30:'1–30 days overdue',b31_60:'31–60 days overdue',b61_90:'61–90 days overdue',b90_plus:'90+ days overdue'};
+  const invoices=_bizAllInvoices().filter(_bizNonDraft).filter(inv=>{
+    const bal=inv.balance||0; if(bal<=0)return false;
+    if(!inv.due_date)return bucket==='not_due';
+    const daysOver=Math.floor((now-new Date(inv.due_date))/86400000);
+    if(bucket==='not_due')return daysOver<=0;
+    if(bucket==='b1_30')return daysOver>0&&daysOver<=30;
+    if(bucket==='b31_60')return daysOver>30&&daysOver<=60;
+    if(bucket==='b61_90')return daysOver>60&&daysOver<=90;
+    return daysOver>90;
+  });
+  openSheet(labels[bucket],invoices,'Current unpaid balance, aged by due date');
+}
+function bizDrillOutstanding(){
+  const invoices=_bizAllInvoices().filter(_bizNonDraft).filter(inv=>(inv.balance||0)>0);
+  openSheet('Current outstanding',invoices,'As of '+new Date().toLocaleString());
+}
+function downloadCsv(filename,rows){
+  const escCsv=v=>{ const s=(v==null?'':String(v)); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+  const csv=rows.map(r=>r.map(escCsv).join(',')).join('\r\n');
+  const blob=new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename; a.click();
+  URL.revokeObjectURL(a.href);
+}
+function exportBizYearCsv(){
+  const rows=_bizYearRows();
+  const head=['Year','Invoiced (incl. VAT, AED)','Collected (proxy, AED)','Unpaid on this year\'s invoices (AED)','Invoice count','YoY growth %'];
+  downloadCsv('business-performance-by-year.csv',[head,...rows.map(r=>[r.year,r.invoiced.toFixed(2),r.collected.toFixed(2),r.unpaid.toFixed(2),r.count,r.yoy_pct==null?'N/A':r.yoy_pct])]);
+}
+
+// ── Quote-to-invoice reconciliation (compact, count-first view) ────────────
+// Not available in shared-link (no-login) mode -- the matches endpoint
+// requires an authenticated session, and this app never shows a number it
+// can't source (see the "Unlinked — mapping required" rule in the spec).
+let BIZ_MATCHES={loading:false,error:null,data:null};
+async function loadBizMatches(force){
+  if(S.shareToken)return;
+  if(!force&&BIZ_MATCHES.data)return;
+  BIZ_MATCHES={loading:true,error:null,data:BIZ_MATCHES.data}; render();
+  const r=await api('GET','/api/insights/quote-invoice-matches');
+  BIZ_MATCHES=r.error?{loading:false,error:r.error,data:null}:{loading:false,error:null,data:r.matches||[]};
+  render();
+}
+let BIZ_GENERATING=false;
+async function generateBizMatches(){
+  if(BIZ_GENERATING)return;
+  BIZ_GENERATING=true; render();
+  const r=await api('POST','/api/insights/quote-invoice-matches/generate',{});
+  BIZ_GENERATING=false;
+  if(r.error){ alert('Could not generate matches: '+r.error); render(); return; }
+  await loadBizMatches(true);
+}
+async function bizConfirmMatch(id){ const r=await api('POST','/api/insights/quote-invoice-matches/'+id+'/confirm',{}); if(r.error){alert(r.error);return;} await loadBizMatches(true); }
+async function bizRejectMatch(id){ const r=await api('POST','/api/insights/quote-invoice-matches/'+id+'/reject',{}); if(r.error){alert(r.error);return;} await loadBizMatches(true); }
+async function loadMobileQuotes(){
+  if(S.shareToken||S.quotes!=null)return;
+  const r=await api('GET','/api/quotes');
+  S.quotes=r.quotes||[]; render();
+}
+function _bizQuoteReconciliation(){
+  const awarded=(S.quotes||[]).filter(q=>q.status==='awarded');
+  const matches=BIZ_MATCHES.data||[];
+  return awarded.map(q=>{
+    const own=matches.filter(m=>m.quote&&m.quote.id===q.id);
+    const confirmed=own.filter(m=>m.status==='confirmed');
+    const suggested=own.filter(m=>m.status==='suggested');
+    const invoicedAmt=confirmed.reduce((s,m)=>s+((m.invoice&&m.invoice.total)||0),0);
+    const remaining=Math.max(0,(q.total_sell||0)-invoicedAmt);
+    let bucket;
+    if(confirmed.length===0&&suggested.length===0)bucket='unlinked';
+    else if(confirmed.length===0)bucket='suggested';
+    else if(remaining<=0.01)bucket='full';
+    else bucket='partial';
+    return {quote:q, suggested, remaining, bucket};
+  });
+}
 
 // ── Rendering ────────────────────────────────────────────────────────────
 function loginHTML(){
@@ -331,6 +540,93 @@ function zohoSectionHTML(zRaw){
   </div>`;
 }
 
+function bizSectionHTML(){
+  const periodOpts=[['ytd','YTD'],['year','Full year'],['prev_year','Prev. year'],['all','All time']];
+  const mode=S.bizPeriod||'ytd';
+  const yearRows=_bizYearRows();
+  const curYear=S.bizYear||new Date().getFullYear();
+  const availYears=yearRows.map(r=>r.year); if(!availYears.includes(curYear))availYears.unshift(curYear);
+  const bounds=_bizPeriodBounds();
+  const totals=_bizPeriodTotals(bounds);
+  const asOf=_bizAsOfNow();
+  const d=S.data||{};
+  const awardedTotal=(d.sales&&d.sales.awarded_value)||0;
+  const confirmedLinked=(BIZ_MATCHES.data||[]).filter(m=>m.status==='confirmed').reduce((s,m)=>s+((m.invoice&&m.invoice.total)||0),0);
+  const awardedUninvoiced=Math.max(0,awardedTotal-confirmedLinked);
+  const months=_bizMonthlySeries(curYear);
+
+  return `<div class="sec">
+    <div class="sec-title">
+      <span>📊 Business Performance</span>
+      <div style="display:flex;gap:6px">
+        <select class="range-sel" onchange="S.bizPeriod=this.value;render()">
+          ${periodOpts.map(([v,l])=>`<option value="${v}" ${mode===v?'selected':''}>${l}</option>`).join('')}
+        </select>
+        ${mode!=='all'?`<select class="range-sel" onchange="S.bizYear=parseInt(this.value);render()">
+          ${availYears.map(y=>`<option value="${y}" ${curYear===y?'selected':''}>FY${y}</option>`).join('')}
+        </select>`:''}
+      </div>
+    </div>
+    <div style="font-size:10.5px;color:var(--gray-500);margin:-6px 0 10px">${esc(bounds.label)}${bounds.compareLabel?` · vs ${esc(bounds.compareLabel)}`:''}</div>
+    <div class="cards">
+      <div class="card"><div class="card-label">Invoiced (incl. VAT)</div><div class="card-val navy">AED ${fmt(totals.invoiced)}</div><div class="card-sub">${totals.count} inv.${totals.yoy_pct!=null?` · ${totals.yoy_pct>=0?'+':''}${totals.yoy_pct}% YoY`:''}</div></div>
+      <div class="card"><div class="card-label">Collected (proxy)</div><div class="card-val green">AED ${fmt(totals.collected)}</div></div>
+      <div class="card" onclick="bizDrillOutstanding()"><div class="card-label">Outstanding</div><div class="card-val amber">AED ${fmt(asOf.outstanding)}</div><div class="card-sub">as of now</div></div>
+      <div class="card" onclick="bizDrillAging('b1_30')"><div class="card-label">Overdue</div><div class="card-val ${asOf.overdue>0?'amber':'green'}">AED ${fmt(asOf.overdue)}</div><div class="card-sub">as of now</div></div>
+      ${S.shareToken?'':`<div class="card"><div class="card-label">Awarded, uninvoiced</div><div class="card-val navy">AED ${fmt(awardedUninvoiced)}</div><div class="card-sub">backlog</div></div>`}
+    </div>
+    <div class="chart-card"><div class="card-label">FY${curYear} — invoiced vs. collected by month</div><div class="chart-box"><canvas id="mBizMonthChart"></canvas></div></div>
+    <div class="card-label" style="margin:4px 2px 8px">Year-wise — tap a year for its invoices</div>
+    <div class="list">
+      ${yearRows.length?yearRows.map(r=>`<div class="list-row" onclick="bizDrillYear(${r.year})">
+        <span class="list-row-name">${r.year}${r.is_current?' (YTD)':''}</span>
+        <span class="list-row-meta">${r.yoy_pct==null?'YoY N/A':`YoY ${r.yoy_pct>=0?'+':''}${r.yoy_pct}%`}</span>
+        <span class="list-row-val">AED ${fmt(r.invoiced)}</span>
+      </div>`).join(''):'<div class="center-msg">No invoices synced yet.</div>'}
+    </div>
+    ${yearRows.length?`<button class="icon-btn" style="width:auto;padding:0 12px;font-size:11px;font-weight:700;margin-top:8px" onclick="exportBizYearCsv()">⬇ Export CSV</button>`:''}
+
+    <div class="card-label" style="margin:16px 2px 8px">Receivables ageing — tap a bucket</div>
+    <div class="list">
+      ${[['not_due','Not yet due'],['b1_30','1–30 days'],['b31_60','31–60 days'],['b61_90','61–90 days'],['b90_plus','90+ days']].map(([k,l])=>`
+        <div class="list-row" onclick="bizDrillAging('${k}')"><span class="list-row-name">${l}</span><span class="list-row-val">AED ${fmt(asOf.buckets[k])}</span></div>
+      `).join('')}
+    </div>
+    <div style="font-size:10.5px;color:var(--gray-500);margin-top:6px;text-align:center">As of ${asOf.as_of.toLocaleString()}</div>
+
+    ${S.shareToken?'':bizReconciliationSectionHTML()}
+  </div>`;
+}
+
+function bizReconciliationSectionHTML(){
+  if(BIZ_MATCHES.loading&&!BIZ_MATCHES.data)return `<div class="card-label" style="margin:16px 2px 8px">🔗 Quote-to-Invoice</div><div class="center-msg">Loading…</div>`;
+  if(BIZ_MATCHES.error)return `<div class="card-label" style="margin:16px 2px 8px">🔗 Quote-to-Invoice</div><div class="err-msg">${esc(BIZ_MATCHES.error)}</div>`;
+  const rows=_bizQuoteReconciliation();
+  const counts={unlinked:0,suggested:0,partial:0,full:0};
+  rows.forEach(r=>counts[r.bucket]++);
+  const isAdmin=S.user&&S.user.role==='admin';
+  const needsReview=rows.filter(r=>r.bucket==='suggested');
+  return `<div class="sec-title" style="margin-top:16px">
+      <span>🔗 Quote-to-Invoice</span>
+      ${isAdmin?`<button class="icon-btn" style="width:auto;padding:0 10px;font-size:11px;font-weight:700" onclick="generateBizMatches()" ${BIZ_GENERATING?'disabled':''}>${BIZ_GENERATING?'⏳':'🔍 Find'}</button>`:''}
+    </div>
+    <div class="cards">
+      <div class="card"><div class="card-label">Fully invoiced</div><div class="card-val green">${counts.full}</div></div>
+      <div class="card"><div class="card-label">Partial</div><div class="card-val amber">${counts.partial}</div></div>
+      <div class="card"><div class="card-label">Needs review</div><div class="card-val amber">${counts.suggested}</div></div>
+      <div class="card"><div class="card-label">Unlinked</div><div class="card-val navy">${counts.unlinked}</div></div>
+    </div>
+    ${needsReview.length?`<div class="list">
+      ${needsReview.map(r=>r.suggested.map(m=>`<div class="list-row" style="flex-direction:column;align-items:stretch;gap:6px">
+        <div style="display:flex;justify-content:space-between"><span class="list-row-name">${esc(r.quote.quote_ref||r.quote.title||'')}</span><span class="list-row-val">${esc((m.invoice&&m.invoice.invoice_number)||'')}</span></div>
+        <div style="display:flex;gap:8px">
+          <button class="icon-btn" style="width:auto;flex:1;padding:8px;font-size:12px;background:var(--green)" onclick="bizConfirmMatch('${m.id}')">✓ Confirm</button>
+          <button class="icon-btn" style="width:auto;flex:1;padding:8px;font-size:12px;background:var(--red)" onclick="bizRejectMatch('${m.id}')">✕ Reject</button>
+        </div>
+      </div>`).join('')).join('')}
+    </div>`:''}`;
+}
+
 function financialSectionHTML(k){
   return `<div class="sec">
     <div class="sec-title"><span>💰 Financial Health</span></div>
@@ -356,24 +652,24 @@ function fsmSectionHTML(f){
 }
 
 function invoiceSheetHTML(){
-  if(!S.sheetCustomer)return '';
-  const zRaw=S.data&&S.data.zoho_sales;
-  const z=zohoFiltered(zRaw)||{invoices:[]};
-  const invoices=z.invoices.filter(i=>(i.customer_name||'Unknown customer')===S.sheetCustomer);
+  if(!S.sheet)return '';
+  const {title,invoices,subtitle}=S.sheet;
   const statusColor={paid:'var(--green)',overdue:'var(--red)',sent:'var(--amber)',draft:'var(--gray-500)'};
-  return `<div class="sheet-overlay" onclick="if(event.target===this)closeInvoiceSheet()">
+  const total=(invoices||[]).reduce((s,i)=>s+(i.total||0),0);
+  return `<div class="sheet-overlay" onclick="if(event.target===this)closeSheet()">
     <div class="sheet">
       <div class="sheet-head">
-        <div class="sheet-title">${esc(S.sheetCustomer)}</div>
-        <button class="sheet-close" onclick="closeInvoiceSheet()">✕</button>
+        <div><div class="sheet-title">${esc(title)}</div>${subtitle?`<div style="font-size:11px;color:var(--gray-500);margin-top:2px">${esc(subtitle)}</div>`:''}</div>
+        <button class="sheet-close" onclick="closeSheet()">✕</button>
       </div>
       ${invoices.length?invoices.map(i=>`<div class="inv-row">
-        <div class="inv-row-top"><span>${esc(i.invoice_number||'—')}</span><span>AED ${fmt(i.total)}</span></div>
+        <div class="inv-row-top"><span>${esc(i.invoice_number||'—')} <span style="color:var(--gray-500);font-weight:500">· ${esc(i.customer_name||'')}</span></span><span>AED ${fmt(i.total)}</span></div>
         <div class="inv-row-bottom">
           <span>${esc((i.invoice_date||'').slice(0,10))} · <span style="color:${statusColor[(i.status||'').toLowerCase()]||'var(--gray-500)'};font-weight:700;text-transform:capitalize">${esc(i.status||'')}</span></span>
           <span style="color:${i.balance>0?'var(--amber)':'var(--green)'}">${i.balance>0?'AED '+fmt(i.balance)+' due':'Paid'}</span>
         </div>
       </div>`).join(''):'<div class="center-msg">No invoices found.</div>'}
+      ${invoices.length?`<div style="display:flex;justify-content:space-between;padding-top:10px;margin-top:6px;border-top:2px solid var(--gray-200);font-weight:800;font-size:13px"><span>${invoices.length} invoice(s)</span><span>AED ${fmt(total)}</span></div>`:''}
     </div>
   </div>`;
 }
@@ -387,6 +683,7 @@ function dashboardHTML(){
     if(S.error)body+=`<div class="err-msg">${esc(S.error)}</div>`;
     if(d.sales)body+=salesSectionHTML(d.sales,d.deals);
     if(d.zoho_sales)body+=zohoSectionHTML(d.zoho_sales);
+    if(d.zoho_sales)body+=bizSectionHTML();
     if(d.financial)body+=financialSectionHTML(d.financial);
     if(d.fsm)body+=fsmSectionHTML(d.fsm);
     if(!d.sales&&!d.zoho_sales&&!d.financial&&!d.fsm&&!S.error)body='<div class="center-msg">No data available yet.</div>';
@@ -463,12 +760,26 @@ function initCharts(){
       options:{indexAxis:'y',maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{beginAtZero:true,ticks:{font:{size:9},callback:v=>fmt(v)}},y:{grid:{display:false},ticks:{font:{size:9}}}}}
     });
   }
+
+  const bizMonthEl=document.getElementById('mBizMonthChart');
+  if(bizMonthEl&&d.zoho_sales){
+    const y=S.bizYear||new Date().getFullYear();
+    const months=_bizMonthlySeries(y);
+    CHARTS.bizMonth=new Chart(bizMonthEl,{
+      type:'line',
+      data:{labels:months.map(m=>m.label),datasets:[
+        {label:'Invoiced',data:months.map(m=>m.invoiced),borderColor:'#1a3c6e',backgroundColor:'rgba(26,60,110,.08)',fill:true,tension:.3,pointRadius:2},
+        {label:'Collected',data:months.map(m=>m.collected),borderColor:'#047857',backgroundColor:'rgba(4,120,87,.08)',fill:true,tension:.3,pointRadius:2},
+      ]},
+      options:{maintainAspectRatio:false,onClick:(evt,els)=>{if(els&&els.length)bizDrillMonth(y,els[0].index);},plugins:{legend:{position:'bottom',labels:{boxWidth:9,font:{size:9},padding:8}}},scales:{y:{beginAtZero:true,ticks:{font:{size:9},callback:v=>fmt(v)}},x:{grid:{display:false},ticks:{font:{size:9}}}}}
+    });
+  }
 }
 
 // ── Boot ─────────────────────────────────────────────────────────────────
 render();
 if(S.shareToken)loadInsightsPublic();
-else if(S.token)loadInsights();
+else if(S.token){ loadInsights(); loadMobileQuotes(); loadBizMatches(); }
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>navigator.serviceWorker.register('/insights-sw.js').catch(()=>{}));
 }
