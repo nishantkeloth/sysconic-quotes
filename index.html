@@ -3206,7 +3206,7 @@ function draw(){
   if(A.page==='team'){setTimeout(loadTeam,50);}
   if(A.page==='integrations'){setTimeout(loadIntegrations,50);setTimeout(loadSyncConfig,50);}
   if(A.page==='platform'){setTimeout(loadPlatformCompanies,50);}
-  if(A.page==='companyProfile'){setTimeout(loadCompanyProfile,50);setTimeout(loadQuoteNumbering,50);if(hasFeature('delivery_challans'))setTimeout(loadDcNumbering,50);setTimeout(loadSelfServeAddons,50);}
+  if(A.page==='companyProfile'){setTimeout(loadCompanyProfile,50);setTimeout(loadQuoteNumbering,50);if(hasFeature('delivery_challans'))setTimeout(loadDcNumbering,50);setTimeout(loadSelfServeAddons,50);setTimeout(loadInsightsShareLink,50);}
   if(A.page==='rolesPermissions'){setTimeout(loadRolesPermissions,50);}
   if(A.page==='print'){ensurePrintCompany();}
   if(A.page==='deals')setTimeout(loadDealsPage,50);
@@ -7440,6 +7440,11 @@ ${hasFeature('delivery_challans')?`<div class="card" style="max-width:640px;marg
   <div class="card-title">Add-ons</div>
   <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Turn on optional modules for your company. Some add-ons may be part of a paid plan — check with your account contact if you're unsure.</div>
   <div id="addonBox"><div style="color:var(--gray-500)">Loading…</div></div>
+</div>
+<div class="card" style="max-width:640px;margin-top:16px">
+  <div class="card-title">Public Insights Link</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Generate a link that opens the mobile Insights dashboard with no login — handy for a phone home-screen shortcut or an office TV display. <strong>Anyone with this link can view your sales and GP data, no password required</strong>, so treat it like a password: don't post it anywhere public, and revoke it if it ever leaks. Admin only.</div>
+  <div id="shareLinkBox"><div style="color:var(--gray-500)">Loading…</div></div>
 </div>`;}
 let QN={};
 async function loadQuoteNumbering(){
@@ -7679,6 +7684,58 @@ async function saveSelfServeAddon(key,checked){
   const ref=await api('POST','/api/auth/refresh');
   if(!ref.error){A.token=ref.token;A.user=ref.user;A.company=ref.company;}
   draw();
+}
+
+// Public Insights share link (Company Profile). The raw token is only ever
+// returned once, right after generating it -- the server stores just its
+// hash (see api/quotes.py's create_insights_share_link) -- so this box shows
+// either "no link yet" / "a link is active" (status only, GET) or the fresh
+// URL immediately after Generate/Regenerate is clicked, held in a JS
+// variable that's gone on next page load or refresh.
+let INSIGHTS_SHARE_URL=null;
+async function loadInsightsShareLink(){
+  const el=document.getElementById('shareLinkBox');if(!el)return;
+  const r=await api('GET','/api/insights/share-link');
+  if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  renderShareLinkBox(r.enabled);
+}
+function renderShareLinkBox(enabled){
+  const el=document.getElementById('shareLinkBox');if(!el)return;
+  if(INSIGHTS_SHARE_URL){
+    el.innerHTML=`
+      <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:8px">✓ Link generated — copy it now, it won't be shown again</div>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <input id="shareLinkUrl" class="input" readonly value="${esc(INSIGHTS_SHARE_URL)}" style="font-size:12px" onclick="this.select()">
+        <button class="btn btn-sm" onclick="copyShareLink()">Copy</button>
+      </div>
+      <button class="btn btn-sm" style="color:var(--red)" onclick="revokeInsightsShareLink()">Revoke link</button>
+    `;
+    return;
+  }
+  el.innerHTML=`
+    <div style="font-size:13px;margin-bottom:12px">${enabled?'A link is currently active, but it can only be shown once — regenerate to get a fresh copy.':'No public link yet.'}</div>
+    <button class="btn btn-navy btn-sm" onclick="generateInsightsShareLink()">${enabled?'Regenerate link':'Generate link'}</button>
+    ${enabled?` <button class="btn btn-sm" style="color:var(--red)" onclick="revokeInsightsShareLink()">Revoke link</button>`:''}
+  `;
+}
+async function generateInsightsShareLink(){
+  if(!confirm('Generate a new public link? Anyone with this link can view your Insights dashboard with no login. Any previously shared link will stop working.'))return;
+  const r=await api('POST','/api/insights/share-link');
+  if(r.error){alert(r.error);return;}
+  INSIGHTS_SHARE_URL=location.origin+'/insights-app.html?share='+encodeURIComponent(r.token);
+  renderShareLinkBox(true);
+}
+async function revokeInsightsShareLink(){
+  if(!confirm('Revoke the public Insights link? Anyone using it (e.g. a phone home-screen shortcut) will lose access immediately.'))return;
+  const r=await api('DELETE','/api/insights/share-link');
+  if(r.error){alert(r.error);return;}
+  INSIGHTS_SHARE_URL=null;
+  renderShareLinkBox(false);
+}
+function copyShareLink(){
+  const inp=document.getElementById('shareLinkUrl');if(!inp)return;
+  inp.select();
+  navigator.clipboard?.writeText(inp.value).catch(()=>document.execCommand('copy'));
 }
 
 // ── Platform Admin: every company on this SaaS, onboarding + suspend ───────────

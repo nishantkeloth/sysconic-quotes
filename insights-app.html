@@ -96,6 +96,12 @@ const S={
   token:localStorage.getItem('qtcal_mobile_token')||null,
   user:JSON.parse(localStorage.getItem('qtcal_mobile_user')||'null'),
   company:JSON.parse(localStorage.getItem('qtcal_mobile_company')||'null'),
+  // A "?share=<token>" URL (from an admin-generated public link, see
+  // Company Profile > Public Insights Link) skips login entirely and pulls
+  // data from the unauthenticated /api/insights/public endpoint instead --
+  // see loadInsightsPublic() below. Read once at boot: the link is meant to
+  // be opened directly (a home-screen shortcut), not switched to mid-session.
+  shareToken:new URLSearchParams(location.search).get('share')||null,
   data:null, loading:false, error:null, loginError:null, loggingIn:false,
   zohoRange:'all', salesRange:'all', sheetCustomer:null,
 };
@@ -153,6 +159,19 @@ async function loadInsights(force){
   if(!force&&S.data&&!S.loading)return;
   S.loading=true; S.error=null; render();
   const r=await api('GET','/api/insights/summary');
+  S.loading=false;
+  if(r.error){ S.error=r.error; } else { S.data=r; }
+  render();
+}
+// Shared-link variant: no Authorization header, no login required. Kept
+// separate from loadInsights() so a mistyped/expired share link fails with
+// a clear message instead of tripping the token-refresh-and-retry logic in
+// api(), which assumes a logged-in session.
+async function loadInsightsPublic(force){
+  if(!force&&S.data&&!S.loading)return;
+  S.loading=true; S.error=null; render();
+  const r=await fetch(API+'/api/insights/public?token='+encodeURIComponent(S.shareToken))
+    .then(res=>res.json()).catch(()=>({error:'Network error — could not reach the server.'}));
   S.loading=false;
   if(r.error){ S.error=r.error; } else { S.data=r; }
   render();
@@ -290,7 +309,7 @@ function zohoSectionHTML(zRaw){
         <select class="range-sel" onchange="S.zohoRange=this.value;render()">
           ${rangeOpts.map(([v,l])=>`<option value="${v}" ${S.zohoRange===v?'selected':''}>${l}</option>`).join('')}
         </select>
-        <button class="icon-btn" style="background:var(--navy);width:auto;padding:0 10px;font-size:11px;font-weight:700" onclick="syncZohoSales()" ${ZOHO_SYNCING?'disabled':''}>${ZOHO_SYNCING?'⏳':'🔄 Sync'}</button>
+        ${S.shareToken?'':`<button class="icon-btn" style="background:var(--navy);width:auto;padding:0 10px;font-size:11px;font-weight:700" onclick="syncZohoSales()" ${ZOHO_SYNCING?'disabled':''}>${ZOHO_SYNCING?'⏳':'🔄 Sync'}</button>`}
       </div>
     </div>
     <div class="cards">
@@ -372,15 +391,16 @@ function dashboardHTML(){
     if(d.fsm)body+=fsmSectionHTML(d.fsm);
     if(!d.sales&&!d.zoho_sales&&!d.financial&&!d.fsm&&!S.error)body='<div class="center-msg">No data available yet.</div>';
   }
+  const companyName=d.company_name||(S.company&&S.company.name)||'';
   return `<div class="screen">
     <div class="topbar">
       <div>
         <div class="topbar-title">Insights</div>
-        <div class="topbar-sub">${esc((S.company&&S.company.name)||'')}</div>
+        <div class="topbar-sub">${esc(companyName)}${S.shareToken?' · Shared view (read-only)':''}</div>
       </div>
       <div class="topbar-actions">
-        <button class="icon-btn" title="Refresh" onclick="loadInsights(true)">${S.loading?'⏳':'🔄'}</button>
-        <button class="icon-btn" title="Sign out" onclick="doLogout()">⎋</button>
+        <button class="icon-btn" title="Refresh" onclick="${S.shareToken?'loadInsightsPublic(true)':'loadInsights(true)'}">${S.loading?'⏳':'🔄'}</button>
+        ${S.shareToken?'':'<button class="icon-btn" title="Sign out" onclick="doLogout()">⎋</button>'}
       </div>
     </div>
     <div class="content">${body}</div>
@@ -389,8 +409,9 @@ function dashboardHTML(){
 }
 
 function render(){
-  document.getElementById('app').innerHTML=S.token?dashboardHTML():loginHTML();
-  if(S.token)setTimeout(initCharts,40);
+  const signedIn=S.token||S.shareToken;
+  document.getElementById('app').innerHTML=signedIn?dashboardHTML():loginHTML();
+  if(signedIn)setTimeout(initCharts,40);
 }
 
 // ── Charts ───────────────────────────────────────────────────────────────
@@ -446,7 +467,8 @@ function initCharts(){
 
 // ── Boot ─────────────────────────────────────────────────────────────────
 render();
-if(S.token)loadInsights();
+if(S.shareToken)loadInsightsPublic();
+else if(S.token)loadInsights();
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>navigator.serviceWorker.register('/insights-sw.js').catch(()=>{}));
 }
