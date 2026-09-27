@@ -636,10 +636,44 @@ function loansSectionHTML(L){
       <div class="card"><div class="card-label">Outstanding</div><div class="card-val amber">AED ${fmt(L.total_outstanding)}</div><div class="card-sub">as of now</div></div>
     </div>
     <div class="list">
-      ${(L.accounts||[]).map(a=>`<div class="list-row">
+      ${(L.accounts||[]).map(a=>`<div class="list-row" ${S.shareToken?'':`onclick="openLoanTxnSheet('${a.id}',${esc(JSON.stringify(a.account_name))})"`}>
         <span class="list-row-name">${esc(a.account_name)}</span>
         <span class="list-row-val">AED ${fmt(a.current_balance)} due</span>
       </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+// Loan transaction drill-down -- fetched live from Zoho on tap, same
+// generic bottom sheet used for invoice drill-downs elsewhere in this app,
+// just with its own row template (borrowed/repaid instead of invoice total).
+let LOAN_TXN_SHEET=null; // {title, transactions} | null
+async function openLoanTxnSheet(loanAccountId, accountName){
+  LOAN_TXN_SHEET={title:accountName, loading:true, transactions:[]};
+  render();
+  const r=await api('GET','/api/integrations/loan-accounts/'+loanAccountId+'/transactions');
+  if(!LOAN_TXN_SHEET)return; // closed before the fetch finished
+  if(r.error){ LOAN_TXN_SHEET={title:accountName, loading:false, error:r.error, transactions:[]}; render(); return; }
+  LOAN_TXN_SHEET={title:accountName, loading:false, transactions:r.transactions||[]};
+  render();
+}
+function closeLoanTxnSheet(){ LOAN_TXN_SHEET=null; render(); }
+function loanTxnSheetHTML(){
+  if(!LOAN_TXN_SHEET)return '';
+  const {title,loading,error,transactions}=LOAN_TXN_SHEET;
+  return `<div class="sheet-overlay" onclick="if(event.target===this)closeLoanTxnSheet()">
+    <div class="sheet">
+      <div class="sheet-head">
+        <div class="sheet-title">${esc(title)}</div>
+        <button class="sheet-close" onclick="closeLoanTxnSheet()">✕</button>
+      </div>
+      ${loading?'<div class="center-msg"><div class="spinner"></div>Loading from Zoho…</div>':
+        error?`<div class="err-msg">${esc(error)}</div>`:
+        !transactions.length?'<div class="center-msg">No transactions found for this account.</div>':
+        transactions.map(t=>`<div class="inv-row">
+          <div class="inv-row-top"><span>${esc(t.payee||t.description||t.type||'—')}</span><span style="color:${t.debit_or_credit==='credit'?'var(--navy)':'var(--green)'}">${t.debit_or_credit==='credit'?'+':'-'} AED ${fmt(t.amount)}</span></div>
+          <div class="inv-row-bottom"><span>${esc((t.date||'').slice(0,10))} · ${esc(t.type||'')}</span><span>${t.debit_or_credit==='credit'?'Borrowed':'Repaid'}</span></div>
+        </div>`).join('')}
     </div>
   </div>`;
 }
@@ -720,7 +754,8 @@ function dashboardHTML(){
     </div>
     <div class="content">${body}</div>
   </div>
-  ${invoiceSheetHTML()}`;
+  ${invoiceSheetHTML()}
+  ${loanTxnSheetHTML()}`;
 }
 
 function render(){

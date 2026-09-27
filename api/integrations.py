@@ -1031,6 +1031,44 @@ def sync_loans():
         synced += 1
     return jsonify({'synced': synced})
 
+@app.route('/api/integrations/loan-accounts/<id>/transactions', methods=['GET'])
+def get_loan_account_transactions(id):
+    """Live drill-down, not persisted -- fetched fresh from Zoho each time
+    the admin opens it, same tradeoff as sync-loans (an extra API call for
+    always-current data rather than a stale local copy). Not admin-gated:
+    anyone who can already see the Loans widget in Insights can open its
+    detail, same as the Zoho Sales section's per-customer invoice drill-down."""
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    company_id = claims['company_id']
+
+    row = sb.table('loan_accounts').select('*').eq('id', id).eq('company_id', company_id).execute().data
+    if not row: return jsonify({'error': 'Loan account not found'}), 404
+    account = row[0]
+
+    creds = _get_creds_for(company_id, 'zoho')
+    adapter = ADAPTERS.get('zoho')
+    if not creds or not adapter or not adapter.is_configured(creds):
+        return jsonify({'error': 'Zoho Books is not connected.'}), 400
+
+    try:
+        txns = adapter.fetch_account_transactions(creds, account['zoho_account_id'])
+    except Exception as e:
+        return jsonify({'error': f'Could not fetch transactions: {str(e)[:300]}'}), 502
+
+    out = [{
+        'date': t.get('transaction_date'),
+        'type': (t.get('transaction_type') or '').replace('_', ' '),
+        'payee': t.get('payee') or '',
+        'description': t.get('description') or '',
+        'debit_or_credit': (t.get('debit_or_credit') or '').lower(),
+        'amount': float(t.get('debit_amount') or 0) if (t.get('debit_or_credit') or '').lower() == 'debit' else float(t.get('credit_amount') or 0),
+        'reference_number': t.get('reference_number') or '',
+        'entry_number': t.get('entry_number') or '',
+    } for t in txns]
+    out.sort(key=lambda r: r.get('date') or '', reverse=True)
+    return jsonify({'account_name': account.get('account_name'), 'transactions': out})
+
 # ── Push a single locally-created customer to Zoho Books ────────────────────────
 # Used by the Deals module (api/quotes.py -> index.html): when a deal is created
 # with a brand-new customer name, the frontend creates the local customers row

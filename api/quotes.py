@@ -1667,7 +1667,7 @@ def _build_insights_payload(claims):
     # are computed at sync time from that account's full transaction history
     # (see sync_loans() in api/integrations.py) -- not fabricated here.
     loan_rows = sb.table('loan_accounts').select(
-        'account_name,account_type,current_balance,total_repaid,total_borrowed,last_synced_at'
+        'id,account_name,account_type,current_balance,total_repaid,total_borrowed,last_synced_at'
     ).eq('company_id', company_id).eq('is_tracked', True).order('account_name').execute().data or []
     if loan_rows:
         synced_ats = [r['last_synced_at'] for r in loan_rows if r.get('last_synced_at')]

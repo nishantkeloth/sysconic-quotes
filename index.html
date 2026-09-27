@@ -4357,6 +4357,35 @@ function bizQuoteReconciliationHTML(){
     </div>`;
 }
 
+// ── Loan account transaction drill-down ─────────────────────────────────────
+// Fetched live from Zoho on click (not persisted) -- see
+// get_loan_account_transactions() in api/integrations.py.
+async function showLoanTransactionsModal(loanAccountId, accountName){
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="loanTxnOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('loanTxnOverlay').remove()">
+    <div style="max-width:720px;width:100%;max-height:80vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="font-size:19px;font-weight:700;color:var(--gray-900)">${esc(accountName)} — Transactions</div>
+        <span style="cursor:pointer;color:var(--gray-500);font-size:22px;line-height:1;padding:4px" onclick="document.getElementById('loanTxnOverlay').remove()">×</span>
+      </div>
+      <div class="vch-card" id="loanTxnBody"><div style="color:var(--gray-500)">Loading from Zoho…</div></div>
+    </div>
+  </div>`);
+  const r=await api('GET','/api/integrations/loan-accounts/'+loanAccountId+'/transactions');
+  const body=document.getElementById('loanTxnBody');
+  if(!body)return; // modal was closed before the fetch finished
+  if(r.error){body.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  const txns=r.transactions||[];
+  if(!txns.length){body.innerHTML=`<div style="color:var(--gray-500);padding:10px 0">No transactions found for this account.</div>`;return;}
+  body.innerHTML=`<div style="display:grid;grid-template-columns:90px 1fr 110px 110px;gap:8px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--gray-500);padding-bottom:6px;border-bottom:2px solid var(--gray-200)">
+      <span>Date</span><span>Description</span><span style="text-align:right">Borrowed</span><span style="text-align:right">Repaid</span>
+    </div>` + txns.map(t=>`<div style="display:grid;grid-template-columns:90px 1fr 110px 110px;gap:8px;font-size:13px;padding:8px 0;border-bottom:1px solid var(--gray-100);align-items:center">
+      <span style="color:var(--gray-500)">${esc((t.date||'').slice(0,10))}</span>
+      <span>${esc(t.payee||t.description||t.type||'—')}${t.reference_number?' <span style="color:var(--gray-500);font-size:11px">· '+esc(t.reference_number)+'</span>':''}<br><span style="font-size:11px;color:var(--gray-500)">${esc(t.type||'')}</span></span>
+      <span style="text-align:right;font-weight:700;color:var(--navy)">${t.debit_or_credit==='credit'?'AED '+fmt(t.amount):''}</span>
+      <span style="text-align:right;font-weight:700;color:var(--green)">${t.debit_or_credit==='debit'?'AED '+fmt(t.amount):''}</span>
+    </div>`).join('');
+}
+
 // Charts live inside the innerHTML that draw() wipes and rebuilds on every
 // render, so any Chart.js instance from the previous render is gone the
 // moment its <canvas> is torn out -- this has to re-create every chart from
@@ -4660,8 +4689,8 @@ function insightsHTML(){
           <div class="mcard" title="Zoho's current running balance for these accounts."><div class="mcard-label">Outstanding</div><div class="mcard-val amber">AED ${fmt(L.total_outstanding)}</div><div class="mcard-sub">as of now</div></div>
         </div>
         <div class="insights-list">
-          <div class="insights-list-title">By account</div>
-          ${L.accounts.map(a=>`<div class="insights-row" style="display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:12px;align-items:center">
+          <div class="insights-list-title">By account — click a row for its transactions</div>
+          ${L.accounts.map(a=>`<div class="insights-row" style="cursor:pointer;display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:12px;align-items:center" onclick="showLoanTransactionsModal('${a.id}',${esc(JSON.stringify(a.account_name))})">
             <span>${esc(a.account_name)}<br><span style="font-size:11px;color:var(--gray-500)">${esc((a.account_type||'').replace(/_/g,' '))}</span></span>
             <span style="text-align:right;color:var(--gray-500)">Borrowed: AED ${fmt(a.total_borrowed)}</span>
             <span style="text-align:right;color:var(--green)">Repaid: AED ${fmt(a.total_repaid)}</span>
