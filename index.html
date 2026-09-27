@@ -8100,6 +8100,7 @@ function renderZrResults(){
       <div class="mcard" title="Bank statement lines imported into Zoho for this account and month."><div class="mcard-label">Bank lines (Zoho Banking)</div><div class="mcard-val navy">${bank.length}</div><div class="mcard-sub">${D.bank_flagged_count} not linked to a books entry</div></div>
       <div class="mcard" title="Zoho's own ledger entries for this account and month."><div class="mcard-label">Zoho books entries</div><div class="mcard-val navy">${ledger.length}</div><div class="mcard-sub">${D.ledger_flagged_count} not reconciled</div></div>
     </div>
+    ${ledger.length===0?_zrDiagHTML(D.diagnostics):''}
     <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
       <div style="flex:1;min-width:380px">
         <div class="insights-list-title">Bank (Zoho Banking) — ${esc(D.period_start)} to ${esc(D.period_end)}${D.bank_flagged_count?` · ${D.bank_flagged_count} not linked, shown first`:''}</div>
@@ -8127,7 +8128,6 @@ function renderZrResults(){
       </div>
     </div>
     <div style="font-size:11px;color:var(--gray-500);margin-top:14px">Both lists come straight from Zoho — nothing is uploaded or guessed. A flagged bank line means Zoho hasn't linked it to a books entry (from the Banking module); a flagged books entry means it wasn't marked reconciled in Zoho's own monthly reconciliation. Flagged items are sorted to the top of each list.</div>
-    ${ledger.length===0?_zrDiagHTML(D.diagnostics):''}
   `;
 }
 
