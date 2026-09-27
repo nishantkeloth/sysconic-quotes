@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os, jwt, json, time
 import urllib.request, urllib.error, urllib.parse
-from datetime import datetime
+from datetime import datetime, date
 from supabase import create_client
 
 app = Flask(__name__)
@@ -646,6 +646,47 @@ class ZohoAdapter:
             'is_involved_in_transaction': a.get('is_involved_in_transaction', False),
         } for a in rows if a.get('account_id')]
 
+    # ── Bank Reconciliation tracker ─────────────────────────────────────────
+    def fetch_bank_accounts(self, creds):
+        """Every bank/credit-card account, via Zoho's dedicated Banking
+        module (not the Chart of Accounts one) -- account_type here
+        unambiguously identifies these as bank/card accounts, so unlike
+        loans no manual picker is needed. bank_balance reflects the
+        connected bank feed and is only meaningful if feeds are active for
+        that account (Zoho returns 0 otherwise, not distinguishable from a
+        genuinely zero balance -- flagged to the caller via is_feeds_active
+        so the UI doesn't claim a false balance-match)."""
+        rows = self._fetch_paginated(creds, '/bankaccounts', {}, 'bankaccounts', max_pages=5)
+        return [{
+            'zoho_account_id': a.get('account_id'),
+            'account_name': a.get('account_name') or '',
+            'account_type': a.get('account_type') or '',
+            'bank_name': a.get('bank_name') or '',
+            'balance': a.get('balance') or 0,
+            'bank_balance': a.get('bank_balance') or 0,
+            'is_feeds_active': bool(a.get('is_feeds_active')),
+            'uncategorized_transactions': a.get('uncategorized_transactions') or 0,
+            'is_active': a.get('is_active', True),
+        } for a in rows if a.get('account_id')]
+
+    def fetch_bank_reconciliations(self, creds, account_id):
+        """Zoho's own reconciliation history for one bank/card account --
+        each record is one completed (or draft) "Reconcile Account" run the
+        user already does in Zoho whenever a bank statement comes in.
+        Field names are defensively read (start_date/end_date/status/
+        save_option) since Zoho's public docs don't show a full example for
+        this endpoint's response -- code that consumes this treats an
+        unexpected shape as informational, never as a false "reconciled"."""
+        out, page = [], 1
+        while page <= 10:  # a company reconciling monthly won't exceed this for years
+            data = self._get(creds, f'/bankaccounts/{account_id}/reconciliations', {'page': page, 'per_page': 200})
+            batch = data.get('reconciliations') or data.get('bankreconciliations') or []
+            out.extend(batch)
+            if not batch or not (data.get('page_context') or {}).get('has_more_page'):
+                break
+            page += 1
+        return out
+
     def fetch_account_transactions(self, creds, account_id, extra_params=None):
         """Every transaction Zoho has ever posted against one Chart-of-
         Accounts entry, fully paginated -- used to compute a loan account's
@@ -1203,6 +1244,128 @@ def review_loan_transactions():
         'date_range_from': date_start,
         'findings': findings,
     })
+
+# ── Bank Reconciliation tracker ─────────────────────────────────────────────
+# "Is every bank transaction reconciled in Zoho, every month?" -- tracks the
+# reconciliation runs the admin already does in Zoho (Banking -> Reconcile
+# Account) whenever a bank statement comes in, and surfaces any month with
+# no completed reconciliation as a visible gap rather than silently omitting
+# it. See migration-add-bank-reconciliation.sql and
+# ZohoAdapter.fetch_bank_accounts/fetch_bank_reconciliations above.
+def _month_start(d):
+    return date(d.year, d.month, 1)
+
+def _months_back(n):
+    """Last n calendar months INCLUDING the current one, oldest first."""
+    today = _month_start(datetime.utcnow().date())
+    out = []
+    y, m = today.year, today.month
+    for _ in range(n):
+        out.append(date(y, m, 1))
+        m -= 1
+        if m == 0:
+            m, y = 12, y - 1
+    return list(reversed(out))
+
+def _parse_zoho_date(s):
+    if not s: return None
+    try:
+        return datetime.strptime(str(s)[:10], '%Y-%m-%d').date()
+    except Exception:
+        return None
+
+# Zoho's public docs don't show a full response example for a reconciliation
+# record, so status is read defensively from whichever of these keys is
+# present; a record is only ever treated as a completed reconciliation when
+# one of these fields is explicitly present and does NOT say "draft" --
+# never assumed reconciled by default.
+def _recon_is_completed(r):
+    for key in ('status', 'reconciliation_status', 'save_option'):
+        v = (r.get(key) or '').lower()
+        if v:
+            return 'draft' not in v
+    return False
+
+@app.route('/api/integrations/sync-bank-reconciliation', methods=['POST'])
+def sync_bank_reconciliation():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+    company_id = claims['company_id']
+
+    creds = _get_creds_for(company_id, 'zoho')
+    adapter = ADAPTERS.get('zoho')
+    if not creds or not adapter or not adapter.is_configured(creds):
+        return jsonify({'error': 'Zoho Books is not connected. Connect it in Settings → Integrations first.'}), 400
+
+    try:
+        accounts = adapter.fetch_bank_accounts(creds)
+    except Exception as e:
+        return jsonify({'error': f'Could not fetch bank accounts: {str(e)[:300]}'}), 502
+
+    now_iso = datetime.utcnow().isoformat()
+    months = _months_back(12)
+    synced_accounts, synced_months = 0, 0
+
+    for acc in accounts:
+        if not acc.get('is_active', True):
+            continue
+        acc_id = acc['zoho_account_id']
+        sb.table('bank_account_snapshot').upsert({
+            'company_id': company_id, 'zoho_account_id': acc_id,
+            'account_name': acc['account_name'], 'account_type': acc['account_type'],
+            'bank_name': acc['bank_name'],
+            'balance': acc['balance'],
+            # Only a meaningful comparison figure when bank feeds are
+            # actually active -- otherwise Zoho's 0 would falsely look like
+            # a perfect match against the books balance.
+            'bank_balance': acc['bank_balance'] if acc['is_feeds_active'] else None,
+            'uncategorized_transactions': acc['uncategorized_transactions'],
+            'last_synced_at': now_iso,
+        }, on_conflict='company_id,zoho_account_id').execute()
+        synced_accounts += 1
+
+        try:
+            recons = adapter.fetch_bank_reconciliations(creds, acc_id)
+        except Exception:
+            recons = []  # best-effort: still record the snapshot above even if history can't be read
+
+        reconciled_months = {}  # month_start(date) -> (closing_balance, reconciled_at)
+        for r in recons:
+            if not _recon_is_completed(r):
+                continue
+            start = _parse_zoho_date(r.get('start_date'))
+            end = _parse_zoho_date(r.get('end_date')) or start
+            if not start:
+                continue
+            m = _month_start(start)
+            end_m = _month_start(end)
+            while m <= end_m:
+                reconciled_months[m] = (r.get('closing_balance'), r.get('reconciled_at') or r.get('created_time'))
+                nm, ny = (m.month % 12) + 1, m.year + (1 if m.month == 12 else 0)
+                m = date(ny, nm, 1)
+
+        for month in months:
+            closing_balance, reconciled_at = reconciled_months.get(month, (None, None))
+            sb.table('bank_reconciliation_months').upsert({
+                'company_id': company_id, 'zoho_account_id': acc_id, 'account_name': acc['account_name'],
+                'month': month.isoformat(), 'is_reconciled': month in reconciled_months,
+                'closing_balance': closing_balance, 'reconciled_at': reconciled_at,
+                'last_synced_at': now_iso,
+            }, on_conflict='company_id,zoho_account_id,month').execute()
+            synced_months += 1
+
+    return jsonify({'synced_accounts': synced_accounts, 'synced_months': synced_months})
+
+@app.route('/api/integrations/bank-reconciliation', methods=['GET'])
+def get_bank_reconciliation():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+    company_id = claims['company_id']
+    accounts = sb.table('bank_account_snapshot').select('*').eq('company_id', company_id).order('account_name').execute().data or []
+    months = sb.table('bank_reconciliation_months').select('*').eq('company_id', company_id).order('month').execute().data or []
+    return jsonify({'accounts': accounts, 'months': months})
 
 # ── Push a single locally-created customer to Zoho Books ────────────────────────
 # Used by the Deals module (api/quotes.py -> index.html): when a deal is created

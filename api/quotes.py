@@ -1679,6 +1679,27 @@ def _build_insights_payload(claims):
             'last_synced_at': max(synced_ats) if synced_ats else None,
         }
 
+    # ── Bank Reconciliation (every bank/card account, synced monthly) ──────
+    # Only shown once a sync has actually run (Company Profile -> Bank
+    # Reconciliation -> Sync Now). accounts = current snapshot (books balance,
+    # bank-feed balance where available, live uncategorized count). months =
+    # per-account, per-month reconciled/not-reconciled history, derived from
+    # Zoho's own reconciliation records -- see sync_bank_reconciliation() in
+    # api/integrations.py.
+    bank_accounts = sb.table('bank_account_snapshot').select(
+        'zoho_account_id,account_name,account_type,bank_name,balance,bank_balance,uncategorized_transactions,last_synced_at'
+    ).eq('company_id', company_id).order('account_name').execute().data or []
+    if bank_accounts:
+        bank_months = sb.table('bank_reconciliation_months').select(
+            'zoho_account_id,account_name,month,is_reconciled,closing_balance'
+        ).eq('company_id', company_id).order('month').execute().data or []
+        synced_ats = [a['last_synced_at'] for a in bank_accounts if a.get('last_synced_at')]
+        out['bank_recon'] = {
+            'accounts': bank_accounts,
+            'months': bank_months,
+            'last_synced_at': max(synced_ats) if synced_ats else None,
+        }
+
     # ── Financial Health (Project Performance, synced from Zoho Books) ────
     if _has_feature(claims, 'project_performance'):
         pq = sb.table('projects').select(
