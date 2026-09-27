@@ -992,7 +992,8 @@ def list_zoho_liability_accounts():
     without writing anything until they actually click Save."""
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+    if not has_page_access(claims, 'zohoReconciliation'):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
 
     company_id = claims['company_id']
     creds = _get_creds_for(company_id, 'zoho')
@@ -1016,7 +1017,8 @@ def list_zoho_liability_accounts():
 def get_loan_accounts():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+    if not has_page_access(claims, 'zohoReconciliation'):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
     rows = sb.table('loan_accounts').select('*').eq('company_id', claims['company_id']).eq('is_tracked', True).order('account_name').execute().data or []
     return jsonify({'accounts': rows})
 
@@ -1029,7 +1031,8 @@ def save_loan_accounts():
     re-added later)."""
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+    if not has_page_access(claims, 'zohoReconciliation'):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
     company_id = claims['company_id']
 
     picked = (request.json or {}).get('accounts') or []
@@ -1052,7 +1055,8 @@ def save_loan_accounts():
 def sync_loans():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+    if not has_page_access(claims, 'zohoReconciliation'):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
     company_id = claims['company_id']
 
     tracked = sb.table('loan_accounts').select('*').eq('company_id', company_id).eq('is_tracked', True).execute().data or []
@@ -1164,7 +1168,8 @@ _INCOME_REVIEW_MIN_AMOUNT = 5000  # ignore small, routine income lines
 def review_loan_transactions():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+    if not has_page_access(claims, 'zohoReconciliation'):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
     company_id = claims['company_id']
 
     tracked = sb.table('loan_accounts').select('*').eq('company_id', company_id).eq('is_tracked', True).execute().data or []
@@ -1316,7 +1321,8 @@ def _recon_is_completed(r):
 def sync_bank_reconciliation():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+    if not has_page_access(claims, 'zohoReconciliation'):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
     company_id = claims['company_id']
 
     creds = _get_creds_for(company_id, 'zoho')
@@ -1415,7 +1421,8 @@ def sync_bank_reconciliation():
 def get_bank_reconciliation():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+    if not has_page_access(claims, 'zohoReconciliation'):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
     company_id = claims['company_id']
     accounts = sb.table('bank_account_snapshot').select('*').eq('company_id', company_id).order('account_name').execute().data or []
     months = sb.table('bank_reconciliation_months').select('*').eq('company_id', company_id).order('month').execute().data or []

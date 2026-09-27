@@ -1107,7 +1107,7 @@ def upload_company_logo():
 
 
 # ── RBAC Phase 1: custom, per-company roles (page-level view/hide) ─────────
-RBAC_PAGE_KEYS = ['insights','quotes','deals','products','customers','vendors','projects','projectPerformance','reviewQueue','testimonials','team','integrations','companyProfile','fsm','myJobs','deliveryChallans','vouchers','workflowSettings']
+RBAC_PAGE_KEYS = ['insights','quotes','deals','products','customers','vendors','projects','projectPerformance','reviewQueue','testimonials','team','integrations','companyProfile','fsm','myJobs','deliveryChallans','vouchers','workflowSettings','zohoReconciliation','zohoReport']
 
 def _clean_permissions(d):
     out = {}

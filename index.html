@@ -3208,7 +3208,8 @@ function draw(){
   if(A.page==='team'){setTimeout(loadTeam,50);}
   if(A.page==='integrations'){setTimeout(loadIntegrations,50);setTimeout(loadSyncConfig,50);}
   if(A.page==='platform'){setTimeout(loadPlatformCompanies,50);}
-  if(A.page==='companyProfile'){setTimeout(loadCompanyProfile,50);setTimeout(loadQuoteNumbering,50);if(hasFeature('delivery_challans'))setTimeout(loadDcNumbering,50);setTimeout(loadSelfServeAddons,50);setTimeout(loadInsightsShareLink,50);setTimeout(loadLoanAccountsBox,50);setTimeout(loadBankReconBox,50);}
+  if(A.page==='companyProfile'){setTimeout(loadCompanyProfile,50);setTimeout(loadQuoteNumbering,50);if(hasFeature('delivery_challans'))setTimeout(loadDcNumbering,50);setTimeout(loadSelfServeAddons,50);setTimeout(loadInsightsShareLink,50);}
+  if(A.page==='zohoReconciliation'){setTimeout(loadLoanAccountsBox,50);setTimeout(loadBankReconBox,50);}
   if(A.page==='rolesPermissions'){setTimeout(loadRolesPermissions,50);}
   if(A.page==='print'){ensurePrintCompany();}
   if(A.page==='deals')setTimeout(loadDealsPage,50);
@@ -3730,6 +3731,10 @@ function appHTML(){
         hasFeature('testimonials')&&hasPageAccess('testimonials')?`<div class="sb-item ${A.page==='testimonials'?'active':''}" onclick="${nav('testimonials')}"><span class="sb-icon">⭐</span>Testimonials</div>`:'',
         hasPageAccess('insights')?`<div class="sb-item ${A.page==='insights'?'active':''}" onclick="${nav('insights')}"><span class="sb-icon">📈</span>Insights</div>`:''
       ])}
+      ${sbGroupHTML('zoho','Zoho',[
+        hasPageAccess('zohoReconciliation')?`<div class="sb-item ${A.page==='zohoReconciliation'?'active':''}" onclick="${nav('zohoReconciliation')}"><span class="sb-icon">🏦</span>Reconciliation</div>`:'',
+        hasPageAccess('zohoReport')?`<div class="sb-item ${A.page==='zohoReport'?'active':''}" onclick="${nav('zohoReport')}"><span class="sb-icon">📋</span>Report</div>`:''
+      ])}
       ${A.activeQuote?`<div class="sb-item ${inEditor&&A.page!=='team'?'active':''}" onclick="${nav('editor')}"><span class="sb-icon">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(A.activeQuote.title||'Quote')}</span></div>`:''}`}       ${(A.user?.role==='admin'&&!A.user?.is_platform_admin)?`<div class="sb-sec">Settings</div>
       <div class="sb-item ${A.page==='team'?'active':''}" onclick="${nav('team')}"><span class="sb-icon">👥</span>Team</div>
       <div class="sb-item ${A.page==='integrations'?'active':''}" onclick="${nav('integrations')}"><span class="sb-icon">🔌</span>Integrations</div>
@@ -3784,6 +3789,8 @@ function appHTML(){
   else if(A.page==='workflowSettings')pageContent=workflowSettingsHTML();
   else if(A.page==='reviewQueue')pageContent=reviewQueueHTML();
   else if(A.page==='testimonials')pageContent=testimonialsHTML();
+  else if(A.page==='zohoReconciliation')pageContent=zohoReconciliationHTML();
+  else if(A.page==='zohoReport')pageContent=zohoReportHTML();
 
   if(['editor','terms','vendor'].includes(A.page)&&isQuoteLocked()&&!A.reviewMode){
     pageContent=`<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
@@ -7877,7 +7884,7 @@ function importVendorsMaster(event){
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────
-const RBAC_PAGE_LABELS = {insights:'Insights',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service',myJobs:'My Jobs (Engineer)',deliveryChallans:'Delivery Challans',vouchers:'Payment Vouchers',workflowSettings:'Workflow Settings'};
+const RBAC_PAGE_LABELS = {insights:'Insights',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service',myJobs:'My Jobs (Engineer)',deliveryChallans:'Delivery Challans',vouchers:'Payment Vouchers',workflowSettings:'Workflow Settings',zohoReconciliation:'Zoho — Reconciliation',zohoReport:'Zoho — Report'};
 let RBAC_PAGE_KEYS_FE = [];
 let RBAC_ROLES_CACHE = [];
 
@@ -7982,16 +7989,43 @@ ${hasFeature('delivery_challans')?`<div class="card" style="max-width:640px;marg
   <div id="shareLinkBox"><div style="color:var(--gray-500)">Loading…</div></div>
 </div>
 <div class="card" style="max-width:640px;margin-top:16px">
+  <div class="card-title">Loan Accounts &amp; Bank Reconciliation</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px">These moved to their own menu for tighter access control.</div>
+  <button class="btn btn-navy btn-sm" onclick="A.page='zohoReconciliation';draw()">Go to Zoho → Reconciliation</button>
+</div>`;}
+
+// ── Zoho → Reconciliation (Loan Accounts + Bank Reconciliation, moved out of
+// Company Profile so access can be granted per-role via RBAC instead of
+// tying them to whoever has Company Profile access). ────────────────────────
+function zohoReconciliationHTML(){
+  return `<h2 style="margin-bottom:16px">Zoho — Reconciliation</h2>
+<div class="card" style="max-width:640px">
   <div class="card-title">Loan Accounts</div>
-  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Shows total borrowed and current outstanding for your company's loans in the Insights dashboard. Zoho Books doesn't tag any account as a "loan" — pick which liability accounts in your Chart of Accounts are actual loans below. Admin only.</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Shows total borrowed and current outstanding for your company's loans in the Insights dashboard. Zoho Books doesn't tag any account as a "loan" — pick which liability accounts in your Chart of Accounts are actual loans below.</div>
   <div id="loanAcctBox"><div style="color:var(--gray-500)">Loading…</div></div>
   <div id="loanReviewBox" style="margin-top:14px"></div>
 </div>
 <div class="card" style="max-width:640px;margin-top:16px">
   <div class="card-title">Bank Reconciliation</div>
-  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Tracks whether every bank transaction has a matching, reconciled entry in Zoho Books, month by month for as far back as Zoho's own reconciliation history goes — click Sync each time you finish reconciling a statement in Zoho to bring this up to date. Admin only.</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Tracks whether every bank transaction has a matching, reconciled entry in Zoho Books, month by month for as far back as Zoho's own reconciliation history goes — click Sync each time you finish reconciling a statement in Zoho to bring this up to date.</div>
   <div id="bankReconBox"><div style="color:var(--gray-500)">Loading…</div></div>
-</div>`;}
+</div>`;
+}
+
+// ── Zoho → Report (bank statement vs. Zoho transaction matching) ───────────
+// Placeholder for the Phase 2/3 build (statement upload + matching engine +
+// side-by-side report) agreed in QTcal_Zoho_Menu_and_Reconciliation_Report_
+// Requirements.docx. Menu + RBAC (Phase 1) ship first so access control is
+// in place before the report itself exists.
+function zohoReportHTML(){
+  return `<h2 style="margin-bottom:16px">Zoho — Report</h2>
+<div class="card" style="max-width:640px">
+  <div class="card-title">Bank vs. Zoho Transaction Report</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:12px">Coming soon. Once built, you'll pick a bank/card account and a month here, upload that period's bank statement, and see the bank's transactions side-by-side with Zoho's own recorded transactions for that account — matched, flagged where they differ, and listed out wherever one side has no corresponding entry on the other.</div>
+  <div style="font-size:12px;color:var(--gray-500)">This menu (and access control for it) is live now; the report itself is next.</div>
+</div>`;
+}
+
 let QN={};
 async function loadQuoteNumbering(){
   const el=document.getElementById('qnBox');if(!el)return;
