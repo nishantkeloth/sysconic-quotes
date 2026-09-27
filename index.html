@@ -3208,7 +3208,7 @@ function draw(){
   if(A.page==='team'){setTimeout(loadTeam,50);}
   if(A.page==='integrations'){setTimeout(loadIntegrations,50);setTimeout(loadSyncConfig,50);}
   if(A.page==='platform'){setTimeout(loadPlatformCompanies,50);}
-  if(A.page==='companyProfile'){setTimeout(loadCompanyProfile,50);setTimeout(loadQuoteNumbering,50);if(hasFeature('delivery_challans'))setTimeout(loadDcNumbering,50);setTimeout(loadSelfServeAddons,50);setTimeout(loadInsightsShareLink,50);}
+  if(A.page==='companyProfile'){setTimeout(loadCompanyProfile,50);setTimeout(loadQuoteNumbering,50);if(hasFeature('delivery_challans'))setTimeout(loadDcNumbering,50);setTimeout(loadSelfServeAddons,50);setTimeout(loadInsightsShareLink,50);setTimeout(loadLoanAccountsBox,50);}
   if(A.page==='rolesPermissions'){setTimeout(loadRolesPermissions,50);}
   if(A.page==='print'){ensurePrintCompany();}
   if(A.page==='deals')setTimeout(loadDealsPage,50);
@@ -4640,6 +4640,35 @@ function insightsHTML(){
         </div>
 
         ${bizQuoteReconciliationHTML()}
+      </div>`);
+  }
+
+  // ── Loans (admin-picked Chart-of-Accounts liability accounts) ───────────
+  // current_balance is Zoho's own ledger balance (authoritative). total_
+  // borrowed/total_repaid are computed at sync time from that account's
+  // full transaction history (see sync_loans() in api/integrations.py) --
+  // exact ledger arithmetic, not an estimate. Section only appears once an
+  // admin has picked at least one account in Company Profile.
+  if(d.loans&&d.loans.accounts&&d.loans.accounts.length){
+    const L=d.loans;
+    sections.push(`
+      <div class="insights-sec">
+        <div class="insights-sec-title"><span>🏦 Loans</span></div>
+        <div class="dash-metrics">
+          <div class="mcard" title="Sum of every balance-increasing entry Zoho has ever recorded against these accounts."><div class="mcard-label">Total borrowed</div><div class="mcard-val navy">AED ${fmt(L.total_borrowed)}</div><div class="mcard-sub">lifetime, per Zoho ledger</div></div>
+          <div class="mcard" title="Sum of every balance-reducing entry Zoho has ever recorded against these accounts."><div class="mcard-label">Total repaid</div><div class="mcard-val green">AED ${fmt(L.total_repaid)}</div><div class="mcard-sub">lifetime, per Zoho ledger</div></div>
+          <div class="mcard" title="Zoho's current running balance for these accounts."><div class="mcard-label">Outstanding</div><div class="mcard-val amber">AED ${fmt(L.total_outstanding)}</div><div class="mcard-sub">as of now</div></div>
+        </div>
+        <div class="insights-list">
+          <div class="insights-list-title">By account</div>
+          ${L.accounts.map(a=>`<div class="insights-row" style="display:grid;grid-template-columns:1.3fr 1fr 1fr 1fr;gap:12px;align-items:center">
+            <span>${esc(a.account_name)}<br><span style="font-size:11px;color:var(--gray-500)">${esc((a.account_type||'').replace(/_/g,' '))}</span></span>
+            <span style="text-align:right;color:var(--gray-500)">Borrowed: AED ${fmt(a.total_borrowed)}</span>
+            <span style="text-align:right;color:var(--green)">Repaid: AED ${fmt(a.total_repaid)}</span>
+            <span style="text-align:right;font-weight:700">AED ${fmt(a.current_balance)} due</span>
+          </div>`).join('')}
+        </div>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:8px">${L.last_synced_at?'Last synced '+_insightsAgo(new Date(L.last_synced_at)):'Not synced yet'} · manage in Company Profile → Loan Accounts</div>
       </div>`);
   }
 
@@ -7914,6 +7943,11 @@ ${hasFeature('delivery_challans')?`<div class="card" style="max-width:640px;marg
   <div class="card-title">Public Insights Link</div>
   <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Generate a link that opens the mobile Insights dashboard with no login — handy for a phone home-screen shortcut or an office TV display. <strong>Anyone with this link can view your sales and GP data, no password required</strong>, so treat it like a password: don't post it anywhere public, and revoke it if it ever leaks. Admin only.</div>
   <div id="shareLinkBox"><div style="color:var(--gray-500)">Loading…</div></div>
+</div>
+<div class="card" style="max-width:640px;margin-top:16px">
+  <div class="card-title">Loan Accounts</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Shows total borrowed and current outstanding for your company's loans in the Insights dashboard. Zoho Books doesn't tag any account as a "loan" — pick which liability accounts in your Chart of Accounts are actual loans below. Admin only.</div>
+  <div id="loanAcctBox"><div style="color:var(--gray-500)">Loading…</div></div>
 </div>`;}
 let QN={};
 async function loadQuoteNumbering(){
@@ -8205,6 +8239,91 @@ function copyShareLink(){
   const inp=document.getElementById('shareLinkUrl');if(!inp)return;
   inp.select();
   navigator.clipboard?.writeText(inp.value).catch(()=>document.execCommand('copy'));
+}
+
+// ── Loan Accounts (Insights "Loans" section) ────────────────────────────────
+// Zoho Books has no dedicated "loan" object -- a loan is just a Chart of
+// Accounts entry (usually other_current_liability or long_term_liability),
+// indistinguishable by type alone from VAT payable, accrued expenses, etc.
+// So this is a picker, not an auto-sync: the admin sees every liability
+// account in their Zoho org with its live balance and checks the ones that
+// are actual loans -- exactly the same "never guess a financial link"
+// pattern as the quote-invoice-matches confirm step. See
+// migration-add-loan-accounts.sql and sync_loans() in api/integrations.py.
+let LOAN_ACCOUNTS=null; // saved/tracked accounts, from GET /api/integrations/loan-accounts
+let LOAN_PICKER=null;   // live Zoho liability-account list while the picker is open, else null
+let LOAN_SYNCING=false;
+
+async function loadLoanAccountsBox(){
+  const el=document.getElementById('loanAcctBox');if(!el)return;
+  const r=await api('GET','/api/integrations/loan-accounts');
+  if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  LOAN_ACCOUNTS=r.accounts||[];
+  LOAN_PICKER=null;
+  renderLoanAccountsBox();
+}
+function renderLoanAccountsBox(){
+  const el=document.getElementById('loanAcctBox');if(!el)return;
+  if(LOAN_PICKER){ el.innerHTML=loanPickerHTML(); return; }
+  const rows=LOAN_ACCOUNTS||[];
+  const lastSync=rows.map(a=>a.last_synced_at).filter(Boolean).sort().pop();
+  el.innerHTML=`
+    ${rows.length?`
+      <div style="margin-bottom:12px">
+        ${rows.map(a=>`<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--gray-100);font-size:13px">
+          <span>${esc(a.account_name)}<span style="color:var(--gray-500)"> · ${esc((a.account_type||'').replace(/_/g,' '))}</span></span>
+          <span style="font-weight:700">AED ${fmt(a.current_balance)} outstanding</span>
+        </div>`).join('')}
+      </div>
+      <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px">${lastSync?'Last synced '+new Date(lastSync).toLocaleString():'Selected, but not synced yet — click Sync Now.'}</div>
+    `:`<div style="color:var(--gray-500);font-size:13px;margin-bottom:12px">No loan accounts selected yet.</div>`}
+    <button class="btn btn-navy btn-sm" onclick="openLoanPicker()">${rows.length?'Manage accounts':'+ Choose loan accounts from Zoho'}</button>
+    ${rows.length?` <button class="btn btn-sm" onclick="syncLoanAccounts()" ${LOAN_SYNCING?'disabled':''}>${LOAN_SYNCING?'⏳ Syncing…':'🔄 Sync Now'}</button>`:''}
+  `;
+}
+async function openLoanPicker(){
+  const el=document.getElementById('loanAcctBox');if(!el)return;
+  el.innerHTML=`<div style="color:var(--gray-500)">Loading Zoho accounts…</div>`;
+  const r=await api('GET','/api/integrations/zoho-liability-accounts');
+  if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div><button class="btn btn-sm" style="margin-top:8px" onclick="loadLoanAccountsBox()">Back</button>`;return;}
+  LOAN_PICKER=(r.accounts||[]).map(a=>({...a, checked:a.is_tracked}));
+  renderLoanAccountsBox();
+}
+function toggleLoanPick(id){
+  const a=(LOAN_PICKER||[]).find(x=>x.zoho_account_id===id);
+  if(a)a.checked=!a.checked;
+  renderLoanAccountsBox();
+}
+function loanPickerHTML(){
+  const rows=LOAN_PICKER||[];
+  return `
+    <div style="font-size:12px;color:var(--gray-500);margin-bottom:10px">These are the liability-type accounts in your Zoho Books Chart of Accounts. Check the ones that are actual loans (a bank loan, a car loan, etc) — other liabilities like VAT payable won't be picked automatically.</div>
+    ${rows.length?rows.map(a=>`<label style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--gray-100);font-size:13px;cursor:pointer">
+      <input type="checkbox" ${a.checked?'checked':''} onchange="toggleLoanPick('${a.zoho_account_id}')">
+      <span style="flex:1">${esc(a.account_name)} <span style="color:var(--gray-500)">· ${esc((a.account_type||'').replace(/_/g,' '))}</span></span>
+      <span style="color:var(--gray-500)">AED ${fmt(a.current_balance)}</span>
+    </label>`).join(''):'<div style="color:var(--gray-500);font-size:13px">No liability accounts found in Zoho.</div>'}
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn btn-navy btn-sm" onclick="saveLoanPicker()">Save</button>
+      <button class="btn btn-sm" onclick="LOAN_PICKER=null;renderLoanAccountsBox()">Cancel</button>
+    </div>
+  `;
+}
+async function saveLoanPicker(){
+  const picked=(LOAN_PICKER||[]).filter(a=>a.checked).map(a=>({zoho_account_id:a.zoho_account_id,account_name:a.account_name,account_type:a.account_type}));
+  const r=await api('POST','/api/integrations/loan-accounts',{accounts:picked});
+  if(r.error){alert(r.error);return;}
+  LOAN_PICKER=null;
+  await loadLoanAccountsBox();
+  if(picked.length)await syncLoanAccounts();
+}
+async function syncLoanAccounts(){
+  if(LOAN_SYNCING)return;
+  LOAN_SYNCING=true;renderLoanAccountsBox();
+  const r=await api('POST','/api/integrations/sync-loans',{});
+  LOAN_SYNCING=false;
+  if(r.error){alert('Loan sync failed: '+r.error);renderLoanAccountsBox();return;}
+  await loadLoanAccountsBox();
 }
 
 // ── Platform Admin: every company on this SaaS, onboarding + suspend ───────────

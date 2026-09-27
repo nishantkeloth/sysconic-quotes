@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os, jwt, json, time
 import urllib.request, urllib.error, urllib.parse
+from datetime import datetime
 from supabase import create_client
 
 app = Flask(__name__)
@@ -606,6 +607,43 @@ class ZohoAdapter:
                 })
         return out
 
+    # ── Loans (Insights "Loans" section) ────────────────────────────────────
+    # Zoho Books has no dedicated "loan" object -- a loan is just a Chart of
+    # Accounts entry, usually typed other_current_liability or
+    # long_term_liability, named whatever the bookkeeper called it. Other
+    # liabilities (VAT payable, accrued expenses...) share those same types,
+    # so there's no reliable way to auto-detect "this is a loan" -- an admin
+    # picks which accounts are loans (see /api/integrations/loan-accounts).
+    # This method just lists liability-type accounts with their live balance
+    # for that picker; it does not decide which ones are loans.
+    def fetch_liability_accounts(self, creds):
+        rows = self._fetch_paginated(
+            creds, '/chartofaccounts',
+            {'showbalance': 'true', 'filter_by': 'AccountType.Liability'},
+            'chartofaccounts', max_pages=5,
+        )
+        return [{
+            'zoho_account_id': a.get('account_id'),
+            'account_name': a.get('account_name') or '',
+            'account_type': a.get('account_type') or '',
+            'current_balance': a.get('current_balance') or 0,
+            'is_active': a.get('is_active', True),
+        } for a in rows if a.get('account_id')]
+
+    def fetch_account_transactions(self, creds, account_id):
+        """Every transaction Zoho has ever posted against one Chart-of-
+        Accounts entry, fully paginated -- used to compute a loan account's
+        lifetime total_repaid. debit_or_credit is standard double-entry: for
+        a liability account, a CREDIT increases the balance (money borrowed)
+        and a DEBIT decreases it (a repayment or other reduction). Summing
+        every debit here, then deriving total_borrowed = current_balance +
+        total_repaid elsewhere, is exact ledger arithmetic (it always equals
+        the sum of every credit ever posted) -- not an estimate."""
+        return self._fetch_paginated(
+            creds, '/chartofaccounts/accounttransactions',
+            {'account_id': account_id}, 'transactions', max_pages=25,
+        )
+
 # ── Adapter registry ────────────────────────────────────────────────────────────
 # Each entry provides fetch_customers(creds), fetch_vendors(creds), and
 # is_configured(creds)/test_connection(creds). Adding a new provider (e.g.
@@ -878,6 +916,120 @@ def sync_sales():
             return jsonify({'error': f'Could not save synced invoices: {str(e)[:300]}'}), 502
 
     return jsonify({'synced': len(invoices)})
+
+# ── Loans (Insights "Loans" section) ────────────────────────────────────────────
+# See ZohoAdapter.fetch_liability_accounts/fetch_account_transactions above and
+# migration-add-loan-accounts.sql for the full rationale: Zoho has no "loan"
+# object, so an admin explicitly picks which Chart-of-Accounts liability
+# entries are loans (list_zoho_liability_accounts below is that picker's data
+# source), and only picked ("tracked") accounts are ever synced or shown.
+@app.route('/api/integrations/zoho-liability-accounts', methods=['GET'])
+def list_zoho_liability_accounts():
+    """Live, unsaved list -- lets the admin picker show current Zoho balances
+    without writing anything until they actually click Save."""
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+
+    company_id = claims['company_id']
+    creds = _get_creds_for(company_id, 'zoho')
+    adapter = ADAPTERS.get('zoho')
+    if not creds or not adapter or not adapter.is_configured(creds):
+        return jsonify({'error': 'Zoho Books is not connected. Connect it in Settings → Integrations first.'}), 400
+
+    try:
+        accounts = adapter.fetch_liability_accounts(creds)
+    except Exception as e:
+        return jsonify({'error': f'Could not fetch Zoho accounts: {str(e)[:300]}'}), 502
+
+    tracked_ids = {r['zoho_account_id'] for r in (
+        sb.table('loan_accounts').select('zoho_account_id').eq('company_id', company_id).eq('is_tracked', True).execute().data or []
+    )}
+    for a in accounts:
+        a['is_tracked'] = a['zoho_account_id'] in tracked_ids
+    return jsonify({'accounts': accounts})
+
+@app.route('/api/integrations/loan-accounts', methods=['GET'])
+def get_loan_accounts():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+    rows = sb.table('loan_accounts').select('*').eq('company_id', claims['company_id']).eq('is_tracked', True).order('account_name').execute().data or []
+    return jsonify({'accounts': rows})
+
+@app.route('/api/integrations/loan-accounts', methods=['POST'])
+def save_loan_accounts():
+    """Body: {accounts: [{zoho_account_id, account_name, account_type}, ...]}
+    -- the full set of accounts that should be tracked as loans from now on.
+    Replaces the previous selection entirely (any account not in this list
+    is untracked, not deleted, so its synced history isn't lost if it's
+    re-added later)."""
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+    company_id = claims['company_id']
+
+    picked = (request.json or {}).get('accounts') or []
+    picked_ids = [a.get('zoho_account_id') for a in picked if a.get('zoho_account_id')]
+
+    # Untrack everything first, then (re-)track exactly what was picked --
+    # simpler and safer than diffing, and cheap since a company will only
+    # ever have a handful of loan accounts.
+    sb.table('loan_accounts').update({'is_tracked': False}).eq('company_id', company_id).execute()
+    for a in picked:
+        row = {
+            'company_id': company_id, 'zoho_account_id': a.get('zoho_account_id'),
+            'account_name': a.get('account_name') or '', 'account_type': a.get('account_type') or '',
+            'is_tracked': True,
+        }
+        sb.table('loan_accounts').upsert(row, on_conflict='company_id,zoho_account_id').execute()
+    return jsonify({'ok': True, 'tracked': len(picked_ids)})
+
+@app.route('/api/integrations/sync-loans', methods=['POST'])
+def sync_loans():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+    company_id = claims['company_id']
+
+    tracked = sb.table('loan_accounts').select('*').eq('company_id', company_id).eq('is_tracked', True).execute().data or []
+    if not tracked:
+        return jsonify({'synced': 0, 'message': 'No loan accounts selected yet.'})
+
+    creds = _get_creds_for(company_id, 'zoho')
+    adapter = ADAPTERS.get('zoho')
+    if not creds or not adapter or not adapter.is_configured(creds):
+        return jsonify({'error': 'Zoho Books is not connected. Connect it in Settings → Integrations first.'}), 400
+
+    try:
+        live_accounts = {a['zoho_account_id']: a for a in adapter.fetch_liability_accounts(creds)}
+    except Exception as e:
+        return jsonify({'error': f'Zoho sync failed: {str(e)[:300]}'}), 502
+
+    now_iso = datetime.utcnow().isoformat()
+    synced = 0
+    for row in tracked:
+        acc_id = row['zoho_account_id']
+        live = live_accounts.get(acc_id)
+        current_balance = (live or {}).get('current_balance') or 0
+        try:
+            txns = adapter.fetch_account_transactions(creds, acc_id)
+        except Exception:
+            txns = []  # best-effort: keep the previous total_repaid rather than zero it on a transient error
+        total_repaid = sum(
+            float(t.get('debit_amount') or 0) for t in txns if (t.get('debit_or_credit') or '').lower() == 'debit'
+        ) if txns else (row.get('total_repaid') or 0)
+        total_borrowed = current_balance + total_repaid
+        sb.table('loan_accounts').update({
+            'account_name': (live or {}).get('account_name') or row.get('account_name'),
+            'account_type': (live or {}).get('account_type') or row.get('account_type'),
+            'current_balance': current_balance,
+            'total_repaid': total_repaid,
+            'total_borrowed': total_borrowed,
+            'last_synced_at': now_iso,
+        }).eq('id', row['id']).execute()
+        synced += 1
+    return jsonify({'synced': synced})
 
 # ── Push a single locally-created customer to Zoho Books ────────────────────────
 # Used by the Deals module (api/quotes.py -> index.html): when a deal is created

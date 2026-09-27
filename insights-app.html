@@ -627,6 +627,23 @@ function bizReconciliationSectionHTML(){
     </div>`:''}`;
 }
 
+function loansSectionHTML(L){
+  return `<div class="sec">
+    <div class="sec-title"><span>🏦 Loans</span></div>
+    <div class="cards">
+      <div class="card"><div class="card-label">Borrowed</div><div class="card-val navy">AED ${fmt(L.total_borrowed)}</div><div class="card-sub">lifetime</div></div>
+      <div class="card"><div class="card-label">Repaid</div><div class="card-val green">AED ${fmt(L.total_repaid)}</div></div>
+      <div class="card"><div class="card-label">Outstanding</div><div class="card-val amber">AED ${fmt(L.total_outstanding)}</div><div class="card-sub">as of now</div></div>
+    </div>
+    <div class="list">
+      ${(L.accounts||[]).map(a=>`<div class="list-row">
+        <span class="list-row-name">${esc(a.account_name)}</span>
+        <span class="list-row-val">AED ${fmt(a.current_balance)} due</span>
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
+
 function financialSectionHTML(k){
   return `<div class="sec">
     <div class="sec-title"><span>💰 Financial Health</span></div>
@@ -684,6 +701,7 @@ function dashboardHTML(){
     if(d.sales)body+=salesSectionHTML(d.sales,d.deals);
     if(d.zoho_sales)body+=zohoSectionHTML(d.zoho_sales);
     if(d.zoho_sales)body+=bizSectionHTML();
+    if(d.loans&&d.loans.accounts&&d.loans.accounts.length)body+=loansSectionHTML(d.loans);
     if(d.financial)body+=financialSectionHTML(d.financial);
     if(d.fsm)body+=fsmSectionHTML(d.fsm);
     if(!d.sales&&!d.zoho_sales&&!d.financial&&!d.fsm&&!S.error)body='<div class="center-msg">No data available yet.</div>';

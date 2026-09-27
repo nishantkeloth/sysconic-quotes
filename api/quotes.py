@@ -1659,6 +1659,26 @@ def _build_insights_payload(claims):
             'last_synced_at': max(synced_ats) if synced_ats else None,
         }
 
+    # ── Loans (admin-picked Chart-of-Accounts liability accounts) ──────────
+    # Only shown once an admin has actually picked at least one account via
+    # /api/integrations/loan-accounts -- see migration-add-loan-accounts.sql
+    # for why this can't be auto-detected from Zoho. current_balance is
+    # Zoho's own ledger balance (authoritative); total_borrowed/total_repaid
+    # are computed at sync time from that account's full transaction history
+    # (see sync_loans() in api/integrations.py) -- not fabricated here.
+    loan_rows = sb.table('loan_accounts').select(
+        'account_name,account_type,current_balance,total_repaid,total_borrowed,last_synced_at'
+    ).eq('company_id', company_id).eq('is_tracked', True).order('account_name').execute().data or []
+    if loan_rows:
+        synced_ats = [r['last_synced_at'] for r in loan_rows if r.get('last_synced_at')]
+        out['loans'] = {
+            'accounts': loan_rows,
+            'total_outstanding': sum(_numf(r.get('current_balance')) for r in loan_rows),
+            'total_borrowed': sum(_numf(r.get('total_borrowed')) for r in loan_rows),
+            'total_repaid': sum(_numf(r.get('total_repaid')) for r in loan_rows),
+            'last_synced_at': max(synced_ats) if synced_ats else None,
+        }
+
     # ── Financial Health (Project Performance, synced from Zoho Books) ────
     if _has_feature(claims, 'project_performance'):
         pq = sb.table('projects').select(
