@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import os, jwt, json, time
 import urllib.request, urllib.error, urllib.parse
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from supabase import create_client
 
 app = Flask(__name__)
@@ -686,6 +686,22 @@ class ZohoAdapter:
                 break
             page += 1
         return out
+
+    def fetch_bank_transactions(self, creds, account_id, date_start=None, date_end=None):
+        """Zoho's own Banking module transactions for one account -- distinct
+        from the Chart-of-Accounts ledger (fetch_account_transactions below).
+        These are the lines Zoho itself received from a bank feed or a
+        manually-imported bank statement (Banking -> Import Statement), each
+        carrying Zoho's own status: uncategorized, matched, categorized,
+        excluded, or manually_added. For a company that imports its bank
+        statement into Zoho each month (confirmed for this company), this
+        *is* the independent bank-side record -- QTcal doesn't need its own
+        upload/parsing step, since Zoho already has it and already tracks
+        which lines are matched to a books entry vs. not."""
+        params = {'account_id': account_id, 'sort_column': 'date'}
+        if date_start: params['date_start'] = date_start
+        if date_end: params['date_end'] = date_end
+        return self._fetch_paginated(creds, '/banktransactions', params, 'banktransactions', max_pages=25)
 
     def fetch_account_transactions(self, creds, account_id, extra_params=None):
         """Every transaction Zoho has ever posted against one Chart-of-
@@ -1428,131 +1444,88 @@ def get_bank_reconciliation():
     months = sb.table('bank_reconciliation_months').select('*').eq('company_id', company_id).order('month').execute().data or []
     return jsonify({'accounts': accounts, 'months': months})
 
-# ── Bank statement upload (Zoho -> Report, Phase 2) ─────────────────────────
-# The independent "bank side" data source for the Report (see
-# migration-add-bank-statement-import.sql and QTcal_Zoho_Menu_and_
-# Reconciliation_Report_Requirements.docx Section 5.2, Option B). Parsing
-# happens client-side (the browser already has SheetJS loaded for other
-# features) -- the frontend uploads already-parsed rows plus the column
-# mapping it used, not the raw file, so this endpoint never has to guess at
-# spreadsheet formats itself. A page-level permission gate rather than
-# is_admin(): same has_page_access() helper used for zohoReconciliation, but
-# scoped to 'zohoReport' since this data belongs to that page.
-MAX_STATEMENT_ROWS = 5000  # sanity cap -- a monthly statement is a few hundred rows at most
+# ── Bank vs. Zoho Transaction Report (Zoho -> Report) ───────────────────────
+# Both sides come straight from Zoho -- no upload step. Confirmed directly
+# with the customer: they import the bank statement into Zoho's own Banking
+# module every month (Banking -> Import Statement), so Zoho's own
+# /banktransactions already holds the independent bank-side record, each
+# line carrying Zoho's own status (uncategorized / matched / categorized /
+# excluded / manually_added) showing whether it's linked to a books entry.
+# QTcal doesn't need to build a matching engine on top of that -- Zoho
+# already did the matching when the statement was imported and reconciled.
+# The "Zoho side" is the same Chart-of-Accounts ledger already used for
+# Loans, each transaction carrying its own reconcile_status from Zoho's
+# monthly Reconcile Account process.
+_BANK_TXN_FLAG_STATUSES = {'uncategorized', 'excluded'}  # not linked to a books entry -- the discrepancies to surface
 
-@app.route('/api/integrations/bank-statement-column-map', methods=['GET'])
-def get_bank_statement_column_map():
-    claims = verify_token(request)
-    if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    if not has_page_access(claims, 'zohoReport'):
-        return jsonify({'error': 'You do not have access to this feature.'}), 403
-    account_id = request.args.get('account_id')
-    if not account_id:
-        return jsonify({'error': 'account_id is required'}), 400
-    row = sb.table('bank_statement_column_maps').select('*').eq('company_id', claims['company_id']).eq('zoho_account_id', account_id).execute().data
-    return jsonify({'map': row[0] if row else None})
+def _is_reconciled_value(v):
+    # Zoho's public docs don't show example values for reconcile_status, so
+    # this is read defensively -- only ever treated as reconciled when it
+    # explicitly says so, never assumed by a missing/unexpected value.
+    if v is None: return False
+    if isinstance(v, bool): return v
+    return str(v).strip().lower() in ('reconciled', 'yes', 'true', '1')
 
-@app.route('/api/integrations/bank-statement-import', methods=['POST'])
-def create_bank_statement_import():
-    """Body: {zoho_account_id, account_name, file_name, column_map: {...},
-    rows: [{txn_date:'YYYY-MM-DD', description, debit_amount, credit_amount,
-    reference}, ...]}. Rows are already parsed and normalized by the
-    frontend (dates to ISO, amounts split into debit/credit) using the
-    supplied column_map, which is saved here too so the next upload for this
-    account can pre-fill it. This is additive, not a replace-in-place: two
-    uploads covering the same period both land as separate import batches --
-    re-uploading a corrected statement means deleting the bad import first
-    (DELETE /api/integrations/bank-statement-imports/<id>), not silently
-    overwriting it."""
+@app.route('/api/integrations/bank-vs-zoho-report', methods=['GET'])
+def bank_vs_zoho_report():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
     if not has_page_access(claims, 'zohoReport'):
         return jsonify({'error': 'You do not have access to this feature.'}), 403
     company_id = claims['company_id']
-    d = request.json or {}
-    account_id = d.get('zoho_account_id')
-    rows = d.get('rows') or []
-    cmap = d.get('column_map') or {}
-    if not account_id:
-        return jsonify({'error': 'zoho_account_id is required'}), 400
-    if not rows:
-        return jsonify({'error': 'No rows to import -- check the file has data below the header row.'}), 400
-    if len(rows) > MAX_STATEMENT_ROWS:
-        return jsonify({'error': f'{len(rows)} rows is more than one statement should have (cap: {MAX_STATEMENT_ROWS}). Check the right file was selected.'}), 400
+    account_id = request.args.get('account_id')
+    month = request.args.get('month')  # 'YYYY-MM'
+    if not account_id or not month:
+        return jsonify({'error': 'account_id and month (YYYY-MM) are required'}), 400
+    try:
+        y, m = int(month[:4]), int(month[5:7])
+        period_start = date(y, m, 1)
+        period_end = _add_month(period_start) - timedelta(days=1)
+    except Exception:
+        return jsonify({'error': 'month must be in YYYY-MM format'}), 400
 
-    clean_rows = []
-    dates = []
-    for r in rows:
-        txn_date = _parse_zoho_date(r.get('txn_date'))  # reuses the same YYYY-MM-DD[...] parser as bank reconciliation
-        if not txn_date:
-            continue  # skip rows the frontend couldn't confidently date-parse rather than failing the whole import
-        debit = r.get('debit_amount')
-        credit = r.get('credit_amount')
-        clean_rows.append({
-            'company_id': company_id, 'zoho_account_id': account_id,
-            'txn_date': txn_date.isoformat(),
-            'description': (r.get('description') or '')[:500],
-            'debit_amount': float(debit) if debit not in (None, '') else None,
-            'credit_amount': float(credit) if credit not in (None, '') else None,
-            'reference': (r.get('reference') or '')[:200] or None,
+    creds = _get_creds_for(company_id, 'zoho')
+    adapter = ADAPTERS.get('zoho')
+    if not creds or not adapter or not adapter.is_configured(creds):
+        return jsonify({'error': 'Zoho Books is not connected. Connect it in Settings → Integrations first.'}), 400
+
+    try:
+        bank_rows = adapter.fetch_bank_transactions(creds, account_id, period_start.isoformat(), period_end.isoformat())
+    except Exception as e:
+        return jsonify({'error': f'Could not fetch bank transactions from Zoho: {str(e)[:300]}'}), 502
+    try:
+        ledger_rows = adapter.fetch_account_transactions(creds, account_id, {
+            'date_start': period_start.isoformat(), 'date_end': period_end.isoformat(),
         })
-        dates.append(txn_date)
-    if not clean_rows:
-        return jsonify({'error': 'None of the rows had a date QTcal could parse -- check the date column mapping and format.'}), 400
+    except Exception as e:
+        return jsonify({'error': f'Could not fetch Zoho ledger transactions: {str(e)[:300]}'}), 502
 
-    if cmap:
-        sb.table('bank_statement_column_maps').upsert({
-            'company_id': company_id, 'zoho_account_id': account_id,
-            'date_col': cmap.get('date_col'), 'desc_col': cmap.get('desc_col'),
-            'amount_mode': cmap.get('amount_mode') or 'single',
-            'amount_col': cmap.get('amount_col'), 'amount_sign_flipped': bool(cmap.get('amount_sign_flipped')),
-            'debit_col': cmap.get('debit_col'), 'credit_col': cmap.get('credit_col'),
-            'reference_col': cmap.get('reference_col'), 'date_format': cmap.get('date_format') or 'auto',
-            'updated_at': datetime.utcnow().isoformat(),
-        }, on_conflict='company_id,zoho_account_id').execute()
+    bank_out = [{
+        'transaction_id': r.get('transaction_id'), 'date': r.get('date'),
+        'description': r.get('description') or r.get('payee') or '',
+        'payee': r.get('payee'), 'amount': r.get('amount'),
+        'debit_or_credit': r.get('debit_or_credit'), 'status': r.get('status'),
+        'reference_number': r.get('reference_number'),
+        'flagged': (r.get('status') or '').lower() in _BANK_TXN_FLAG_STATUSES,
+    } for r in bank_rows]
 
-    imp = sb.table('bank_statement_imports').insert({
-        'company_id': company_id, 'zoho_account_id': account_id,
-        'account_name': d.get('account_name'), 'file_name': (d.get('file_name') or '')[:255],
-        'uploaded_by': claims.get('user_id'),
-        'row_count': len(clean_rows), 'date_min': min(dates).isoformat(), 'date_max': max(dates).isoformat(),
-    }).execute().data[0]
-
-    for r in clean_rows:
-        r['import_id'] = imp['id']
-    # Supabase's insert() accepts a list for a single batch call -- one round
-    # trip rather than one per row, important once a statement has hundreds.
-    sb.table('bank_statement_transactions').insert(clean_rows).execute()
+    ledger_out = [{
+        'transaction_id': r.get('transaction_id'), 'date': r.get('transaction_date'),
+        'description': r.get('description') or r.get('payee') or '',
+        'transaction_type': r.get('transaction_type'),
+        'debit_amount': r.get('debit_amount'), 'credit_amount': r.get('credit_amount'),
+        'reference_number': r.get('reference_number'),
+        'reconcile_status': r.get('reconcile_status'),
+        'flagged': not _is_reconciled_value(r.get('reconcile_status')),
+    } for r in ledger_rows]
 
     return jsonify({
-        'import_id': imp['id'], 'row_count': len(clean_rows),
-        'date_min': min(dates).isoformat(), 'date_max': max(dates).isoformat(),
-        'skipped': len(rows) - len(clean_rows),
+        'account_id': account_id, 'month': month,
+        'period_start': period_start.isoformat(), 'period_end': period_end.isoformat(),
+        'bank_transactions': bank_out, 'ledger_transactions': ledger_out,
+        'bank_flagged_count': sum(1 for b in bank_out if b['flagged']),
+        'ledger_flagged_count': sum(1 for l in ledger_out if l['flagged']),
     })
-
-@app.route('/api/integrations/bank-statement-imports', methods=['GET'])
-def list_bank_statement_imports():
-    claims = verify_token(request)
-    if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    if not has_page_access(claims, 'zohoReport'):
-        return jsonify({'error': 'You do not have access to this feature.'}), 403
-    q = sb.table('bank_statement_imports').select('*').eq('company_id', claims['company_id'])
-    account_id = request.args.get('account_id')
-    if account_id:
-        q = q.eq('zoho_account_id', account_id)
-    rows = q.order('uploaded_at', desc=True).execute().data or []
-    return jsonify({'imports': rows})
-
-@app.route('/api/integrations/bank-statement-imports/<import_id>', methods=['DELETE'])
-def delete_bank_statement_import(import_id):
-    claims = verify_token(request)
-    if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    if not has_page_access(claims, 'zohoReport'):
-        return jsonify({'error': 'You do not have access to this feature.'}), 403
-    # bank_statement_transactions.import_id has ON DELETE CASCADE, so removing
-    # the import row removes its parsed transactions with it.
-    sb.table('bank_statement_imports').delete().eq('id', import_id).eq('company_id', claims['company_id']).execute()
-    return jsonify({'ok': True})
 
 # ── Push a single locally-created customer to Zoho Books ────────────────────────
 # Used by the Deals module (api/quotes.py -> index.html): when a deal is created

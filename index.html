@@ -8013,25 +8013,28 @@ function zohoReconciliationHTML(){
 </div>`;
 }
 
-// ── Zoho → Report (bank statement vs. Zoho transaction matching) ───────────
-// Phase 2 (this section): upload + parse a bank statement into an
-// independent "bank side" record, per QTcal_Zoho_Menu_and_Reconciliation_
-// Report_Requirements.docx Section 5.2 Option B. Phase 3 (not yet built):
-// the actual side-by-side matching report against Zoho's own transactions.
+// ── Zoho → Report (bank vs. Zoho transaction report) ────────────────────────
+// Both sides come straight from Zoho -- confirmed directly with the customer
+// that they import their bank statement into Zoho's own Banking module each
+// month, so Zoho's /banktransactions already holds the independent bank-side
+// record (see bank_vs_zoho_report() in api/integrations.py). No upload step
+// in this app at all -- an earlier version of this page asked for one before
+// that was confirmed, and was removed.
 function zohoReportHTML(){
   return `<h2 style="margin-bottom:16px">Zoho — Report</h2>
-<div class="card" style="max-width:760px">
-  <div class="card-title">Upload bank statement</div>
-  <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px">Upload the same statement (CSV or Excel export from your bank) you already reconcile against in Zoho. This becomes the independent "bank side" record the matching report (coming next) will compare against Zoho's own transactions.</div>
-  <div id="zrBox"><div style="color:var(--gray-500)">Loading…</div></div>
-</div>
-<div class="card" style="max-width:760px;margin-top:16px">
+<div class="card" style="max-width:960px">
   <div class="card-title">Bank vs. Zoho Transaction Report</div>
-  <div style="font-size:13px;color:var(--gray-500)">Coming next: pick a month here and see the bank's transactions above lined up side-by-side with Zoho's own recorded transactions for that account — matched, flagged where they differ, and listed out wherever one side has no corresponding entry on the other.</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px">Pulled live from Zoho — nothing to upload. Left: the bank statement lines already imported into Zoho's own Banking module for this account. Right: Zoho's own books entries for the same account and month. Anything Zoho itself hasn't linked between the two, or hasn't marked reconciled, is flagged.</div>
+  <div id="zrBox"><div style="color:var(--gray-500)">Loading…</div></div>
 </div>`;
 }
 
-let ZR={accounts:[],accountId:null,savedMap:null,imports:[],headers:[],dataRows:[],map:{},uploading:false,parseError:null};
+let ZR={accounts:[],accountId:null,month:null,data:null,loading:false,error:null};
+
+function _zrDefaultMonth(){
+  const d=new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+}
 
 async function loadZrPage(){
   const el=document.getElementById('zrBox');if(!el)return;
@@ -8043,248 +8046,89 @@ async function loadZrPage(){
     return;
   }
   if(!ZR.accountId)ZR.accountId=ZR.accounts[0].zoho_account_id;
-  await zrSelectAccount(ZR.accountId);
-}
-
-async function zrSelectAccount(accountId){
-  ZR.accountId=accountId;
-  ZR.headers=[];ZR.dataRows=[];ZR.map={};ZR.parseError=null;
-  const [mapRes,impRes]=await Promise.all([
-    api('GET','/api/integrations/bank-statement-column-map?account_id='+encodeURIComponent(accountId)),
-    api('GET','/api/integrations/bank-statement-imports?account_id='+encodeURIComponent(accountId)),
-  ]);
-  ZR.savedMap=(mapRes&&mapRes.map)||null;
-  ZR.imports=(impRes&&impRes.imports)||[];
+  if(!ZR.month)ZR.month=_zrDefaultMonth();
   renderZrBox();
+  zrRunReport();
 }
 
 function renderZrBox(){
   const el=document.getElementById('zrBox');if(!el)return;
-  const acc=ZR.accounts.find(a=>a.zoho_account_id===ZR.accountId);
   el.innerHTML=`
-    <div class="fld" style="max-width:360px;margin-bottom:14px">
-      <label>Account</label>
-      <select id="zrAccountSel" onchange="zrSelectAccount(this.value)">
-        ${ZR.accounts.map(a=>`<option value="${esc(a.zoho_account_id)}" ${a.zoho_account_id===ZR.accountId?'selected':''}>${esc(a.account_name)}${a.bank_name?' · '+esc(a.bank_name):''}</option>`).join('')}
-      </select>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px">
+      <div class="fld" style="max-width:320px">
+        <label>Account</label>
+        <select id="zrAccountSel" onchange="ZR.accountId=this.value;zrRunReport()">
+          ${ZR.accounts.map(a=>`<option value="${esc(a.zoho_account_id)}" ${a.zoho_account_id===ZR.accountId?'selected':''}>${esc(a.account_name)}${a.bank_name?' · '+esc(a.bank_name):''}</option>`).join('')}
+        </select>
+      </div>
+      <div class="fld" style="max-width:180px">
+        <label>Month</label>
+        <input type="month" id="zrMonthSel" value="${esc(ZR.month)}" onchange="ZR.month=this.value;zrRunReport()">
+      </div>
+      <button class="btn btn-navy btn-sm" onclick="zrRunReport()" ${ZR.loading?'disabled':''}>${ZR.loading?'⏳ Loading…':'🔄 Run Report'}</button>
     </div>
-    <div style="margin-bottom:16px">
-      <label class="btn btn-sm" style="cursor:pointer;display:inline-block">
-        📄 Choose statement file (CSV or Excel)
-        <input type="file" accept=".csv,.xlsx,.xls" style="display:none" onchange="zrFileSelected(this)">
-      </label>
-      ${ZR.parseError?`<div class="auth-err" style="margin-top:8px">${esc(ZR.parseError)}</div>`:''}
-    </div>
-    <div id="zrMapBox"></div>
-    <div style="margin-top:20px;border-top:1px solid var(--gray-100);padding-top:14px">
-      <div class="insights-list-title">Upload history — ${esc(acc?acc.account_name:'')}</div>
-      ${ZR.imports.length?ZR.imports.map(i=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--gray-100);font-size:12.5px">
-        <span>${esc(i.file_name||'(unnamed file)')} — ${i.row_count} rows, ${esc(i.date_min)} to ${esc(i.date_max)}</span>
-        <span style="display:flex;gap:10px;align-items:center;color:var(--gray-500)">
-          <span>${new Date(i.uploaded_at).toLocaleDateString()}</span>
-          <button class="btn btn-sm" style="padding:2px 8px" onclick="zrDeleteImport('${i.id}')">Delete</button>
-        </span>
-      </div>`).join(''):`<div style="color:var(--gray-500);font-size:12.5px">No statements uploaded yet for this account.</div>`}
-    </div>
+    <div id="zrResults"></div>
   `;
-  renderZrMapBox();
+  renderZrResults();
 }
 
-async function zrFileSelected(inputEl){
-  const file=inputEl.files&&inputEl.files[0];
-  if(!file)return;
-  ZR.fileName=file.name;ZR.parseError=null;
-  try{
-    const buf=await file.arrayBuffer();
-    const wb=XLSX.read(buf,{type:'array',cellDates:true});
-    const sheet=wb.Sheets[wb.SheetNames[0]];
-    const rows=XLSX.utils.sheet_to_json(sheet,{header:1,raw:true,defval:''});
-    if(!rows.length||rows.length<2){ZR.parseError='That file has no data rows below the header.';ZR.headers=[];ZR.dataRows=[];renderZrBox();return;}
-    ZR.headers=(rows[0]||[]).map(h=>String(h||'').trim());
-    ZR.dataRows=rows.slice(1).filter(r=>r.some(c=>c!==''&&c!=null));
-    // Pre-fill mapping from the saved one for this account if the column names still match this file.
-    const sm=ZR.savedMap;
-    ZR.map={
-      date_col: sm&&ZR.headers.includes(sm.date_col)?sm.date_col:(ZR.headers.find(h=>/date/i.test(h))||ZR.headers[0]),
-      desc_col: sm&&ZR.headers.includes(sm.desc_col)?sm.desc_col:(ZR.headers.find(h=>/desc|narrat|particular/i.test(h))||ZR.headers[1]||ZR.headers[0]),
-      amount_mode: sm?sm.amount_mode:'single',
-      amount_col: sm&&ZR.headers.includes(sm.amount_col)?sm.amount_col:(ZR.headers.find(h=>/amount/i.test(h))||''),
-      amount_sign_flipped: sm?!!sm.amount_sign_flipped:false,
-      debit_col: sm&&ZR.headers.includes(sm.debit_col)?sm.debit_col:(ZR.headers.find(h=>/debit|withdraw/i.test(h))||''),
-      credit_col: sm&&ZR.headers.includes(sm.credit_col)?sm.credit_col:(ZR.headers.find(h=>/credit|deposit/i.test(h))||''),
-      reference_col: sm&&ZR.headers.includes(sm.reference_col)?sm.reference_col:(ZR.headers.find(h=>/ref/i.test(h))||''),
-      date_format: sm?sm.date_format:'auto',
-    };
-  }catch(e){
-    ZR.parseError='Could not read that file: '+String(e.message||e).slice(0,200);
-    ZR.headers=[];ZR.dataRows=[];
-  }
+async function zrRunReport(){
+  ZR.loading=true;ZR.error=null;renderZrBox();
+  const r=await api('GET',`/api/integrations/bank-vs-zoho-report?account_id=${encodeURIComponent(ZR.accountId)}&month=${encodeURIComponent(ZR.month)}`);
+  ZR.loading=false;
+  if(r.error){ZR.error=r.error;ZR.data=null;renderZrBox();return;}
+  ZR.data=r;
   renderZrBox();
 }
 
-function _zrParseAmt(v){
-  if(v==null||v==='')return null;
-  if(typeof v==='number')return v;
-  let s=String(v).trim();
-  if(!s)return null;
-  const neg=/^\(.*\)$/.test(s);
-  s=s.replace(/[^0-9.\-]/g,'');
-  if(!s||s==='-')return null;
-  let n=parseFloat(s);
-  if(isNaN(n))return null;
-  if(neg)n=-Math.abs(n);
-  return n;
+function _zrBankBadge(status){
+  const ok=status&&!['uncategorized','excluded'].includes(String(status).toLowerCase());
+  return `<span style="font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;background:${ok?'var(--green-light)':'var(--amber-light)'};color:${ok?'var(--green)':'var(--amber)'}">${esc(status||'unknown')}</span>`;
 }
-function _zrParseDate(v,fmt){
-  if(v==null||v==='')return null;
-  if(v instanceof Date&&!isNaN(v))return v.toISOString().slice(0,10);
-  const s=String(v).trim();
-  const isoMatch=s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if(isoMatch)return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
-  const parts=s.split(/[\/\-.]/);
-  if(parts.length===3){
-    let [a,b,c]=parts;
-    if(c.length===2)c='20'+c;
-    let d,m,y;
-    if(fmt==='MDY'){m=a;d=b;y=c;}
-    else if(fmt==='YMD'){y=a;m=b;d=c;}
-    else if(fmt==='DMY'){d=a;m=b;y=c;}
-    else{ // auto: if first segment > 12 it must be a day; otherwise assume DMY (most common outside the US)
-      if(parseInt(a,10)>12){d=a;m=b;y=c;}
-      else if(parseInt(b,10)>12){m=a;d=b;y=c;}
-      else{d=a;m=b;y=c;}
-    }
-    d=String(d).padStart(2,'0');m=String(m).padStart(2,'0');
-    if(y.length===4&&/^\d+$/.test(d)&&/^\d+$/.test(m))return `${y}-${m}-${d}`;
-  }
-  const dt=new Date(s);
-  if(!isNaN(dt))return dt.toISOString().slice(0,10);
-  return null;
+function _zrLedgerBadge(flagged){
+  return flagged?`<span style="font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;background:var(--amber-light);color:var(--amber)">not reconciled</span>`
+               :`<span style="font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;background:var(--green-light);color:var(--green)">reconciled</span>`;
 }
 
-function renderZrMapBox(){
-  const el=document.getElementById('zrMapBox');if(!el)return;
-  if(!ZR.headers.length){el.innerHTML='';return;}
-  const M=ZR.map;
-  const opt=(val,cur)=>`<option value="${esc(val)}" ${val===cur?'selected':''}>${esc(val)||'—'}</option>`;
-  const colSel=(id,cur)=>`<select id="${id}" onchange="zrMapChanged()">${['',...ZR.headers].map(h=>opt(h,cur)).join('')}</select>`;
+function renderZrResults(){
+  const el=document.getElementById('zrResults');if(!el)return;
+  if(ZR.error){el.innerHTML=`<div class="auth-err">${esc(ZR.error)}</div>`;return;}
+  if(!ZR.data){el.innerHTML=ZR.loading?'':'<div style="color:var(--gray-500);font-size:13px">Pick an account and month, then Run Report.</div>';return;}
+  const D=ZR.data;
+  const bank=D.bank_transactions||[],ledger=D.ledger_transactions||[];
   el.innerHTML=`
-    <div style="background:var(--gray-50);border-radius:8px;padding:14px;margin-bottom:14px">
-      <div style="font-weight:700;font-size:13px;margin-bottom:10px">Map columns — ${esc(ZR.fileName||'')}</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px 16px;margin-bottom:10px">
-        <div class="fld"><label>Date column</label>${colSel('zrDateCol',M.date_col)}</div>
-        <div class="fld"><label>Description column</label>${colSel('zrDescCol',M.desc_col)}</div>
-        <div class="fld"><label>Date format</label>
-          <select id="zrDateFmt" onchange="zrMapChanged()">
-            <option value="auto" ${M.date_format==='auto'?'selected':''}>Auto-detect</option>
-            <option value="DMY" ${M.date_format==='DMY'?'selected':''}>DD/MM/YYYY</option>
-            <option value="MDY" ${M.date_format==='MDY'?'selected':''}>MM/DD/YYYY</option>
-            <option value="YMD" ${M.date_format==='YMD'?'selected':''}>YYYY-MM-DD</option>
-          </select>
+    <div class="dash-metrics" style="margin-bottom:14px">
+      <div class="mcard" title="Bank statement lines imported into Zoho for this account and month."><div class="mcard-label">Bank lines (Zoho Banking)</div><div class="mcard-val navy">${bank.length}</div><div class="mcard-sub">${D.bank_flagged_count} not linked to a books entry</div></div>
+      <div class="mcard" title="Zoho's own ledger entries for this account and month."><div class="mcard-label">Zoho books entries</div><div class="mcard-val navy">${ledger.length}</div><div class="mcard-sub">${D.ledger_flagged_count} not reconciled</div></div>
+    </div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap">
+      <div style="flex:1;min-width:320px">
+        <div class="insights-list-title">Bank (Zoho Banking) — ${esc(D.period_start)} to ${esc(D.period_end)}</div>
+        <div class="insights-list" style="max-height:480px;overflow-y:auto">
+          ${bank.length?bank.map(b=>`<div style="padding:8px 0;border-bottom:1px solid var(--gray-100);font-size:12.5px;${b.flagged?'background:var(--amber-light)':''}">
+            <div style="display:flex;justify-content:space-between;gap:8px">
+              <span>${esc(b.date)} — ${esc(b.description||b.payee||'')}</span>
+              ${_zrBankBadge(b.status)}
+            </div>
+            <div style="color:var(--gray-500);margin-top:2px">${b.debit_or_credit?esc(b.debit_or_credit)+' · ':''}AED ${fmt(b.amount)}${b.reference_number?' · Ref '+esc(b.reference_number):''}</div>
+          </div>`).join(''):'<div style="color:var(--gray-500);font-size:12.5px">No bank transactions found in Zoho for this account and month.</div>'}
         </div>
-        <div class="fld"><label>Reference column (optional)</label>${colSel('zrRefCol',M.reference_col)}</div>
       </div>
-      <div style="display:flex;gap:16px;align-items:center;margin-bottom:10px;font-size:13px">
-        <label style="display:flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="zrAmtMode" value="single" ${M.amount_mode==='single'?'checked':''} onchange="zrMapChanged()"> One signed Amount column</label>
-        <label style="display:flex;align-items:center;gap:5px;cursor:pointer"><input type="radio" name="zrAmtMode" value="split" ${M.amount_mode==='split'?'checked':''} onchange="zrMapChanged()"> Separate Debit/Credit columns</label>
+      <div style="flex:1;min-width:320px">
+        <div class="insights-list-title">Zoho Books — ${esc(D.period_start)} to ${esc(D.period_end)}</div>
+        <div class="insights-list" style="max-height:480px;overflow-y:auto">
+          ${ledger.length?ledger.map(l=>`<div style="padding:8px 0;border-bottom:1px solid var(--gray-100);font-size:12.5px;${l.flagged?'background:var(--amber-light)':''}">
+            <div style="display:flex;justify-content:space-between;gap:8px">
+              <span>${esc(l.date)} — ${esc(l.description||'')}</span>
+              ${_zrLedgerBadge(l.flagged)}
+            </div>
+            <div style="color:var(--gray-500);margin-top:2px">${esc(l.transaction_type||'')} · ${l.debit_amount?'Debit AED '+fmt(l.debit_amount):''}${l.credit_amount?'Credit AED '+fmt(l.credit_amount):''}${l.reference_number?' · Ref '+esc(l.reference_number):''}</div>
+          </div>`).join(''):'<div style="color:var(--gray-500);font-size:12.5px">No Zoho transactions found for this account and month.</div>'}
+        </div>
       </div>
-      ${M.amount_mode==='single'?`
-        <div style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap">
-          <div class="fld"><label>Amount column</label>${colSel('zrAmtCol',M.amount_col)}</div>
-          <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;cursor:pointer;padding-bottom:8px"><input type="checkbox" id="zrAmtFlip" ${M.amount_sign_flipped?'checked':''} onchange="zrMapChanged()"> Positive = money out (signs reversed)</label>
-        </div>`:`
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px 16px">
-          <div class="fld"><label>Debit / Withdrawal column</label>${colSel('zrDebitCol',M.debit_col)}</div>
-          <div class="fld"><label>Credit / Deposit column</label>${colSel('zrCreditCol',M.credit_col)}</div>
-        </div>`}
     </div>
-    <div id="zrPreview"></div>
-    <div style="margin-top:12px;display:flex;align-items:center;gap:12px">
-      <button class="btn btn-navy btn-sm" onclick="zrSubmitImport()" ${ZR.uploading?'disabled':''}>${ZR.uploading?'⏳ Importing…':`Import ${ZR.dataRows.length} rows`}</button>
-      ${ZR.importError?`<span class="auth-err" style="padding:4px 10px">${esc(ZR.importError)}</span>`:''}
-    </div>
+    <div style="font-size:11px;color:var(--gray-500);margin-top:10px">Both lists come straight from Zoho — nothing is uploaded or guessed. A flagged bank line means Zoho hasn't linked it to a books entry (from the Banking module); a flagged books entry means it wasn't marked reconciled in Zoho's own monthly reconciliation.</div>
   `;
-  renderZrPreview();
-}
-
-function zrMapChanged(){
-  ZR.map={
-    date_col: document.getElementById('zrDateCol')?.value||'',
-    desc_col: document.getElementById('zrDescCol')?.value||'',
-    date_format: document.getElementById('zrDateFmt')?.value||'auto',
-    reference_col: document.getElementById('zrRefCol')?.value||'',
-    amount_mode: (document.querySelector('input[name="zrAmtMode"]:checked')||{}).value||'single',
-    amount_col: document.getElementById('zrAmtCol')?.value||'',
-    amount_sign_flipped: !!document.getElementById('zrAmtFlip')?.checked,
-    debit_col: document.getElementById('zrDebitCol')?.value||'',
-    credit_col: document.getElementById('zrCreditCol')?.value||'',
-  };
-  renderZrMapBox();
-}
-
-function _zrHeaderIdx(h){return ZR.headers.indexOf(h);}
-function _zrRowToTxn(row){
-  const M=ZR.map;
-  const get=(col)=>{const i=_zrHeaderIdx(col);return i>=0?row[i]:null;};
-  const txn_date=_zrParseDate(get(M.date_col),M.date_format);
-  const description=get(M.desc_col);
-  const reference=M.reference_col?get(M.reference_col):null;
-  let debit_amount=null,credit_amount=null;
-  if(M.amount_mode==='split'){
-    const dv=_zrParseAmt(get(M.debit_col));
-    const cv=_zrParseAmt(get(M.credit_col));
-    if(dv)debit_amount=Math.abs(dv);
-    if(cv)credit_amount=Math.abs(cv);
-  }else{
-    let av=_zrParseAmt(get(M.amount_col));
-    if(av!=null){
-      if(M.amount_sign_flipped)av=-av;
-      if(av<0)debit_amount=Math.abs(av);else if(av>0)credit_amount=av;
-    }
-  }
-  return {txn_date,description,reference,debit_amount,credit_amount};
-}
-
-function renderZrPreview(){
-  const el=document.getElementById('zrPreview');if(!el)return;
-  if(!ZR.map.date_col){el.innerHTML='';return;}
-  const sample=ZR.dataRows.slice(0,5).map(_zrRowToTxn);
-  const badDates=ZR.dataRows.filter(r=>!_zrRowToTxn(r).txn_date).length;
-  el.innerHTML=`
-    <div class="insights-list-title">Preview (first 5 of ${ZR.dataRows.length} rows)</div>
-    <div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:12px;min-width:520px">
-      <thead><tr><th style="text-align:left;padding:5px 8px">Date</th><th style="text-align:left;padding:5px 8px">Description</th><th style="text-align:right;padding:5px 8px">Debit</th><th style="text-align:right;padding:5px 8px">Credit</th></tr></thead>
-      <tbody>${sample.map(t=>`<tr style="border-top:1px solid var(--gray-100)">
-        <td style="padding:5px 8px;${t.txn_date?'':'color:var(--red)'}">${esc(t.txn_date||'could not parse')}</td>
-        <td style="padding:5px 8px">${esc(String(t.description||''))}</td>
-        <td style="padding:5px 8px;text-align:right">${t.debit_amount!=null?fmt(t.debit_amount):''}</td>
-        <td style="padding:5px 8px;text-align:right">${t.credit_amount!=null?fmt(t.credit_amount):''}</td>
-      </tr>`).join('')}</tbody>
-    </table></div>
-    ${badDates?`<div style="font-size:12px;color:var(--amber);margin-top:6px">${badDates} of ${ZR.dataRows.length} rows couldn't be date-parsed with the current settings and will be skipped — check the Date column / format above.</div>`:''}
-  `;
-}
-
-async function zrSubmitImport(){
-  if(ZR.uploading||!ZR.dataRows.length)return;
-  ZR.importError=null;ZR.uploading=true;renderZrBox();
-  const acc=ZR.accounts.find(a=>a.zoho_account_id===ZR.accountId);
-  const txns=ZR.dataRows.map(_zrRowToTxn);
-  const r=await api('POST','/api/integrations/bank-statement-import',{
-    zoho_account_id:ZR.accountId, account_name:acc?acc.account_name:'',
-    file_name:ZR.fileName, column_map:ZR.map, rows:txns,
-  });
-  ZR.uploading=false;
-  if(r.error){ZR.importError=r.error;renderZrBox();return;}
-  ZR.headers=[];ZR.dataRows=[];ZR.fileName=null;
-  await zrSelectAccount(ZR.accountId);
-  if(r.skipped)alert(`Imported ${r.row_count} rows (${r.skipped} skipped — couldn't be date-parsed).`);
-}
-
-async function zrDeleteImport(id){
-  if(!confirm('Delete this upload? Its parsed transactions will be removed too.'))return;
-  await api('DELETE','/api/integrations/bank-statement-imports/'+id);
-  await zrSelectAccount(ZR.accountId);
 }
 
 let QN={};
