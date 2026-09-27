@@ -8021,12 +8021,11 @@ function zohoReconciliationHTML(){
 // in this app at all -- an earlier version of this page asked for one before
 // that was confirmed, and was removed.
 function zohoReportHTML(){
-  return `<h2 style="margin-bottom:16px">Zoho — Report</h2>
-<div class="card" style="max-width:960px">
-  <div class="card-title">Bank vs. Zoho Transaction Report</div>
-  <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px">Pulled live from Zoho — nothing to upload. Left: the bank statement lines already imported into Zoho's own Banking module for this account. Right: Zoho's own books entries for the same account and month. Anything Zoho itself hasn't linked between the two, or hasn't marked reconciled, is flagged.</div>
+  return `<div style="font-size:12px;color:var(--gray-500);margin-bottom:4px">Zoho / Report</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Bank vs. Zoho Transaction Report — pulled live from Zoho, nothing to upload. Left: the bank statement lines already imported into Zoho's own Banking module for this account. Right: Zoho's own books entries for the same account and month. Anything Zoho itself hasn't linked between the two, or hasn't marked reconciled, is sorted to the top and flagged.</div>
+  <div class="card" style="max-width:1400px">
   <div id="zrBox"><div style="color:var(--gray-500)">Loading…</div></div>
-</div>`;
+  </div>`;
 }
 
 let ZR={accounts:[],accountId:null,month:null,data:null,loading:false,error:null};
@@ -8101,10 +8100,10 @@ function renderZrResults(){
       <div class="mcard" title="Bank statement lines imported into Zoho for this account and month."><div class="mcard-label">Bank lines (Zoho Banking)</div><div class="mcard-val navy">${bank.length}</div><div class="mcard-sub">${D.bank_flagged_count} not linked to a books entry</div></div>
       <div class="mcard" title="Zoho's own ledger entries for this account and month."><div class="mcard-label">Zoho books entries</div><div class="mcard-val navy">${ledger.length}</div><div class="mcard-sub">${D.ledger_flagged_count} not reconciled</div></div>
     </div>
-    <div style="display:flex;gap:16px;flex-wrap:wrap">
-      <div style="flex:1;min-width:320px">
-        <div class="insights-list-title">Bank (Zoho Banking) — ${esc(D.period_start)} to ${esc(D.period_end)}</div>
-        <div class="insights-list" style="max-height:480px;overflow-y:auto">
+    <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
+      <div style="flex:1;min-width:380px">
+        <div class="insights-list-title">Bank (Zoho Banking) — ${esc(D.period_start)} to ${esc(D.period_end)}${D.bank_flagged_count?` · ${D.bank_flagged_count} not linked, shown first`:''}</div>
+        <div class="insights-list">
           ${bank.length?bank.map(b=>`<div style="padding:8px 0;border-bottom:1px solid var(--gray-100);font-size:12.5px;${b.flagged?'background:var(--amber-light)':''}">
             <div style="display:flex;justify-content:space-between;gap:8px">
               <span>${esc(b.date)} — ${esc(b.description||b.payee||'')}</span>
@@ -8114,9 +8113,9 @@ function renderZrResults(){
           </div>`).join(''):'<div style="color:var(--gray-500);font-size:12.5px">No bank transactions found in Zoho for this account and month.</div>'}
         </div>
       </div>
-      <div style="flex:1;min-width:320px">
-        <div class="insights-list-title">Zoho Books — ${esc(D.period_start)} to ${esc(D.period_end)}</div>
-        <div class="insights-list" style="max-height:480px;overflow-y:auto">
+      <div style="flex:1;min-width:380px">
+        <div class="insights-list-title">Zoho Books — ${esc(D.period_start)} to ${esc(D.period_end)}${D.ledger_flagged_count?` · ${D.ledger_flagged_count} not reconciled, shown first`:''}</div>
+        <div class="insights-list">
           ${ledger.length?ledger.map(l=>`<div style="padding:8px 0;border-bottom:1px solid var(--gray-100);font-size:12.5px;${l.flagged?'background:var(--amber-light)':''}">
             <div style="display:flex;justify-content:space-between;gap:8px">
               <span>${esc(l.date)} — ${esc(l.description||'')}</span>
@@ -8127,7 +8126,7 @@ function renderZrResults(){
         </div>
       </div>
     </div>
-    <div style="font-size:11px;color:var(--gray-500);margin-top:10px">Both lists come straight from Zoho — nothing is uploaded or guessed. A flagged bank line means Zoho hasn't linked it to a books entry (from the Banking module); a flagged books entry means it wasn't marked reconciled in Zoho's own monthly reconciliation.</div>
+    <div style="font-size:11px;color:var(--gray-500);margin-top:14px">Both lists come straight from Zoho — nothing is uploaded or guessed. A flagged bank line means Zoho hasn't linked it to a books entry (from the Banking module); a flagged books entry means it wasn't marked reconciled in Zoho's own monthly reconciliation. Flagged items are sorted to the top of each list.</div>
   `;
 }
 

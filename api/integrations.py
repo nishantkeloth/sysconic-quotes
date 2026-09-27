@@ -630,6 +630,25 @@ class ZohoAdapter:
             'is_active': a.get('is_active', True),
         } for a in rows if a.get('account_id')]
 
+    def fetch_bank_chart_accounts(self, creds):
+        """The Chart-of-Accounts entries for bank/cash accounts -- distinct
+        from fetch_bank_accounts() above (the Banking module's own list,
+        used for balances/uncategorized counts). On some Zoho organizations
+        the same physical bank account has a different account_id in the
+        Banking module vs. Chart of Accounts; this lets bank_vs_zoho_report()
+        resolve the correct Chart-of-Accounts id by name when a direct
+        lookup with the Banking id returns no ledger transactions."""
+        rows = self._fetch_paginated(
+            creds, '/chartofaccounts',
+            {'filter_by': 'AccountType.Asset'},
+            'chartofaccounts', max_pages=5,
+        )
+        return [{
+            'zoho_account_id': a.get('account_id'),
+            'account_name': a.get('account_name') or '',
+            'account_type': a.get('account_type') or '',
+        } for a in rows if (a.get('account_type') or '') in ('bank', 'cash')]
+
     def fetch_income_accounts(self, creds):
         """Used by the loan-transaction anomaly review (POST /api/
         integrations/loan-accounts/review) to check whether loan proceeds
@@ -1493,12 +1512,38 @@ def bank_vs_zoho_report():
         bank_rows = adapter.fetch_bank_transactions(creds, account_id, period_start.isoformat(), period_end.isoformat())
     except Exception as e:
         return jsonify({'error': f'Could not fetch bank transactions from Zoho: {str(e)[:300]}'}), 502
-    try:
-        ledger_rows = adapter.fetch_account_transactions(creds, account_id, {
+
+    def _fetch_ledger(acc_id):
+        return adapter.fetch_account_transactions(creds, acc_id, {
             'date_start': period_start.isoformat(), 'date_end': period_end.isoformat(),
         })
+    try:
+        ledger_rows = _fetch_ledger(account_id)
+        ledger_account_id = account_id
     except Exception as e:
         return jsonify({'error': f'Could not fetch Zoho ledger transactions: {str(e)[:300]}'}), 502
+
+    # On some Zoho organizations the same physical bank account has a
+    # different account_id in the Banking module vs. Chart of Accounts.
+    # If the direct lookup came back empty but the bank side has activity,
+    # resolve the Chart-of-Accounts id by matching account name and retry
+    # once -- never silently trust an empty result when there's clear
+    # evidence (bank transactions exist) that ledger data should too.
+    if not ledger_rows and bank_rows:
+        bank_acc_name = (bank_rows[0].get('account_name') or '').strip().lower()
+        if bank_acc_name:
+            try:
+                chart_accounts = adapter.fetch_bank_chart_accounts(creds)
+                match = next((c for c in chart_accounts
+                              if c['account_name'].strip().lower() == bank_acc_name
+                              and c['zoho_account_id'] != account_id), None)
+                if match:
+                    retry_rows = _fetch_ledger(match['zoho_account_id'])
+                    if retry_rows:
+                        ledger_rows = retry_rows
+                        ledger_account_id = match['zoho_account_id']
+            except Exception:
+                pass  # best-effort resolution -- fall through with the empty result rather than failing the whole report
 
     bank_out = [{
         'transaction_id': r.get('transaction_id'), 'date': r.get('date'),
@@ -1508,6 +1553,7 @@ def bank_vs_zoho_report():
         'reference_number': r.get('reference_number'),
         'flagged': (r.get('status') or '').lower() in _BANK_TXN_FLAG_STATUSES,
     } for r in bank_rows]
+    bank_out.sort(key=lambda b: (not b['flagged'], b['date'] or ''))
 
     ledger_out = [{
         'transaction_id': r.get('transaction_id'), 'date': r.get('transaction_date'),
@@ -1518,9 +1564,10 @@ def bank_vs_zoho_report():
         'reconcile_status': r.get('reconcile_status'),
         'flagged': not _is_reconciled_value(r.get('reconcile_status')),
     } for r in ledger_rows]
+    ledger_out.sort(key=lambda l: (not l['flagged'], l['date'] or ''))
 
     return jsonify({
-        'account_id': account_id, 'month': month,
+        'account_id': account_id, 'ledger_account_id': ledger_account_id, 'month': month,
         'period_start': period_start.isoformat(), 'period_end': period_end.isoformat(),
         'bank_transactions': bank_out, 'ledger_transactions': ledger_out,
         'bank_flagged_count': sum(1 for b in bank_out if b['flagged']),
