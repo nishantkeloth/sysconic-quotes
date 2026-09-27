@@ -8133,6 +8133,7 @@ function renderZrResults(){
 
 function _zrDiagHTML(diag){
   if(!diag)return'';
+  const p=diag.raw_probe||{};
   const rows=[
     ['Bank account name (Zoho Banking)', diag.bank_account_name||'—'],
     ['Chart-of-Accounts id tried first', diag.initial_ledger_account_id||'—'],
@@ -8142,6 +8143,10 @@ function _zrDiagHTML(diag){
     ['Matched account id', diag.matched_account_id||'No match found'],
     ['Ledger rows after retry', ('retry_ledger_count' in diag)?diag.retry_ledger_count:'—'],
     ['Resolution error', diag.resolution_error?esc(diag.resolution_error):'—'],
+    ['— Raw Zoho probe for this account —',''],
+    ['Zoho response code/message (period-filtered call)', (p.code!=null||p.message)?(esc(String(p.code))+' — '+esc(p.message||'')):(p.period_probe_error?esc(p.period_probe_error):'No error, no code (normal empty response)')],
+    ['Transactions Zoho returned for this exact period', ('transactions_in_period' in p)?p.transactions_in_period:'—'],
+    ['Does this account have ANY ledger postings ever (no date filter)', ('any_transactions_ever' in p)?(p.any_transactions_ever+(p.any_transactions_ever?(' — most recent dates: '+(p.sample_dates||[]).map(esc).join(', ')):'')):(p.no_date_probe_error?esc(p.no_date_probe_error):'—')],
   ];
   return `<div class="card" style="margin-top:16px;background:var(--gray-50);border:1px dashed var(--gray-300)">
     <div class="card-title" style="font-size:12.5px">Why is Zoho books showing 0? (diagnostics)</div>

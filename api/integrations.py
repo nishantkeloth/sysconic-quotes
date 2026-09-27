@@ -1543,7 +1543,39 @@ def bank_vs_zoho_report():
         'chart_accounts_seen': None,
         'matched_account_id': None,
         'resolution_error': None,
+        'raw_probe': None,
     }
+    # Raw, unprocessed probe against the exact endpoint fetch_account_transactions
+    # calls -- shows Zoho's actual response shape (error code/message, or a
+    # genuinely empty transactions list) instead of only the parsed-and-empty
+    # result, and separately checks whether this account has ANY ledger
+    # history at all (no date filter) to tell a date-range problem apart from
+    # an account that simply has no chartofaccounts-side postings yet.
+    if not ledger_rows:
+        probe = {}
+        try:
+            r1 = adapter._get(creds, '/chartofaccounts/accounttransactions', {
+                'account_id': account_id, 'filter_by': 'TransactionType.All',
+                'sort_column': 'transaction_date', 'per_page': 5,
+                'date_start': period_start.isoformat(), 'date_end': period_end.isoformat(),
+            })
+            probe['response_keys'] = list(r1.keys())
+            probe['code'] = r1.get('code')
+            probe['message'] = r1.get('message')
+            probe['transactions_in_period'] = len(r1.get('transactions') or [])
+        except Exception as e:
+            probe['period_probe_error'] = str(e)[:300]
+        try:
+            r2 = adapter._get(creds, '/chartofaccounts/accounttransactions', {
+                'account_id': account_id, 'filter_by': 'TransactionType.All',
+                'sort_column': 'transaction_date', 'per_page': 5,
+            })
+            probe['any_transactions_ever'] = len(r2.get('transactions') or [])
+            sample = (r2.get('transactions') or [])[:2]
+            probe['sample_dates'] = [t.get('transaction_date') for t in sample]
+        except Exception as e:
+            probe['no_date_probe_error'] = str(e)[:300]
+        diag['raw_probe'] = probe
     if not ledger_rows and bank_rows:
         bank_acc_name = (bank_rows[0].get('account_name') or '').strip().lower()
         if bank_acc_name:
