@@ -8127,7 +8127,29 @@ function renderZrResults(){
       </div>
     </div>
     <div style="font-size:11px;color:var(--gray-500);margin-top:14px">Both lists come straight from Zoho — nothing is uploaded or guessed. A flagged bank line means Zoho hasn't linked it to a books entry (from the Banking module); a flagged books entry means it wasn't marked reconciled in Zoho's own monthly reconciliation. Flagged items are sorted to the top of each list.</div>
+    ${ledger.length===0?_zrDiagHTML(D.diagnostics):''}
   `;
+}
+
+function _zrDiagHTML(diag){
+  if(!diag)return'';
+  const rows=[
+    ['Bank account name (Zoho Banking)', diag.bank_account_name||'—'],
+    ['Chart-of-Accounts id tried first', diag.initial_ledger_account_id||'—'],
+    ['Ledger rows found with that id', diag.initial_ledger_count],
+    ['Name-match resolution attempted', diag.resolution_attempted?'Yes':'No'],
+    ['Chart-of-Accounts bank/cash accounts Zoho returned', (diag.chart_accounts_seen||[]).length?(diag.chart_accounts_seen.map(c=>esc(c.account_name)+' ('+esc(c.account_id)+', '+esc(c.account_type)+')').join('<br>')):'—'],
+    ['Matched account id', diag.matched_account_id||'No match found'],
+    ['Ledger rows after retry', ('retry_ledger_count' in diag)?diag.retry_ledger_count:'—'],
+    ['Resolution error', diag.resolution_error?esc(diag.resolution_error):'—'],
+  ];
+  return `<div class="card" style="margin-top:16px;background:var(--gray-50);border:1px dashed var(--gray-300)">
+    <div class="card-title" style="font-size:12.5px">Why is Zoho books showing 0? (diagnostics)</div>
+    <div style="font-size:12px;color:var(--gray-500);margin-bottom:10px">Zoho returned bank lines but no matching books entries for this account/month. This is what the app tried, straight from Zoho's own API — share this with support if the numbers look wrong.</div>
+    <table style="width:100%;font-size:12px;border-collapse:collapse">
+      ${rows.map(([k,v])=>`<tr><td style="padding:4px 10px 4px 0;color:var(--gray-500);white-space:nowrap;vertical-align:top">${esc(k)}</td><td style="padding:4px 0;vertical-align:top">${v}</td></tr>`).join('')}
+    </table>
+  </div>`;
 }
 
 let QN={};

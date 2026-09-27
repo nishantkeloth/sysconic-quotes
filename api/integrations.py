@@ -1529,21 +1529,43 @@ def bank_vs_zoho_report():
     # resolve the Chart-of-Accounts id by matching account name and retry
     # once -- never silently trust an empty result when there's clear
     # evidence (bank transactions exist) that ledger data should too.
+    #
+    # diag is returned to the caller (not just logged) so that when the
+    # resolution still doesn't work, the actual account names Zoho returned
+    # are visible in the UI instead of us having to guess a third time blind
+    # -- this endpoint has no live Zoho access from the dev sandbox.
+    diag = {
+        'initial_ledger_account_id': account_id,
+        'initial_ledger_count': len(ledger_rows),
+        'bank_row_count': len(bank_rows),
+        'bank_account_name': bank_rows[0].get('account_name') if bank_rows else None,
+        'resolution_attempted': False,
+        'chart_accounts_seen': None,
+        'matched_account_id': None,
+        'resolution_error': None,
+    }
     if not ledger_rows and bank_rows:
         bank_acc_name = (bank_rows[0].get('account_name') or '').strip().lower()
         if bank_acc_name:
+            diag['resolution_attempted'] = True
             try:
                 chart_accounts = adapter.fetch_bank_chart_accounts(creds)
+                diag['chart_accounts_seen'] = [
+                    {'account_id': c['zoho_account_id'], 'account_name': c['account_name'], 'account_type': c['account_type']}
+                    for c in chart_accounts
+                ]
                 match = next((c for c in chart_accounts
                               if c['account_name'].strip().lower() == bank_acc_name
                               and c['zoho_account_id'] != account_id), None)
                 if match:
+                    diag['matched_account_id'] = match['zoho_account_id']
                     retry_rows = _fetch_ledger(match['zoho_account_id'])
+                    diag['retry_ledger_count'] = len(retry_rows)
                     if retry_rows:
                         ledger_rows = retry_rows
                         ledger_account_id = match['zoho_account_id']
-            except Exception:
-                pass  # best-effort resolution -- fall through with the empty result rather than failing the whole report
+            except Exception as e:
+                diag['resolution_error'] = str(e)[:300]  # best-effort resolution -- fall through with the empty result rather than failing the whole report
 
     bank_out = [{
         'transaction_id': r.get('transaction_id'), 'date': r.get('date'),
@@ -1572,6 +1594,7 @@ def bank_vs_zoho_report():
         'bank_transactions': bank_out, 'ledger_transactions': ledger_out,
         'bank_flagged_count': sum(1 for b in bank_out if b['flagged']),
         'ledger_flagged_count': sum(1 for l in ledger_out if l['flagged']),
+        'diagnostics': diag,
     })
 
 # ── Push a single locally-created customer to Zoho Books ────────────────────────
