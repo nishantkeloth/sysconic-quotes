@@ -7980,6 +7980,7 @@ ${hasFeature('delivery_challans')?`<div class="card" style="max-width:640px;marg
   <div class="card-title">Loan Accounts</div>
   <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Shows total borrowed and current outstanding for your company's loans in the Insights dashboard. Zoho Books doesn't tag any account as a "loan" — pick which liability accounts in your Chart of Accounts are actual loans below. Admin only.</div>
   <div id="loanAcctBox"><div style="color:var(--gray-500)">Loading…</div></div>
+  <div id="loanReviewBox" style="margin-top:14px"></div>
 </div>`;}
 let QN={};
 async function loadQuoteNumbering(){
@@ -8310,7 +8311,44 @@ function renderLoanAccountsBox(){
       <div style="font-size:12px;color:var(--gray-500);margin-bottom:12px">${lastSync?'Last synced '+new Date(lastSync).toLocaleString():'Selected, but not synced yet — click Sync Now.'}</div>
     `:`<div style="color:var(--gray-500);font-size:13px;margin-bottom:12px">No loan accounts selected yet.</div>`}
     <button class="btn btn-navy btn-sm" onclick="openLoanPicker()">${rows.length?'Manage accounts':'+ Choose loan accounts from Zoho'}</button>
-    ${rows.length?` <button class="btn btn-sm" onclick="syncLoanAccounts()" ${LOAN_SYNCING?'disabled':''}>${LOAN_SYNCING?'⏳ Syncing…':'🔄 Sync Now'}</button>`:''}
+    ${rows.length?` <button class="btn btn-sm" onclick="syncLoanAccounts()" ${LOAN_SYNCING?'disabled':''}>${LOAN_SYNCING?'⏳ Syncing…':'🔄 Sync Now'}</button>
+    <button class="btn btn-sm" onclick="runLoanReview()" ${LOAN_REVIEWING?'disabled':''}>${LOAN_REVIEWING?'⏳ Reviewing…':'🔍 Review Transactions'}</button>`:''}
+  `;
+}
+
+// ── Loan transaction anomaly review ─────────────────────────────────────────
+// Checks: (1) each loan account's own ledger for sales-type entries that
+// shouldn't be posting there, and (2) Income accounts for large entries
+// whose amount closely matches a real loan disbursement -- possible loan
+// proceeds booked as revenue instead of to the loan account. Flags
+// candidates for a human to verify; never asserts a verdict. See
+// review_loan_transactions() in api/integrations.py.
+let LOAN_REVIEWING=false;
+async function runLoanReview(){
+  if(LOAN_REVIEWING)return;
+  LOAN_REVIEWING=true;
+  renderLoanAccountsBox();
+  const box=document.getElementById('loanReviewBox');
+  if(box)box.innerHTML=`<div style="color:var(--gray-500);font-size:13px">Scanning your loan accounts and Income accounts in Zoho — this can take a little while…</div>`;
+  const r=await api('POST','/api/integrations/loan-accounts/review',{});
+  LOAN_REVIEWING=false;
+  renderLoanAccountsBox();
+  renderLoanReview(r);
+}
+function renderLoanReview(r){
+  const box=document.getElementById('loanReviewBox');if(!box)return;
+  if(r.error){box.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  const findings=r.findings||[];
+  const sevStyle={high:['🔴','var(--red)'],warning:['🟠','var(--amber)'],info:['🔵','var(--gray-500)'],error:['⚠️','var(--red)']};
+  box.innerHTML=`
+    <div style="font-size:12px;color:var(--gray-500);margin-bottom:10px;border-top:1px solid var(--gray-100);padding-top:12px">Reviewed ${r.reviewed_loan_accounts} loan account(s) and ${r.reviewed_income_accounts} income account(s), since ${esc(r.date_range_from||'')}. This flags candidates worth a human look — it does not assert anything is actually wrong.</div>
+    ${findings.length?findings.map(f=>{
+      const [icon,color]=sevStyle[f.severity]||['•','var(--gray-500)'];
+      return `<div style="display:flex;gap:8px;padding:8px 0;border-bottom:1px solid var(--gray-100);font-size:13px">
+        <span>${icon}</span>
+        <span><strong style="color:${color}">${esc(f.account)}</strong> — ${esc(f.message)}</span>
+      </div>`;
+    }).join(''):`<div style="color:var(--green);font-size:13px;font-weight:600">✓ No anomalies found in the accounts and time range reviewed.</div>`}
   `;
 }
 async function openLoanPicker(){

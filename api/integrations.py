@@ -630,7 +630,23 @@ class ZohoAdapter:
             'is_active': a.get('is_active', True),
         } for a in rows if a.get('account_id')]
 
-    def fetch_account_transactions(self, creds, account_id):
+    def fetch_income_accounts(self, creds):
+        """Used by the loan-transaction anomaly review (POST /api/
+        integrations/loan-accounts/review) to check whether loan proceeds
+        may have been booked as revenue instead of to a loan account."""
+        rows = self._fetch_paginated(
+            creds, '/chartofaccounts',
+            {'filter_by': 'AccountType.Income'},
+            'chartofaccounts', max_pages=5,
+        )
+        return [{
+            'zoho_account_id': a.get('account_id'),
+            'account_name': a.get('account_name') or '',
+            'account_type': a.get('account_type') or '',
+            'is_involved_in_transaction': a.get('is_involved_in_transaction', False),
+        } for a in rows if a.get('account_id')]
+
+    def fetch_account_transactions(self, creds, account_id, extra_params=None):
         """Every transaction Zoho has ever posted against one Chart-of-
         Accounts entry, fully paginated -- used to compute a loan account's
         lifetime total_repaid. debit_or_credit is standard double-entry: for
@@ -643,9 +659,10 @@ class ZohoAdapter:
         # default) because some accounts return an empty list without it --
         # seen in practice on an account whose balance came from a Zoho
         # "Opening Balance" entry rather than a dated journal/expense.
+        params = {'account_id': account_id, 'filter_by': 'TransactionType.All', 'sort_column': 'transaction_date'}
+        params.update(extra_params or {})
         return self._fetch_paginated(
-            creds, '/chartofaccounts/accounttransactions',
-            {'account_id': account_id, 'filter_by': 'TransactionType.All', 'sort_column': 'transaction_date'},
+            creds, '/chartofaccounts/accounttransactions', params,
             'transactions', max_pages=25,
         )
 
@@ -1076,6 +1093,115 @@ def get_loan_account_transactions(id):
         'account_name': account.get('account_name'),
         'current_balance': account.get('current_balance'),
         'transactions': out,
+    })
+
+# ── Loan transaction anomaly review ─────────────────────────────────────────
+# What the admin actually worries about: "is loan money accidentally showing
+# up as revenue?" This can't be answered with certainty from the API alone
+# (that would require understanding intent), so this flags CANDIDATES for a
+# human to check rather than asserting a verdict -- same principle as the
+# quote-invoice match suggestions. Two checks:
+#   1. On each tracked loan account's own ledger: a transaction_type that's
+#      normally a sales-side concept (invoice, customer_payment, credit
+#      notes...) has no business posting directly to a loan liability
+#      account, so it's flagged as worth checking.
+#   2. On the company's Income-type accounts: a large entry whose amount
+#      closely matches (within 2%) a real credit (borrowing) recorded on a
+#      tracked loan account is flagged as a likely candidate for "this may
+#      be loan proceeds booked as income instead."
+_LOAN_ACCOUNT_SUSPECT_TYPES = {
+    'invoice', 'customer_payment', 'sales_without_invoices',
+    'credit_notes', 'creditnote_refund', 'tax_refund', 'refund',
+}
+_INCOME_ACCOUNT_SUSPECT_TYPES = {
+    'deposit', 'journal', 'other_income', 'sales_without_invoices',
+    'base_currency_adjustment', 'owner_contribution',
+}
+_INCOME_REVIEW_MIN_AMOUNT = 5000  # ignore small, routine income lines
+
+@app.route('/api/integrations/loan-accounts/review', methods=['POST'])
+def review_loan_transactions():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+    company_id = claims['company_id']
+
+    tracked = sb.table('loan_accounts').select('*').eq('company_id', company_id).eq('is_tracked', True).execute().data or []
+    if not tracked:
+        return jsonify({'error': 'No loan accounts selected yet — pick your loan accounts above first.'}), 400
+
+    creds = _get_creds_for(company_id, 'zoho')
+    adapter = ADAPTERS.get('zoho')
+    if not creds or not adapter or not adapter.is_configured(creds):
+        return jsonify({'error': 'Zoho Books is not connected. Connect it in Settings → Integrations first.'}), 400
+
+    findings = []
+    loan_credits = []  # every borrowing (credit) entry across tracked loan accounts, for amount cross-matching
+    earliest_date = None
+
+    for acc in tracked:
+        try:
+            txns = adapter.fetch_account_transactions(creds, acc['zoho_account_id'])
+        except Exception as e:
+            findings.append({'severity': 'error', 'account': acc['account_name'],
+                              'message': f"Could not read transactions for this account: {str(e)[:200]}"})
+            continue
+        for t in txns:
+            date = t.get('transaction_date')
+            if date and (earliest_date is None or date < earliest_date):
+                earliest_date = date
+            ttype = (t.get('transaction_type') or '').lower()
+            debit_amt = float(t.get('debit_amount') or 0)
+            credit_amt = float(t.get('credit_amount') or 0)
+            if credit_amt > 0:
+                loan_credits.append({'amount': credit_amt, 'date': date, 'account': acc['account_name']})
+            if ttype in _LOAN_ACCOUNT_SUSPECT_TYPES:
+                findings.append({
+                    'severity': 'warning', 'account': acc['account_name'],
+                    'message': f"A '{ttype.replace('_', ' ')}' transaction of AED {(debit_amt or credit_amt):,.2f} on {date or 'an unknown date'} is posted directly to this loan account. Loan accounts are normally only touched by deposits, journals, expenses, or loan/bill payments — a sales-type entry here is worth checking in Zoho.",
+                })
+
+    # Cross-check Income accounts, bounded to since the earliest loan
+    # transaction (or 3 years back if that's unknown) so this stays a single
+    # bounded request rather than scanning the company's entire history.
+    date_start = earliest_date or (datetime.utcnow().replace(year=datetime.utcnow().year - 3)).strftime('%Y-%m-%d')
+    try:
+        income_accounts = [a for a in adapter.fetch_income_accounts(creds) if a.get('is_involved_in_transaction')][:15]
+    except Exception as e:
+        income_accounts = []
+        findings.append({'severity': 'error', 'account': '(Income accounts)',
+                          'message': f"Could not read Income accounts: {str(e)[:200]}"})
+
+    for acc in income_accounts:
+        try:
+            txns = adapter.fetch_account_transactions(creds, acc['zoho_account_id'], extra_params={'date_start': date_start})
+        except Exception:
+            continue
+        for t in txns:
+            credit_amt = float(t.get('credit_amount') or 0)
+            if credit_amt < _INCOME_REVIEW_MIN_AMOUNT:
+                continue
+            ttype = (t.get('transaction_type') or '').lower()
+            date = t.get('transaction_date')
+            matched = next((l for l in loan_credits if l['amount'] > 0 and abs(l['amount'] - credit_amt) / l['amount'] <= 0.02), None)
+            if matched:
+                findings.append({
+                    'severity': 'high', 'account': acc['account_name'],
+                    'message': f"AED {credit_amt:,.2f} was recorded as income here on {date or 'an unknown date'} ('{ttype.replace('_', ' ')}') — this closely matches a borrowing amount on '{matched['account']}' ({matched['date']}). This may be loan proceeds booked as income instead of to the loan account — verify in Zoho Books.",
+                })
+            elif ttype in _INCOME_ACCOUNT_SUSPECT_TYPES:
+                findings.append({
+                    'severity': 'info', 'account': acc['account_name'],
+                    'message': f"A large, manually-entered-looking transaction of AED {credit_amt:,.2f} ('{ttype.replace('_', ' ')}') was recorded here on {date or 'an unknown date'}. Worth a quick look to confirm it's genuine income rather than a loan or other one-off receipt.",
+                })
+
+    severity_rank = {'high': 0, 'warning': 1, 'error': 2, 'info': 3}
+    findings.sort(key=lambda f: severity_rank.get(f['severity'], 9))
+    return jsonify({
+        'reviewed_loan_accounts': len(tracked),
+        'reviewed_income_accounts': len(income_accounts),
+        'date_range_from': date_start,
+        'findings': findings,
     })
 
 # ── Push a single locally-created customer to Zoho Books ────────────────────────
