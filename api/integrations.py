@@ -1267,6 +1267,32 @@ def _months_back(n):
             m, y = 12, y - 1
     return list(reversed(out))
 
+def _add_month(m):
+    ny, nm = (m.year + 1, 1) if m.month == 12 else (m.year, m.month + 1)
+    return date(ny, nm, 1)
+
+def _sub_months(m, n):
+    y, mo = m.year, m.month - n
+    while mo <= 0:
+        mo += 12
+        y -= 1
+    return date(y, mo, 1)
+
+def _month_range(start, end):
+    """Inclusive list of first-of-month dates from start to end, oldest first."""
+    out = []
+    m = start
+    while m <= end:
+        out.append(m)
+        m = _add_month(m)
+    return out
+
+# How far back the reconciliation grid is allowed to go when real history
+# supports it -- "all months and years" in practice, capped so one very old
+# account can't blow the table up to hundreds of rows. 8 years covers every
+# realistic case for this app's customers.
+MAX_RECON_MONTHS = 96
+
 def _parse_zoho_date(s):
     if not s: return None
     try:
@@ -1304,12 +1330,43 @@ def sync_bank_reconciliation():
         return jsonify({'error': f'Could not fetch bank accounts: {str(e)[:300]}'}), 502
 
     now_iso = datetime.utcnow().isoformat()
-    months = _months_back(12)
+    current_month = _month_start(datetime.utcnow().date())
+    active_accounts = [a for a in accounts if a.get('is_active', True)]
+
+    # Pass 1: pull each account's full reconciliation history (fetch_bank_reconciliations
+    # already paginates through everything Zoho has) and find how far back real
+    # data goes, so the grid covers "all months and years" rather than a guessed window.
+    recons_by_account = {}
+    earliest_month = None
+    for acc in active_accounts:
+        acc_id = acc['zoho_account_id']
+        try:
+            recons = adapter.fetch_bank_reconciliations(creds, acc_id)
+        except Exception:
+            recons = []  # best-effort: still record the snapshot below even if history can't be read
+        recons_by_account[acc_id] = recons
+        for r in recons:
+            start = _parse_zoho_date(r.get('start_date'))
+            if start:
+                m = _month_start(start)
+                if earliest_month is None or m < earliest_month:
+                    earliest_month = m
+
+    if earliest_month is None:
+        # No reconciliation records found anywhere in Zoho for this company --
+        # nothing tells us how far back to go, so fall back to a recent window
+        # instead of fabricating years of "unreconciled" history.
+        earliest_month = _months_back(12)[0]
+    else:
+        cap = _sub_months(current_month, MAX_RECON_MONTHS - 1)
+        if earliest_month < cap:
+            earliest_month = cap
+
+    months = _month_range(earliest_month, current_month)
     synced_accounts, synced_months = 0, 0
 
-    for acc in accounts:
-        if not acc.get('is_active', True):
-            continue
+    # Pass 2: snapshot + per-month reconciled/gap rows across the full range above.
+    for acc in active_accounts:
         acc_id = acc['zoho_account_id']
         sb.table('bank_account_snapshot').upsert({
             'company_id': company_id, 'zoho_account_id': acc_id,
@@ -1325,13 +1382,8 @@ def sync_bank_reconciliation():
         }, on_conflict='company_id,zoho_account_id').execute()
         synced_accounts += 1
 
-        try:
-            recons = adapter.fetch_bank_reconciliations(creds, acc_id)
-        except Exception:
-            recons = []  # best-effort: still record the snapshot above even if history can't be read
-
         reconciled_months = {}  # month_start(date) -> (closing_balance, reconciled_at)
-        for r in recons:
+        for r in recons_by_account.get(acc_id, []):
             if not _recon_is_completed(r):
                 continue
             start = _parse_zoho_date(r.get('start_date'))
@@ -1342,8 +1394,7 @@ def sync_bank_reconciliation():
             end_m = _month_start(end)
             while m <= end_m:
                 reconciled_months[m] = (r.get('closing_balance'), r.get('reconciled_at') or r.get('created_time'))
-                nm, ny = (m.month % 12) + 1, m.year + (1 if m.month == 12 else 0)
-                m = date(ny, nm, 1)
+                m = _add_month(m)
 
         for month in months:
             closing_balance, reconciled_at = reconciled_months.get(month, (None, None))
@@ -1355,7 +1406,10 @@ def sync_bank_reconciliation():
             }, on_conflict='company_id,zoho_account_id,month').execute()
             synced_months += 1
 
-    return jsonify({'synced_accounts': synced_accounts, 'synced_months': synced_months})
+    return jsonify({
+        'synced_accounts': synced_accounts, 'synced_months': synced_months,
+        'earliest_month': earliest_month.isoformat(), 'months_covered': len(months),
+    })
 
 @app.route('/api/integrations/bank-reconciliation', methods=['GET'])
 def get_bank_reconciliation():

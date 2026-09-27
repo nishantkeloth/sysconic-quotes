@@ -680,21 +680,44 @@ function loanTxnSheetHTML(){
 
 function bankReconSectionHTML(BR){
   const monthsSet=[...new Set(BR.months.map(m=>m.month))].sort();
-  const last3=monthsSet.slice(-3);
+  if(!monthsSet.length) return '';
   const byAccountMonth={};BR.months.forEach(m=>byAccountMonth[m.zoho_account_id+'|'+m.month]=m);
   const totalUncategorized=BR.accounts.reduce((s,a)=>s+(a.uncategorized_transactions||0),0);
   const reconciledCount=BR.months.filter(m=>m.is_reconciled).length;
+  const earliestLabel=new Date(monthsSet[0]+'T00:00:00').toLocaleDateString('en-US',{month:'short',year:'numeric'});
+  const latestLabel=new Date(monthsSet[monthsSet.length-1]+'T00:00:00').toLocaleDateString('en-US',{month:'short',year:'numeric'});
+
+  // Full history can span many years -- Zoho's own reconciliation records go
+  // back as far as the account does -- so mobile gets a year picker (same
+  // pattern as the Business Performance FY selector above) instead of trying
+  // to cram every month onto a narrow screen.
+  const monthsByYear={};
+  monthsSet.forEach(m=>{const y=new Date(m+'T00:00:00').getFullYear();(monthsByYear[y]=monthsByYear[y]||[]).push(m);});
+  const years=Object.keys(monthsByYear).map(Number).sort((a,b)=>b-a);
+  const selYear=years.includes(S.bankReconYear)?S.bankReconYear:years[0];
+  const yMonths=monthsByYear[selYear]||[];
+
   return `<div class="sec">
-    <div class="sec-title"><span>📒 Bank Reconciliation</span></div>
+    <div class="sec-title">
+      <span>📒 Bank Reconciliation</span>
+      <select class="range-sel" onchange="S.bankReconYear=parseInt(this.value);render()">
+        ${years.map(y=>`<option value="${y}" ${selYear===y?'selected':''}>${y}</option>`).join('')}
+      </select>
+    </div>
+    <div style="font-size:10.5px;color:var(--gray-500);margin:-6px 0 10px">${earliestLabel} – ${latestLabel} · all accounts</div>
     <div class="cards">
-      <div class="card"><div class="card-label">Reconciled</div><div class="card-val ${reconciledCount===BR.months.length?'green':'amber'}">${reconciledCount}/${BR.months.length}</div><div class="card-sub">last 12mo, all accounts</div></div>
+      <div class="card"><div class="card-label">Reconciled</div><div class="card-val ${reconciledCount===BR.months.length?'green':'amber'}">${reconciledCount}/${BR.months.length}</div><div class="card-sub">all history, all accounts</div></div>
       <div class="card"><div class="card-label">Uncategorized</div><div class="card-val ${totalUncategorized>0?'amber':'green'}">${totalUncategorized}</div><div class="card-sub">as of now</div></div>
     </div>
+    <div class="card-label" style="margin:4px 2px 8px">${selYear} by account</div>
     <div class="list">
-      ${BR.accounts.map(a=>`<div class="list-row" style="flex-direction:column;align-items:stretch;gap:4px">
-        <div style="display:flex;justify-content:space-between"><span class="list-row-name">${esc(a.account_name)}</span><span class="list-row-val">AED ${fmt(a.balance)}</span></div>
-        <div style="font-size:11px;color:var(--gray-500)">${last3.map(m=>{const c=byAccountMonth[a.zoho_account_id+'|'+m];return (c&&c.is_reconciled)?'✅':'⚠️';}).join(' ')} (last ${last3.length} mo)</div>
-      </div>`).join('')}
+      ${BR.accounts.map(a=>{
+        const yReconciled=yMonths.filter(m=>{const c=byAccountMonth[a.zoho_account_id+'|'+m];return c&&c.is_reconciled;}).length;
+        return `<div class="list-row" style="flex-direction:column;align-items:stretch;gap:4px">
+          <div style="display:flex;justify-content:space-between"><span class="list-row-name">${esc(a.account_name)}</span><span class="list-row-val">AED ${fmt(a.balance)}</span></div>
+          <div style="font-size:11px;color:var(--gray-500)">${yReconciled}/${yMonths.length} reconciled in ${selYear} · ${yMonths.map(m=>{const c=byAccountMonth[a.zoho_account_id+'|'+m];const ok=c&&c.is_reconciled;return `<span title="${esc(new Date(m+'T00:00:00').toLocaleDateString('en-US',{month:'long',year:'numeric'}))}">${ok?'✅':'⚠️'}</span>`;}).join(' ')}</div>
+        </div>`;
+      }).join('')}
     </div>
   </div>`;
 }

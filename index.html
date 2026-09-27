@@ -4706,39 +4706,7 @@ function insightsHTML(){
 
   // ── Bank Reconciliation (every bank/card account, synced monthly) ───────
   if(d.bank_recon&&d.bank_recon.accounts&&d.bank_recon.accounts.length){
-    const BR=d.bank_recon;
-    const monthsSet=[...new Set(BR.months.map(m=>m.month))].sort();
-    const byAccountMonth={};
-    BR.months.forEach(m=>{byAccountMonth[m.zoho_account_id+'|'+m.month]=m;});
-    const totalUncategorized=BR.accounts.reduce((s,a)=>s+(a.uncategorized_transactions||0),0);
-    const mismatchCount=BR.accounts.filter(a=>a.bank_balance!=null&&Math.abs((a.balance||0)-(a.bank_balance||0))>=0.01).length;
-    const reconciledCount=BR.months.filter(m=>m.is_reconciled).length;
-    sections.push(`
-      <div class="insights-sec">
-        <div class="insights-sec-title"><span>📒 Bank Reconciliation</span></div>
-        <div class="dash-metrics">
-          <div class="mcard" title="How many (account × month) cells in the grid below are marked reconciled in Zoho, out of the last 12 months for every account."><div class="mcard-label">Months reconciled</div><div class="mcard-val ${reconciledCount===BR.months.length?'green':'amber'}">${reconciledCount}/${BR.months.length}</div><div class="mcard-sub">last 12 months, all accounts</div></div>
-          <div class="mcard" title="Zoho's own live count of imported bank-feed lines with no matching Books entry yet."><div class="mcard-label">Uncategorized transactions</div><div class="mcard-val ${totalUncategorized>0?'amber':'green'}">${totalUncategorized}</div><div class="mcard-sub">as of now</div></div>
-          <div class="mcard" title="Accounts where the Books balance and the live bank-feed balance don't match (feed-connected accounts only)."><div class="mcard-label">Balance mismatches</div><div class="mcard-val ${mismatchCount>0?'red':'green'}">${mismatchCount}</div><div class="mcard-sub">books vs bank feed</div></div>
-        </div>
-        <div class="insights-list" style="overflow-x:auto">
-          <div class="insights-list-title">Monthly reconciliation status</div>
-          <table style="border-collapse:collapse;width:100%;font-size:12px;min-width:520px">
-            <thead><tr><th style="text-align:left;padding:6px 8px">Account</th>${monthsSet.map(m=>`<th style="padding:6px 8px;text-align:center;color:var(--gray-500);font-weight:600">${esc(new Date(m).toLocaleDateString('en-US',{month:'short',year:'2-digit'}))}</th>`).join('')}</tr></thead>
-            <tbody>
-            ${BR.accounts.map(a=>`<tr style="border-top:1px solid var(--gray-100)">
-              <td style="padding:6px 8px;white-space:nowrap">${esc(a.account_name)}</td>
-              ${monthsSet.map(m=>{
-                const cell=byAccountMonth[a.zoho_account_id+'|'+m];
-                const ok=cell&&cell.is_reconciled;
-                return `<td style="padding:6px 8px;text-align:center" title="${esc(new Date(m).toLocaleDateString('en-US',{month:'long',year:'numeric'}))} — ${ok?'reconciled in Zoho':'not reconciled in Zoho'}">${ok?'✅':'⚠️'}</td>`;
-              }).join('')}
-            </tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
-        <div style="font-size:11px;color:var(--gray-500);margin-top:8px">${BR.last_synced_at?'Last synced '+_insightsAgo(new Date(BR.last_synced_at)):'Not synced yet'} · manage in Company Profile → Bank Reconciliation</div>
-      </div>`);
+    sections.push(`<div class="insights-sec"><div class="insights-sec-title"><span>📒 Bank Reconciliation</span></div>${_bankReconGridHTML(d.bank_recon)}</div>`);
   }
 
   // ── Financial Health (Project Performance, synced from Zoho Books) ─────
@@ -8021,7 +7989,7 @@ ${hasFeature('delivery_challans')?`<div class="card" style="max-width:640px;marg
 </div>
 <div class="card" style="max-width:640px;margin-top:16px">
   <div class="card-title">Bank Reconciliation</div>
-  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Tracks whether every bank transaction has a matching, reconciled entry in Zoho Books — click Sync each time you finish reconciling a statement in Zoho, so this always reflects the latest month. Admin only.</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Tracks whether every bank transaction has a matching, reconciled entry in Zoho Books, month by month for as far back as Zoho's own reconciliation history goes — click Sync each time you finish reconciling a statement in Zoho to bring this up to date. Admin only.</div>
   <div id="bankReconBox"><div style="color:var(--gray-500)">Loading…</div></div>
 </div>`;}
 let QN={};
@@ -8402,6 +8370,66 @@ function renderLoanReview(r){
 // sync_bank_reconciliation() in api/integrations.py.
 let BANK_RECON=null;      // {accounts, months} from GET /api/integrations/bank-reconciliation
 let BANK_RECON_SYNCING=false;
+
+// Shared renderer for the Bank Reconciliation account x month grid, used by
+// both the Insights dashboard and this Company Profile card. Zoho's own
+// reconciliation history can span many years, so months are grouped into a
+// <details> block per calendar year (latest year expanded, older years
+// collapsed) rather than one flat table with a column per month -- the
+// standard "period picker" pattern used by QuickBooks/Xero-style
+// reconciliation reports, adapted to a simple expand/collapse since this is
+// a dashboard view rather than a printable report.
+function _bankReconGridHTML(BR){
+  const monthsSet=[...new Set(BR.months.map(m=>m.month))].sort();
+  if(!monthsSet.length) return `<div style="color:var(--gray-500);font-size:13px">No reconciliation history synced yet.</div>`;
+  const byAccountMonth={};
+  BR.months.forEach(m=>{byAccountMonth[m.zoho_account_id+'|'+m.month]=m;});
+  const totalUncategorized=BR.accounts.reduce((s,a)=>s+(a.uncategorized_transactions||0),0);
+  const mismatchCount=BR.accounts.filter(a=>a.bank_balance!=null&&Math.abs((a.balance||0)-(a.bank_balance||0))>=0.01).length;
+  const reconciledCount=BR.months.filter(m=>m.is_reconciled).length;
+  const earliestLabel=new Date(monthsSet[0]+'T00:00:00').toLocaleDateString('en-US',{month:'short',year:'numeric'});
+  const latestLabel=new Date(monthsSet[monthsSet.length-1]+'T00:00:00').toLocaleDateString('en-US',{month:'short',year:'numeric'});
+
+  const monthsByYear={};
+  monthsSet.forEach(m=>{const y=new Date(m+'T00:00:00').getFullYear();(monthsByYear[y]=monthsByYear[y]||[]).push(m);});
+  const years=Object.keys(monthsByYear).map(Number).sort((a,b)=>b-a);
+
+  const yearBlocks=years.map((y,i)=>{
+    const yMonths=monthsByYear[y];
+    const yReconciled=yMonths.reduce((s,m)=>s+BR.accounts.filter(a=>{const c=byAccountMonth[a.zoho_account_id+'|'+m];return c&&c.is_reconciled;}).length,0);
+    const yTotal=yMonths.length*BR.accounts.length;
+    const table=`<div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;font-size:12px;min-width:${140+yMonths.length*56}px">
+      <thead><tr><th style="text-align:left;padding:6px 8px">Account</th>${yMonths.map(m=>`<th style="padding:6px 8px;text-align:center;color:var(--gray-500);font-weight:600">${esc(new Date(m+'T00:00:00').toLocaleDateString('en-US',{month:'short'}))}</th>`).join('')}</tr></thead>
+      <tbody>
+      ${BR.accounts.map(a=>`<tr style="border-top:1px solid var(--gray-100)">
+        <td style="padding:6px 8px;white-space:nowrap">${esc(a.account_name)}</td>
+        ${yMonths.map(m=>{
+          const cell=byAccountMonth[a.zoho_account_id+'|'+m];
+          const ok=cell&&cell.is_reconciled;
+          return `<td style="padding:6px 8px;text-align:center" title="${esc(new Date(m+'T00:00:00').toLocaleDateString('en-US',{month:'long',year:'numeric'}))} — ${ok?'reconciled in Zoho':'not reconciled in Zoho'}">${ok?'✅':'⚠️'}</td>`;
+        }).join('')}
+      </tr>`).join('')}
+      </tbody></table></div>`;
+    return `<details ${i===0?'open':''} style="margin-top:${i===0?'8px':'4px'}">
+      <summary style="cursor:pointer;font-size:12.5px;font-weight:700;color:var(--navy);padding:6px 0">${y} <span style="font-weight:500;color:var(--gray-500)">— ${yReconciled}/${yTotal} reconciled</span></summary>
+      ${table}
+    </details>`;
+  }).join('');
+
+  return `
+    <div class="dash-metrics">
+      <div class="mcard" title="How many (account × month) cells are marked reconciled in Zoho, across every month synced for every account."><div class="mcard-label">Months reconciled</div><div class="mcard-val ${reconciledCount===BR.months.length?'green':'amber'}">${reconciledCount}/${BR.months.length}</div><div class="mcard-sub">${earliestLabel} – ${latestLabel}</div></div>
+      <div class="mcard" title="Zoho's own live count of imported bank-feed lines with no matching Books entry yet."><div class="mcard-label">Uncategorized transactions</div><div class="mcard-val ${totalUncategorized>0?'amber':'green'}">${totalUncategorized}</div><div class="mcard-sub">as of now</div></div>
+      <div class="mcard" title="Accounts where the Books balance and the live bank-feed balance don't match (feed-connected accounts only)."><div class="mcard-label">Balance mismatches</div><div class="mcard-val ${mismatchCount>0?'red':'green'}">${mismatchCount}</div><div class="mcard-sub">books vs bank feed</div></div>
+    </div>
+    <div class="insights-list">
+      <div class="insights-list-title">Reconciliation status by year</div>
+      ${yearBlocks}
+    </div>
+    <div style="font-size:11px;color:var(--gray-500);margin-top:8px">${BR.last_synced_at?'Last synced '+_insightsAgo(new Date(BR.last_synced_at)):'Not synced yet'} · manage in Company Profile → Bank Reconciliation</div>
+  `;
+}
+
 async function loadBankReconBox(){
   const el=document.getElementById('bankReconBox');if(!el)return;
   const r=await api('GET','/api/integrations/bank-reconciliation');
@@ -8436,6 +8464,7 @@ function renderBankReconBox(){
     </div>
     <div style="font-size:12px;color:var(--gray-500);margin-bottom:10px">${lastSync?'Last synced '+new Date(lastSync).toLocaleString():''}</div>
     <button class="btn btn-sm" onclick="syncBankRecon()" ${BANK_RECON_SYNCING?'disabled':''}>${BANK_RECON_SYNCING?'⏳ Syncing…':'🔄 Sync Now'}</button>
+    <div style="margin-top:16px;border-top:1px solid var(--gray-100);padding-top:14px">${_bankReconGridHTML(BANK_RECON)}</div>
   `;
 }
 async function syncBankRecon(){
