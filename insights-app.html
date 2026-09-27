@@ -654,13 +654,13 @@ async function openLoanTxnSheet(loanAccountId, accountName){
   const r=await api('GET','/api/integrations/loan-accounts/'+loanAccountId+'/transactions');
   if(!LOAN_TXN_SHEET)return; // closed before the fetch finished
   if(r.error){ LOAN_TXN_SHEET={title:accountName, loading:false, error:r.error, transactions:[]}; render(); return; }
-  LOAN_TXN_SHEET={title:accountName, loading:false, transactions:r.transactions||[]};
+  LOAN_TXN_SHEET={title:accountName, loading:false, transactions:r.transactions||[], currentBalance:r.current_balance};
   render();
 }
 function closeLoanTxnSheet(){ LOAN_TXN_SHEET=null; render(); }
 function loanTxnSheetHTML(){
   if(!LOAN_TXN_SHEET)return '';
-  const {title,loading,error,transactions}=LOAN_TXN_SHEET;
+  const {title,loading,error,transactions,currentBalance}=LOAN_TXN_SHEET;
   return `<div class="sheet-overlay" onclick="if(event.target===this)closeLoanTxnSheet()">
     <div class="sheet">
       <div class="sheet-head">
@@ -669,7 +669,7 @@ function loanTxnSheetHTML(){
       </div>
       ${loading?'<div class="center-msg"><div class="spinner"></div>Loading from Zoho…</div>':
         error?`<div class="err-msg">${esc(error)}</div>`:
-        !transactions.length?'<div class="center-msg">No transactions found for this account.</div>':
+        !transactions.length?`<div class="center-msg">Zoho has no dated transaction history for this account${currentBalance?' (balance is still AED '+fmt(currentBalance)+')':''}. This usually means the balance was entered as a Zoho Opening Balance rather than recorded transactions.</div>`:
         transactions.map(t=>`<div class="inv-row">
           <div class="inv-row-top"><span>${esc(t.payee||t.description||t.type||'—')}</span><span style="color:${t.debit_or_credit==='credit'?'var(--navy)':'var(--green)'}">${t.debit_or_credit==='credit'?'+':'-'} AED ${fmt(t.amount)}</span></div>
           <div class="inv-row-bottom"><span>${esc((t.date||'').slice(0,10))} · ${esc(t.type||'')}</span><span>${t.debit_or_credit==='credit'?'Borrowed':'Repaid'}</span></div>

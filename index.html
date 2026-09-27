@@ -4375,7 +4375,10 @@ async function showLoanTransactionsModal(loanAccountId, accountName){
   if(!body)return; // modal was closed before the fetch finished
   if(r.error){body.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
   const txns=r.transactions||[];
-  if(!txns.length){body.innerHTML=`<div style="color:var(--gray-500);padding:10px 0">No transactions found for this account.</div>`;return;}
+  if(!txns.length){
+    body.innerHTML=`<div style="color:var(--gray-500);padding:10px 0">Zoho has no dated transaction history for this account${r.current_balance?' (current balance is still AED '+fmt(r.current_balance)+')':''}. This usually means the balance was entered as a Zoho <strong>Opening Balance</strong> when the account was set up, rather than recorded loan/repayment transactions — check the account directly in Zoho Books (Accountant → Chart of Accounts) to confirm.</div>`;
+    return;
+  }
   body.innerHTML=`<div style="display:grid;grid-template-columns:90px 1fr 110px 110px;gap:8px;font-size:11px;font-weight:700;text-transform:uppercase;color:var(--gray-500);padding-bottom:6px;border-bottom:2px solid var(--gray-200)">
       <span>Date</span><span>Description</span><span style="text-align:right">Borrowed</span><span style="text-align:right">Repaid</span>
     </div>` + txns.map(t=>`<div style="display:grid;grid-template-columns:90px 1fr 110px 110px;gap:8px;font-size:13px;padding:8px 0;border-bottom:1px solid var(--gray-100);align-items:center">

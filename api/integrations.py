@@ -639,9 +639,14 @@ class ZohoAdapter:
         every debit here, then deriving total_borrowed = current_balance +
         total_repaid elsewhere, is exact ledger arithmetic (it always equals
         the sum of every credit ever posted) -- not an estimate."""
+        # filter_by is passed explicitly (rather than relying on Zoho's
+        # default) because some accounts return an empty list without it --
+        # seen in practice on an account whose balance came from a Zoho
+        # "Opening Balance" entry rather than a dated journal/expense.
         return self._fetch_paginated(
             creds, '/chartofaccounts/accounttransactions',
-            {'account_id': account_id}, 'transactions', max_pages=25,
+            {'account_id': account_id, 'filter_by': 'TransactionType.All', 'sort_column': 'transaction_date'},
+            'transactions', max_pages=25,
         )
 
 # ── Adapter registry ────────────────────────────────────────────────────────────
@@ -1067,7 +1072,11 @@ def get_loan_account_transactions(id):
         'entry_number': t.get('entry_number') or '',
     } for t in txns]
     out.sort(key=lambda r: r.get('date') or '', reverse=True)
-    return jsonify({'account_name': account.get('account_name'), 'transactions': out})
+    return jsonify({
+        'account_name': account.get('account_name'),
+        'current_balance': account.get('current_balance'),
+        'transactions': out,
+    })
 
 # ── Push a single locally-created customer to Zoho Books ────────────────────────
 # Used by the Deals module (api/quotes.py -> index.html): when a deal is created
