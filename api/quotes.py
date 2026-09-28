@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
-import os, jwt, traceback, base64, requests, re, time, secrets, hashlib
+import os, jwt, traceback, base64, requests, re, time, secrets, hashlib, uuid
 from datetime import datetime, timedelta
 from supabase import create_client
 
@@ -1772,20 +1772,17 @@ def _build_insights_payload(claims):
 
 
 # ── Insights public share link ──────────────────────────────────────────────
-# Lets an admin generate a single unguessable URL that opens the Insights
-# dashboard with no login at all -- for a phone home-screen shortcut or an
-# office TV display where typing a password every time isn't practical.
-# Deliberately separate from user auth: it's a long random token (not tied to
-# any one user's password/session), hashed at rest the same way refresh
-# tokens are (see api/auth.py's _hash_refresh_token), so a DB read alone can't
-# recover a working link. Revoking/regenerating immediately invalidates any
-# previously shared link. Anyone holding the raw link sees the full
-# company-wide Insights dashboard (no per-user filtering) with no further
-# gate, so this trades a real security boundary for convenience -- an
-# explicit, admin-only opt-in, not a default.
-def _hash_share_token(raw):
-    return hashlib.sha256(raw.encode('utf-8')).hexdigest()
-
+# Lets an admin turn on a URL that opens the Insights dashboard with no login
+# at all -- for a phone home-screen shortcut or an office TV display where
+# typing a password every time isn't practical. The link is permanent,
+# built from the company's own id (see create_insights_share_link() below)
+# rather than a separate rotating secret -- an earlier version used a
+# regenerable random token, but the user explicitly asked for a fixed link
+# instead, after being told this means a leaked link can only be shut off by
+# disabling sharing entirely (re-enabling gives back the SAME url, since
+# it's derived from company_id, not reissued). Anyone holding the link sees
+# the full company-wide Insights dashboard (no per-user filtering) with no
+# further gate, so this remains an explicit, admin-only opt-in, not a default.
 @app.route('/api/insights/share-link', methods=['GET'])
 def get_insights_share_link():
     claims = verify_token(request)
@@ -1797,36 +1794,43 @@ def get_insights_share_link():
 
 @app.route('/api/insights/share-link', methods=['POST'])
 def create_insights_share_link():
+    # Per the user's explicit choice (chat, Sept 2026): the link is now
+    # permanent -- built from the company's own id, which never changes --
+    # rather than a separate rotating secret token. This trades away the
+    # "revoke this one link, issue a fresh one" ability: disabling and
+    # re-enabling produces the SAME url, since it's derived from company_id,
+    # not a regenerated secret. The company_id itself (a random UUID) is
+    # still not realistically guessable, but the earlier hashed-token design
+    # additionally let a leaked link be invalidated without losing sharing
+    # entirely -- that's gone now. Admin was told this plainly before opting
+    # for it over keeping the rotating-token design.
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
     if claims.get('role') != 'admin': return jsonify({'error': 'Admin only'}), 403
-    raw = secrets.token_urlsafe(32)
-    sb.table('companies').update({
-        'insights_share_token_hash': _hash_share_token(raw),
-        'insights_share_enabled': True,
-    }).eq('id', claims['company_id']).execute()
-    # The raw token is returned exactly once, here -- only its hash is ever
-    # stored, so if this response is lost the admin has to regenerate rather
-    # than retrieve it again. Same tradeoff as an API key.
-    return jsonify({'token': raw})
+    sb.table('companies').update({'insights_share_enabled': True}).eq('id', claims['company_id']).execute()
+    return jsonify({'ok': True})
 
 @app.route('/api/insights/share-link', methods=['DELETE'])
 def revoke_insights_share_link():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
     if claims.get('role') != 'admin': return jsonify({'error': 'Admin only'}), 403
-    sb.table('companies').update({
-        'insights_share_token_hash': None,
-        'insights_share_enabled': False,
-    }).eq('id', claims['company_id']).execute()
+    sb.table('companies').update({'insights_share_enabled': False}).eq('id', claims['company_id']).execute()
     return jsonify({'ok': True})
 
 @app.route('/api/insights/public', methods=['GET'])
 def insights_public():
+    # "token" here is the company's own id (see create_insights_share_link()
+    # above) -- validated as a UUID before hitting the DB so a malformed
+    # value 404s cleanly instead of erroring on the query.
     token = (request.args.get('token') or '').strip()
     if not token: return jsonify({'error': 'Missing token'}), 400
+    try:
+        uuid.UUID(token)
+    except ValueError:
+        return jsonify({'error': 'This link is invalid or has been revoked.'}), 404
     row = sb.table('companies').select('id,name,insights_share_enabled,features')\
-        .eq('insights_share_token_hash', _hash_share_token(token)).execute().data
+        .eq('id', token).execute().data
     if not row or not row[0].get('insights_share_enabled'):
         return jsonify({'error': 'This link is invalid or has been revoked.'}), 404
     company = row[0]

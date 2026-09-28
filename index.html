@@ -8254,7 +8254,7 @@ ${hasFeature('vouchers')?`<div class="card" style="max-width:640px;margin-top:16
 </div>
 <div class="card" style="max-width:640px;margin-top:16px">
   <div class="card-title">Public Insights Link</div>
-  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Generate a link that opens the mobile Insights dashboard with no login — handy for a phone home-screen shortcut or an office TV display. <strong>Anyone with this link can view your sales and GP data, no password required</strong>, so treat it like a password: don't post it anywhere public, and revoke it if it ever leaks. Admin only.</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Turn on a link that opens the mobile Insights dashboard with no login — handy for a phone home-screen shortcut or an office TV display. <strong>Anyone with this link can view your sales and GP data, no password required</strong>, so treat it like a password: don't post it anywhere public. This link is permanent — turning sharing off blocks access immediately, but turning it back on restores this exact same link rather than issuing a new one, so if it ever leaks, turning it off is the only way to stop it (there's no "get a fresh link" option). Admin only.</div>
   <div id="shareLinkBox"><div style="color:var(--gray-500)">Loading…</div></div>
 </div>
 <div class="card" style="max-width:640px;margin-top:16px">
@@ -8739,7 +8739,12 @@ async function saveSelfServeAddon(key,checked){
 // either "no link yet" / "a link is active" (status only, GET) or the fresh
 // URL immediately after Generate/Regenerate is clicked, held in a JS
 // variable that's gone on next page load or refresh.
-let INSIGHTS_SHARE_URL=null;
+// The link is permanent -- built straight from A.company.id, which never
+// changes -- rather than a separate secret token that had to be generated,
+// copied once, and regenerated if lost. Per the user's explicit choice:
+// disabling then re-enabling gives back this SAME url (it isn't reissued),
+// so the only lever left is on/off, not "revoke this copy, issue a new one".
+function insightsShareUrl(){return location.origin+'/insights-app.html?share='+encodeURIComponent(A.company?.id||'');}
 async function loadInsightsShareLink(){
   const el=document.getElementById('shareLinkBox');if(!el)return;
   const r=await api('GET','/api/insights/share-link');
@@ -8748,35 +8753,32 @@ async function loadInsightsShareLink(){
 }
 function renderShareLinkBox(enabled){
   const el=document.getElementById('shareLinkBox');if(!el)return;
-  if(INSIGHTS_SHARE_URL){
+  if(enabled){
     el.innerHTML=`
-      <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:8px">✓ Link generated — copy it now, it won't be shown again</div>
+      <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:8px">✓ Sharing is on — this link always works until you turn it off</div>
       <div style="display:flex;gap:8px;margin-bottom:10px">
-        <input id="shareLinkUrl" class="input" readonly value="${esc(INSIGHTS_SHARE_URL)}" style="font-size:12px" onclick="this.select()">
+        <input id="shareLinkUrl" class="input" readonly value="${esc(insightsShareUrl())}" style="font-size:12px" onclick="this.select()">
         <button class="btn btn-sm" onclick="copyShareLink()">Copy</button>
       </div>
-      <button class="btn btn-sm" style="color:var(--red)" onclick="revokeInsightsShareLink()">Revoke link</button>
+      <button class="btn btn-sm" style="color:var(--red)" onclick="revokeInsightsShareLink()">Turn off sharing</button>
     `;
     return;
   }
   el.innerHTML=`
-    <div style="font-size:13px;margin-bottom:12px">${enabled?'A link is currently active, but it can only be shown once — regenerate to get a fresh copy.':'No public link yet.'}</div>
-    <button class="btn btn-navy btn-sm" onclick="generateInsightsShareLink()">${enabled?'Regenerate link':'Generate link'}</button>
-    ${enabled?` <button class="btn btn-sm" style="color:var(--red)" onclick="revokeInsightsShareLink()">Revoke link</button>`:''}
+    <div style="font-size:13px;margin-bottom:12px">Sharing is currently off.</div>
+    <button class="btn btn-navy btn-sm" onclick="generateInsightsShareLink()">Turn on sharing</button>
   `;
 }
 async function generateInsightsShareLink(){
-  if(!confirm('Generate a new public link? Anyone with this link can view your Insights dashboard with no login. Any previously shared link will stop working.'))return;
+  if(!confirm('Turn on the public Insights link? Anyone with this link can view your Insights dashboard with no login, and the link never changes once shared.'))return;
   const r=await api('POST','/api/insights/share-link');
   if(r.error){alert(r.error);return;}
-  INSIGHTS_SHARE_URL=location.origin+'/insights-app.html?share='+encodeURIComponent(r.token);
   renderShareLinkBox(true);
 }
 async function revokeInsightsShareLink(){
-  if(!confirm('Revoke the public Insights link? Anyone using it (e.g. a phone home-screen shortcut) will lose access immediately.'))return;
+  if(!confirm('Turn off the public Insights link? Anyone using it (e.g. a phone home-screen shortcut) will lose access immediately. Turning it back on later restores this exact same link, not a new one.'))return;
   const r=await api('DELETE','/api/insights/share-link');
   if(r.error){alert(r.error);return;}
-  INSIGHTS_SHARE_URL=null;
   renderShareLinkBox(false);
 }
 function copyShareLink(){
