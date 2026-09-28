@@ -791,6 +791,7 @@ function dcOnProjectChange(projectId){
   A.dcDetail.project_id=projectId;
   const project=(A.projects||[]).find(p=>p.id===projectId);
   if(project&&project.po_number&&!A.dcDetail.customer_po_number)A.dcDetail.customer_po_number=project.po_number;
+  if(project&&project.customer)A.dcDetail.customer_name=project.customer;
   draw();
 }
 
