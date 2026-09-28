@@ -7446,7 +7446,7 @@ function receiptVoucherDetailHTML(){
       ${field('Receipt date',`<input class="iinput" type="date" value="${d.receipt_date||''}" onchange="A.rvDetail.receipt_date=this.value">`)}
       ${field('Project (optional)',`<select class="iinput" onchange="rvOnProjectChange(this.value)">${A.projects==null?'<option>Loading…</option>':'<option value="">— none —</option>'+projectOpts}</select>`)}
       ${field('Received from',`<input class="iinput" placeholder="Mr./M/s. company or person name" value="${esc(d.received_from||'')}" oninput="A.rvDetail.received_from=this.value">`)}
-      ${field('Amount',`<div style="display:flex;gap:8px"><input id="rvCurrency" class="iinput" style="width:80px" value="${esc(d.currency||'AED')}" oninput="A.rvDetail.currency=this.value.toUpperCase();draw()"><input id="rvAmount" class="iinput" type="number" min="0" step="0.01" value="${d.amount||''}" oninput="A.rvDetail.amount=this.value;draw()"></div>`)}
+      ${field('Amount',`<div style="display:flex;gap:8px"><input id="rvCurrency" class="iinput" style="width:80px" value="${esc(d.currency||'AED')}" oninput="A.rvDetail.currency=this.value.toUpperCase();draw()"><input id="rvAmount" class="iinput" type="number" min="0" step="0.01" style="text-align:right" value="${d.amount||''}" oninput="A.rvDetail.amount=this.value;draw()"></div>`)}
       ${field('Payment method',`<select class="iinput" onchange="A.rvDetail.payment_method=this.value;draw()">${Object.entries(RV_PAYMENT_METHOD_LABELS).map(([k,l])=>`<option value="${k}" ${d.payment_method===k?'selected':''}>${l}</option>`).join('')}</select>`)}
       ${d.payment_method==='cheque'?field('Cheque number',`<input class="iinput" value="${esc(d.cheque_number||'')}" oninput="A.rvDetail.cheque_number=this.value">`):''}
       ${field('Bank'+(d.payment_method==='cheque'?'':' (optional)'),`<input class="iinput" value="${esc(d.bank_name||'')}" oninput="A.rvDetail.bank_name=this.value">`)}
@@ -7472,13 +7472,19 @@ function receiptVoucherDetailHTML(){
 
 function receiptVoucherPdfHTML(d){
   const sealHTML=PRINTCO?.voucher_seal_url?`<img src="${esc(PRINTCO.voucher_seal_url)}" alt="" class="stamp">`:'';
+  const logoHTML=PRINTCO?.logo_url?`<img src="${esc(PRINTCO.logo_url)}" alt="" class="logo">`:'';
+  const addrHTML=printAddrLines().map(l=>`<div>${esc(l)}</div>`).join('');
   const project=(A.projects||[]).find(p=>p.id===d.project_id);
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
     @page{size:A4;margin:15mm 15mm 15mm 15mm}
     body{font-family:Arial,Helvetica,sans-serif;color:#1a1f2b;margin:0;padding:20px 30px;font-size:14px}
-    .title-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:28px}
+    .letterhead{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:26px}
+    .logo{max-height:56px;max-width:180px;object-fit:contain;margin-bottom:8px}
+    .co{font-weight:700;font-size:15px}
+    .co-addr{color:#667085;font-size:11.5px}
+    .title-row{text-align:right}
     .title-row h1{font-size:28px;margin:0;font-weight:400}
-    .title-row .num{font-size:22px}
+    .title-row .num{font-size:18px}
     .line{margin-bottom:22px;line-height:1.6}
     .line label{display:inline-block;min-width:150px}
     .fill{border-bottom:1px dotted #333;padding:0 6px 2px;display:inline-block}
@@ -7488,7 +7494,14 @@ function receiptVoucherPdfHTML(d){
     .sign-row{display:flex;justify-content:space-between;margin-top:70px;font-size:13px}
     .stamp{max-height:110px;max-width:170px;object-fit:contain;margin-top:40px}
   </style></head><body>
-    <div class="title-row"><h1>Receipt Voucher</h1><div class="num">No: ${esc(d.receipt_number)}</div></div>
+    <div class="letterhead">
+      <div>
+        ${logoHTML}
+        <div class="co">${esc(printCoName())}</div>
+        <div class="co-addr">${addrHTML}</div>
+      </div>
+      <div class="title-row"><h1>Receipt Voucher</h1><div class="num">No: ${esc(d.receipt_number)}</div></div>
+    </div>
 
     <div class="line">Received from Mr./M/s. <span class="fill">${esc(d.received_from||'')}</span></div>
     <div class="line">The Sum of ${esc(d.currency||'AED')}. ${esc(amountInWords(d.amount,d.currency))}.${project?` <span style="color:#667085;font-size:12px">(${esc(project.name)})</span>`:''}</div>
