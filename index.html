@@ -7415,6 +7415,16 @@ function rvOnProjectChange(projectId){
   if(project&&project.customer)A.rvDetail.received_from=project.customer;
   draw();
 }
+// Patches only the "The Sum of ... Only" preview line, never the amount/
+// currency inputs themselves -- calling draw() on every keystroke here
+// re-rendered <input type="number"> and reset its cursor to position 0 on
+// every character (setSelectionRange silently fails on number inputs, so
+// draw()'s usual focus-restore couldn't recover the caret position),
+// which visibly scrambled digit order while typing (e.g. 200000 -> 000002).
+function rvUpdateAmountPreview(){
+  const d=A.rvDetail;const el=document.getElementById('rvAmountPreview');if(!el)return;
+  el.textContent=d.amount&&Number(d.amount)>0?`The Sum of ${d.currency||'AED'}. ${amountInWords(d.amount,d.currency)}.`:'';
+}
 async function saveReceiptVoucher(){
   const d=A.rvDetail;
   if(!(d.received_from||'').trim()){alert('Received from is required');return;}
@@ -7446,13 +7456,13 @@ function receiptVoucherDetailHTML(){
       ${field('Receipt date',`<input class="iinput" type="date" value="${d.receipt_date||''}" onchange="A.rvDetail.receipt_date=this.value">`)}
       ${field('Project (optional)',`<select class="iinput" onchange="rvOnProjectChange(this.value)">${A.projects==null?'<option>Loading…</option>':'<option value="">— none —</option>'+projectOpts}</select>`)}
       ${field('Received from',`<input class="iinput" placeholder="Mr./M/s. company or person name" value="${esc(d.received_from||'')}" oninput="A.rvDetail.received_from=this.value">`)}
-      ${field('Amount',`<div style="display:flex;gap:8px"><input id="rvCurrency" class="iinput" style="width:80px" value="${esc(d.currency||'AED')}" oninput="A.rvDetail.currency=this.value.toUpperCase();draw()"><input id="rvAmount" class="iinput" type="number" min="0" step="0.01" style="text-align:right" value="${d.amount||''}" oninput="A.rvDetail.amount=this.value;draw()"></div>`)}
+      ${field('Amount',`<div style="display:flex;gap:8px"><input id="rvCurrency" class="iinput" style="width:80px" value="${esc(d.currency||'AED')}" oninput="A.rvDetail.currency=this.value.toUpperCase();rvUpdateAmountPreview()"><input id="rvAmount" class="iinput" type="number" min="0" step="0.01" style="text-align:right" value="${d.amount||''}" oninput="A.rvDetail.amount=this.value;rvUpdateAmountPreview()"></div>`)}
       ${field('Payment method',`<select class="iinput" onchange="A.rvDetail.payment_method=this.value;draw()">${Object.entries(RV_PAYMENT_METHOD_LABELS).map(([k,l])=>`<option value="${k}" ${d.payment_method===k?'selected':''}>${l}</option>`).join('')}</select>`)}
       ${d.payment_method==='cheque'?field('Cheque number',`<input class="iinput" value="${esc(d.cheque_number||'')}" oninput="A.rvDetail.cheque_number=this.value">`):''}
       ${field('Bank'+(d.payment_method==='cheque'?'':' (optional)'),`<input class="iinput" value="${esc(d.bank_name||'')}" oninput="A.rvDetail.bank_name=this.value">`)}
     </div>
     <div style="margin-top:12px">${field('Notes (optional)',`<textarea class="iinput" rows="2" oninput="A.rvDetail.notes=this.value">${esc(d.notes||'')}</textarea>`)}</div>
-    ${d.amount&&Number(d.amount)>0?`<div style="margin-top:10px;font-size:13px;color:var(--gray-500)">The Sum of ${esc(d.currency||'AED')}. ${esc(amountInWords(d.amount,d.currency))}.</div>`:''}`;
+    <div id="rvAmountPreview" style="margin-top:10px;font-size:13px;color:var(--gray-500)">${d.amount&&Number(d.amount)>0?`The Sum of ${esc(d.currency||'AED')}. ${esc(amountInWords(d.amount,d.currency))}.`:''}</div>`;
 
   const actions=[`<button class="btn btn-navy" onclick="saveReceiptVoucher()">${isNew?'Create receipt voucher':'Save changes'}</button>`];
   if(!isNew){
