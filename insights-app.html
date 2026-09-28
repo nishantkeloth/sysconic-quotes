@@ -46,7 +46,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .topbar-sub{font-size:11px;opacity:.75;margin-top:2px}
 .topbar-actions{display:flex;gap:10px;align-items:center}
 .icon-btn{background:rgba(255,255,255,.15);border:none;color:#fff;width:34px;height:34px;border-radius:9px;font-size:15px;display:flex;align-items:center;justify-content:center}
-.content{flex:1;padding:14px 14px calc(30px + var(--safe-bottom))}
+.content{flex:1;padding:14px 14px calc(78px + var(--safe-bottom))}
+
+/* ── Bottom nav (Overview / Sales / Finance / Projects / Service) ────── */
+.bottom-nav{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--white);border-top:1px solid var(--gray-200);display:flex;padding-bottom:var(--safe-bottom);box-shadow:0 -2px 10px rgba(15,23,42,.06)}
+.bottom-nav-item{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;padding:8px 4px 7px;background:none;border:none;font-family:inherit;color:var(--gray-500);min-height:52px}
+.bottom-nav-item .nav-icon{font-size:19px;line-height:1}
+.bottom-nav-item .nav-label{font-size:10px;font-weight:700}
+.bottom-nav-item.active{color:var(--navy)}
+
+/* ── Needs Attention (Overview tab) ───────────────────────────────────── */
+.attn-item{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 14px;border-top:1px solid var(--gray-100);cursor:pointer}
+.attn-item:first-child{border-top:none}
+.attn-badge{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap}
+.attn-badge.red{background:#fee2e2;color:var(--red)}
+.attn-badge.amber{background:#fef3c7;color:var(--amber)}
+.attn-badge.green{background:#d1fae5;color:var(--green)}
 .sec{margin-bottom:22px}
 .sec-title{font-size:14px;font-weight:800;color:var(--navy);margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
 .range-sel{font-size:12px;padding:6px 8px;border:1.5px solid var(--gray-200);border-radius:8px;font-family:inherit;background:var(--white)}
@@ -106,6 +121,11 @@ const S={
   zohoRange:'all', salesRange:'all',
   sheet:null, // generic bottom sheet: {title, invoices, subtitle} | null -- see openSheet()/closeSheet()
   bizPeriod:'ytd', bizYear:null, quotes:null,
+  // Bottom-nav tab: overview|sales|finance|projects|service. Remembered
+  // across app opens (same spirit as the token/user/company persistence
+  // above) so re-opening the PWA lands wherever the user last was, not
+  // always back at Overview.
+  tab:localStorage.getItem('qtcal_mobile_tab')||'overview',
 };
 const esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const fmt=n=>isNaN(n)?'0.00':(+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -201,9 +221,9 @@ function rangeBounds(range){
   if(range==='last_year')return[new Date(y-1,0,1), new Date(y,0,1)];
   return null;
 }
-function salesFiltered(sRaw){
+function salesFiltered(sRaw,rangeOverride){
   if(!sRaw)return null;
-  const bounds=rangeBounds(S.salesRange);
+  const bounds=rangeBounds(rangeOverride!==undefined?rangeOverride:S.salesRange);
   const quotes=(sRaw.quotes||[]).filter(q=>{
     if(!bounds)return true;
     if(!q.created_at)return false;
@@ -230,9 +250,9 @@ function salesFiltered(sRaw){
     avg_margin_pct:awardedValue?Math.round(awardedGp/awardedValue*1000)/10:0,
   };
 }
-function zohoFiltered(zRaw){
+function zohoFiltered(zRaw,rangeOverride){
   if(!zRaw)return null;
-  const bounds=rangeBounds(S.zohoRange);
+  const bounds=rangeBounds(rangeOverride!==undefined?rangeOverride:S.zohoRange);
   const invoices=(zRaw.invoices||[]).filter(i=>{
     if(!bounds)return true;
     if(!i.invoice_date)return false;
@@ -257,6 +277,28 @@ function zohoFiltered(zRaw){
 // its own pre-filtered invoice array (a year, a month, an ageing bucket).
 function openSheet(title,invoices,subtitle){ S.sheet={title,invoices:invoices||[],subtitle}; render(); }
 function closeSheet(){ S.sheet=null; render(); }
+
+// ── Bottom nav ──────────────────────────────────────────────────────────
+// A tab is only offered once the company actually has that data -- mirrors
+// the same `if(d.xxx)` presence checks the old single-scroll dashboard used
+// (the key is only ever present in the payload when the backend's
+// _has_feature() check for that module passed -- see api/quotes.py). Sales
+// and Overview always show: every company has quotes, and Overview itself
+// degrades gracefully with fewer cards when other modules are absent.
+function _tabsAvailable(d){
+  return {
+    overview:true,
+    sales:true,
+    finance:!!(d.loans||d.payables||d.bank_recon),
+    projects:!!d.financial,
+    service:!!d.fsm,
+  };
+}
+function goTab(t){
+  S.tab=t; localStorage.setItem('qtcal_mobile_tab',t);
+  render();
+  window.scrollTo(0,0);
+}
 function openInvoiceSheet(customerName){
   const z=zohoFiltered(S.data&&S.data.zoho_sales)||{invoices:[]};
   openSheet(customerName, z.invoices.filter(i=>(i.customer_name||'Unknown customer')===customerName));
@@ -761,13 +803,19 @@ function bankReconSectionHTML(BR){
 
 function financialSectionHTML(k){
   return `<div class="sec">
-    <div class="sec-title"><span>💰 Financial Health</span></div>
+    <div class="sec-title">
+      <span>💰 Financial Health</span>
+      <span style="font-size:10.5px;color:var(--gray-500);font-weight:500">${k.last_synced_at?'Synced '+new Date(k.last_synced_at).toLocaleString():'tracked projects'}</span>
+    </div>
     <div class="cards">
       <div class="card"><div class="card-label">Active projects</div><div class="card-val navy">${k.active_projects}</div><div class="card-sub">AED ${fmt(k.total_active_value)}</div></div>
       <div class="card"><div class="card-label">Portfolio GP%</div><div class="card-val green">${k.portfolio_gp_pct}%</div></div>
       <div class="card"><div class="card-label">At risk / Critical</div><div class="card-val ${k.critical_projects>0?'amber':'navy'}">${k.projects_at_risk} / ${k.critical_projects}</div></div>
-      <div class="card"><div class="card-label">Receivables</div><div class="card-val amber">AED ${fmt(k.outstanding_receivables)}</div></div>
+      <div class="card"><div class="card-label">Outstanding receivables</div><div class="card-val amber">AED ${fmt(k.outstanding_receivables)}</div><div class="card-sub">tracked projects only</div></div>
     </div>
+    ${k.at_risk_projects&&k.at_risk_projects.length?`<div class="list" style="margin-top:12px">
+      ${k.at_risk_projects.map(p=>`<div class="list-row"><span class="list-row-name">${esc(p.name||'')}</span><span class="list-row-meta">${esc(p.customer||'')}</span><span class="attn-badge ${p.health_status==='critical'?'red':'amber'}">${p.health_status==='critical'?'Critical':'At risk'}</span></div>`).join('')}
+    </div>`:''}
   </div>`;
 }
 
@@ -806,6 +854,105 @@ function invoiceSheetHTML(){
   </div>`;
 }
 
+// ── Overview tab ─────────────────────────────────────────────────────────
+// Curated cross-module snapshot -- always all-time figures (independent of
+// whatever period filter is selected on the Sales tab), plus a single
+// "Needs attention" feed pulling the highest-signal item out of each module
+// that already tracks one (overdue payables, at-risk projects, overdue
+// invoices, SLA breaches, expiring contracts) so a manager can see what
+// needs action without visiting every tab.
+function overviewSectionHTML(d){
+  const sAll=d.sales?salesFiltered(d.sales,'all'):null;
+  const asOf=d.zoho_sales?_bizAsOfNow():null;
+  const k=d.financial, P=(d.payables&&d.payables.items&&d.payables.items.length)?d.payables:null, f=d.fsm;
+
+  const kpis=[];
+  if(sAll)kpis.push(['Awarded value','AED '+fmt(sAll.awarded_value),'navy']);
+  if(sAll)kpis.push(['Win rate',sAll.win_rate_pct+'%','amber']);
+  if(asOf)kpis.push(['Outstanding (all invoices)','AED '+fmt(asOf.outstanding),'amber']);
+  if(P)kpis.push(['Payables outstanding','AED '+fmt(P.total_outstanding),'amber']);
+  if(k)kpis.push(['Projects at risk / critical',k.projects_at_risk+' / '+k.critical_projects,k.critical_projects>0?'amber':'navy']);
+  if(f)kpis.push(['SLA breaches',f.sla_breaches,f.sla_breaches>0?'amber':'green']);
+
+  const today=new Date();today.setHours(0,0,0,0);
+  const attn=[];
+  if(P){
+    P.items.filter(it=>it.status!=='paid'&&it.date&&new Date(it.date)<today).slice(0,4).forEach(it=>{
+      attn.push({label:it.vendor,sub:(it.quote_title||'')+' · due '+new Date(it.date).toLocaleDateString(),val:'AED '+fmt(it.amount),badge:'Overdue',cls:'red',onclick:"goTab('finance')"});
+    });
+  }
+  if(k&&k.at_risk_projects&&k.at_risk_projects.length){
+    k.at_risk_projects.slice(0,4).forEach(p=>{
+      attn.push({label:p.name||'',sub:p.customer||'',val:'',badge:p.health_status==='critical'?'Critical':'At risk',cls:p.health_status==='critical'?'red':'amber',onclick:"goTab('projects')"});
+    });
+  }
+  if(asOf&&asOf.overdue>0){
+    attn.push({label:'Overdue invoices',sub:'Across all customers, all time',val:'AED '+fmt(asOf.overdue),badge:'Overdue',cls:'red',onclick:"goTab('sales');setTimeout(()=>bizDrillAging('b1_30'),0)"});
+  }
+  if(f&&f.sla_breaches>0){
+    attn.push({label:'SLA breaches',sub:'Open field-service tickets',val:String(f.sla_breaches),badge:'Action needed',cls:'red',onclick:"goTab('service')"});
+  }
+  if(f&&f.contracts_expiring_90d>0){
+    attn.push({label:'Contracts expiring',sub:'Within 90 days',val:String(f.contracts_expiring_90d),badge:'Upcoming',cls:'amber',onclick:"goTab('service')"});
+  }
+
+  return `<div class="sec">
+    <div class="sec-title"><span>👋 Overview</span></div>
+    ${kpis.length?`<div class="cards">
+      ${kpis.map(([label,val,cls])=>`<div class="card"><div class="card-label">${esc(label)}</div><div class="card-val ${cls}">${esc(String(val))}</div></div>`).join('')}
+    </div>`:'<div class="center-msg">No data available yet.</div>'}
+    ${attn.length?`<div class="card-label" style="margin:16px 2px 8px">Needs attention</div>
+    <div class="list">
+      ${attn.map(a=>`<div class="attn-item" onclick="${a.onclick}">
+        <div style="min-width:0"><div class="list-row-name">${esc(a.label)}</div>${a.sub?`<div style="font-size:11px;color:var(--gray-500)">${esc(a.sub)}</div>`:''}</div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">
+          ${a.val?`<span class="list-row-val">${esc(a.val)}</span>`:''}
+          <span class="attn-badge ${a.cls}">${esc(a.badge)}</span>
+        </div>
+      </div>`).join('')}
+    </div>`:kpis.length?'<div class="center-msg" style="padding:20px">Nothing needs attention right now.</div>':''}
+  </div>`;
+}
+
+function tabBodyHTML(tab,d){
+  if(tab==='overview')return overviewSectionHTML(d);
+  if(tab==='sales'){
+    let b='';
+    if(d.sales)b+=salesSectionHTML(d.sales,d.deals);
+    if(d.zoho_sales)b+=zohoSectionHTML(d.zoho_sales);
+    if(d.zoho_sales)b+=bizSectionHTML();
+    if(!b)b='<div class="center-msg">No sales data available yet.</div>';
+    return b;
+  }
+  if(tab==='finance'){
+    let b='';
+    if(d.payables&&d.payables.items&&d.payables.items.length)b+=payablesSectionHTML(d.payables);
+    if(d.loans&&d.loans.accounts&&d.loans.accounts.length)b+=loansSectionHTML(d.loans);
+    if(d.bank_recon&&d.bank_recon.accounts&&d.bank_recon.accounts.length)b+=bankReconSectionHTML(d.bank_recon);
+    if(!b)b='<div class="center-msg">No finance data available yet.</div>';
+    return b;
+  }
+  if(tab==='projects')return d.financial?financialSectionHTML(d.financial):'<div class="center-msg">No project data available yet.</div>';
+  if(tab==='service')return d.fsm?fsmSectionHTML(d.fsm):'<div class="center-msg">No field-service data available yet.</div>';
+  return '';
+}
+
+function bottomNavHTML(d){
+  const avail=_tabsAvailable(d);
+  const items=[
+    ['overview','🏠','Overview'],
+    ['sales','📈','Sales'],
+    ['finance','💳','Finance'],
+    ['projects','📁','Projects'],
+    ['service','🔧','Service'],
+  ].filter(([k])=>avail[k]);
+  return `<div class="bottom-nav">
+    ${items.map(([k,icon,label])=>`<button class="bottom-nav-item ${S.tab===k?'active':''}" onclick="goTab('${k}')">
+      <span class="nav-icon">${icon}</span><span class="nav-label">${label}</span>
+    </button>`).join('')}
+  </div>`;
+}
+
 function dashboardHTML(){
   const d=S.data||{};
   let body='';
@@ -813,15 +960,14 @@ function dashboardHTML(){
     body=`<div class="center-msg"><div class="spinner"></div>Loading Insights…</div>`;
   }else{
     if(S.error)body+=`<div class="err-msg">${esc(S.error)}</div>`;
-    if(d.sales)body+=salesSectionHTML(d.sales,d.deals);
-    if(d.zoho_sales)body+=zohoSectionHTML(d.zoho_sales);
-    if(d.zoho_sales)body+=bizSectionHTML();
-    if(d.loans&&d.loans.accounts&&d.loans.accounts.length)body+=loansSectionHTML(d.loans);
-    if(d.payables&&d.payables.items&&d.payables.items.length)body+=payablesSectionHTML(d.payables);
-    if(d.bank_recon&&d.bank_recon.accounts&&d.bank_recon.accounts.length)body+=bankReconSectionHTML(d.bank_recon);
-    if(d.financial)body+=financialSectionHTML(d.financial);
-    if(d.fsm)body+=fsmSectionHTML(d.fsm);
-    if(!d.sales&&!d.zoho_sales&&!d.financial&&!d.fsm&&!S.error)body='<div class="center-msg">No data available yet.</div>';
+    const avail=_tabsAvailable(d);
+    const tab=avail[S.tab]?S.tab:'overview';
+    if(S.tab!==tab){S.tab=tab;}
+    if(!d.sales&&!d.zoho_sales&&!d.financial&&!d.fsm&&!S.error){
+      body='<div class="center-msg">No data available yet.</div>';
+    }else{
+      body+=tabBodyHTML(tab,d);
+    }
   }
   const companyName=d.company_name||(S.company&&S.company.name)||'';
   return `<div class="screen">
@@ -836,6 +982,7 @@ function dashboardHTML(){
       </div>
     </div>
     <div class="content">${body}</div>
+    ${(!S.loading||S.data)?bottomNavHTML(d):''}
   </div>
   ${invoiceSheetHTML()}
   ${loanTxnSheetHTML()}`;
