@@ -13,6 +13,7 @@
 <link rel="apple-touch-icon" href="/icons/insights-icon-192.png">
 <link rel="icon" type="image/png" href="/icons/insights-icon-192.png">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 :root{
@@ -546,6 +547,101 @@ function downloadCsv(filename,rows){
   const blob=new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename; a.click();
   URL.revokeObjectURL(a.href);
+}
+
+// ── Whole-tab export (CSV / PDF) ────────────────────────────────────────
+// Release 1 spec item: every export should carry the metric catalogue's
+// definitions alongside the numbers, plus a freshness note, not just raw
+// figures with no context. Reads straight off the rendered .card elements
+// for whichever tab is currently open, rather than recomputing each
+// section's numbers a second time -- guarantees the export always matches
+// exactly what's on screen, and works for any tab without a bespoke
+// per-tab data-gathering function.
+function _tabLabel(tab){
+  return {overview:'Overview',sales:'Sales & Pipeline',finance:'Finance',projects:'Projects',service:'Service'}[tab]||'Insights';
+}
+function _freshnessLines(d){
+  const lines=[];
+  if(d.zoho_sales&&d.zoho_sales.last_synced_at)lines.push('Zoho Sales / Business Performance synced '+new Date(d.zoho_sales.last_synced_at).toLocaleString());
+  if(d.financial&&d.financial.last_synced_at)lines.push('Financial Health synced '+new Date(d.financial.last_synced_at).toLocaleString());
+  if(d.bank_recon&&d.bank_recon.last_synced_at)lines.push('Bank Reconciliation synced '+new Date(d.bank_recon.last_synced_at).toLocaleString());
+  if(d.loans&&d.loans.last_synced_at)lines.push('Loans synced '+new Date(d.loans.last_synced_at).toLocaleString());
+  if(!lines.length)lines.push('No sync timestamp available for this view.');
+  return lines;
+}
+// {label, value, def, source, basis}[] for every metric card currently
+// rendered in .content -- i.e. whatever tab is active right now.
+function _visibleMetricRows(){
+  return [...document.querySelectorAll('.content .card')].map(c=>{
+    const labelEl=c.querySelector('.card-label'), valEl=c.querySelector('.card-val');
+    if(!labelEl||!valEl)return null;
+    const label=labelEl.textContent.replace(/ⓘ/g,'').trim();
+    const value=valEl.textContent.trim();
+    if(!label||!value)return null;
+    const entry=Object.values(METRIC_CATALOGUE).find(m=>m.label===label);
+    return {label,value,def:entry?entry.def:'',source:entry?entry.source:'',basis:entry?entry.basis:''};
+  }).filter(Boolean);
+}
+function exportTabCsv(){
+  const d=S.data||{};
+  const company=d.company_name||(S.company&&S.company.name)||'';
+  const tabName=_tabLabel(S.tab);
+  const rows=[
+    [company+' — Insights: '+tabName],
+    ['Generated '+new Date().toLocaleString()],
+    ..._freshnessLines(d).map(l=>[l]),
+    [],
+    ['Metric','Value','Definition','Source','Basis'],
+    ..._visibleMetricRows().map(r=>[r.label,r.value,r.def,r.source,r.basis]),
+  ];
+  downloadCsv('insights-'+(S.tab||'overview')+'-'+new Date().toISOString().slice(0,10)+'.csv',rows);
+}
+function exportTabPdf(){
+  if(!window.jspdf){ alert('PDF export failed to load. Check your connection and try again.'); return; }
+  const {jsPDF}=window.jspdf;
+  const doc=new jsPDF({unit:'pt'});
+  const d=S.data||{};
+  const company=d.company_name||(S.company&&S.company.name)||'';
+  const tabName=_tabLabel(S.tab);
+  const marginX=40; const pageW=doc.internal.pageSize.getWidth(); const pageH=doc.internal.pageSize.getHeight();
+  let y=50;
+  doc.setFontSize(16); doc.setFont(undefined,'bold');
+  doc.text(company+' — Insights: '+tabName,marginX,y); y+=20;
+  doc.setFontSize(9); doc.setFont(undefined,'normal'); doc.setTextColor(120);
+  doc.text('Generated '+new Date().toLocaleString(),marginX,y); y+=14;
+  _freshnessLines(d).forEach(l=>{ doc.text(l,marginX,y); y+=13; });
+  y+=10; doc.setDrawColor(220); doc.line(marginX,y,pageW-marginX,y); y+=20;
+  doc.setTextColor(0);
+  _visibleMetricRows().forEach(r=>{
+    if(y>pageH-80){ doc.addPage(); y=50; }
+    doc.setFontSize(11); doc.setFont(undefined,'bold');
+    doc.text(r.label+':  '+r.value,marginX,y); y+=15;
+    if(r.def){
+      doc.setFontSize(9); doc.setFont(undefined,'normal'); doc.setTextColor(90);
+      const lines=doc.splitTextToSize(r.def,pageW-marginX*2);
+      lines.forEach(l=>{ if(y>pageH-60){ doc.addPage(); y=50; } doc.text(l,marginX,y); y+=12; });
+      if(r.source||r.basis){ doc.text(`Source: ${r.source}   Basis: ${r.basis}`,marginX,y); y+=12; }
+      doc.setTextColor(0);
+    }
+    y+=8;
+  });
+  doc.save('insights-'+(S.tab||'overview')+'-'+new Date().toISOString().slice(0,10)+'.pdf');
+}
+let EXPORT_SHEET_OPEN=false;
+function openExportSheet(){ EXPORT_SHEET_OPEN=true; render(); }
+function closeExportSheet(){ EXPORT_SHEET_OPEN=false; render(); }
+function exportSheetHTML(){
+  if(!EXPORT_SHEET_OPEN)return '';
+  return `<div class="sheet-overlay" onclick="if(event.target===this)closeExportSheet()">
+    <div class="sheet" style="max-height:40vh">
+      <div class="sheet-head">
+        <div><div class="sheet-title">Export ${esc(_tabLabel(S.tab))}</div><div style="font-size:12px;color:var(--gray-500);margin-top:2px">Includes metric definitions and sync freshness</div></div>
+        <button class="sheet-close" onclick="closeExportSheet()">✕</button>
+      </div>
+      <button class="btn" style="margin-bottom:10px" onclick="exportTabCsv();closeExportSheet()">⬇ Export as CSV</button>
+      <button class="btn" style="background:var(--gray-900)" onclick="exportTabPdf();closeExportSheet()">⬇ Export as PDF</button>
+    </div>
+  </div>`;
 }
 function exportBizYearCsv(){
   const rows=_bizYearRows();
@@ -1171,6 +1267,7 @@ function dashboardHTML(){
         <div class="topbar-sub">${esc(companyName)}${S.shareToken?' · Shared view (read-only'+(d.finance_hidden?', finance hidden':'')+')':d.finance_hidden?' · Finance hidden for your role':''}</div>
       </div>
       <div class="topbar-actions">
+        ${S.data?`<button class="icon-btn" title="Export" onclick="openExportSheet()">⬇</button>`:''}
         <button class="icon-btn" title="Refresh" onclick="${S.shareToken?'loadInsightsPublic(true)':'loadInsights(true)'}">${S.loading?'⏳':'🔄'}</button>
         ${S.shareToken?'':'<button class="icon-btn" title="Sign out" onclick="doLogout()">⎋</button>'}
       </div>
@@ -1181,7 +1278,8 @@ function dashboardHTML(){
   ${invoiceSheetHTML()}
   ${loanTxnSheetHTML()}
   ${recordSheetHTML()}
-  ${metricInfoHTML()}`;
+  ${metricInfoHTML()}
+  ${exportSheetHTML()}`;
 }
 
 function render(){
