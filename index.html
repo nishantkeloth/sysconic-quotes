@@ -4043,6 +4043,53 @@ function showZohoCustomerModal(customerName){
   </div>`);
 }
 
+// ── Zoho Payables (org-wide vendor bills, Accounts Payable) ─────────────────
+let ZOHO_PAYABLES_SYNCING=false;
+async function syncZohoPayables(){
+  if(ZOHO_PAYABLES_SYNCING)return;
+  ZOHO_PAYABLES_SYNCING=true;draw();
+  const r=await api('POST','/api/integrations/sync-payables',{});
+  ZOHO_PAYABLES_SYNCING=false;
+  if(r.error){alert('Zoho payables sync failed: '+r.error);draw();return;}
+  await loadInsightsPage(true);
+}
+// Generic bill-list drill modal, same layout convention as showInvoiceListModal
+// above but for vendor bills (bill_number/vendor_name/due_date/balance).
+function showBillListModal(title,bills,subtitle){
+  const statusColor={paid:'var(--green)',overdue:'var(--red)',open:'var(--amber)',partially_paid:'var(--amber)',draft:'var(--gray-500)'};
+  const rows=(bills||[]).map(b=>`<div style="display:grid;grid-template-columns:1fr 100px 90px 110px 120px;gap:8px;font-size:13px;padding:8px 0;border-bottom:1px solid var(--gray-100);align-items:center">
+    <span>${esc(b.bill_number||'—')} <span style="color:var(--gray-500)">· ${esc(b.vendor_name||'')}</span></span>
+    <span style="color:var(--gray-500)">${esc((b.due_date||'').slice(0,10)||'—')}</span>
+    <span style="color:${statusColor[(b.status||'').toLowerCase()]||'var(--gray-500)'};font-weight:700;text-transform:capitalize">${esc((b.status||'').replace(/_/g,' '))}</span>
+    <span style="font-weight:700;text-align:right">AED ${fmt(b.total)}</span>
+    <span style="text-align:right;color:${b.balance>0?'var(--amber)':'var(--green)'}">${b.balance>0?'AED '+fmt(b.balance)+' due':'Paid'}</span>
+  </div>`).join('');
+  const total=(bills||[]).reduce((s,b)=>s+(b.balance||0),0);
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="billDrillOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)document.getElementById('billDrillOverlay').remove()">
+    <div style="max-width:700px;width:100%;max-height:80vh;overflow-y:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <div style="font-size:19px;font-weight:700;color:var(--gray-900)">${esc(title)}</div>
+        <span style="cursor:pointer;color:var(--gray-500);font-size:22px;line-height:1;padding:4px" onclick="document.getElementById('billDrillOverlay').remove()">×</span>
+      </div>
+      ${subtitle?`<div style="font-size:12px;color:var(--gray-500);margin-bottom:12px">${esc(subtitle)}</div>`:''}
+      <div class="vch-card">
+        ${rows||'<div style="color:var(--gray-500);padding:10px 0">No bills found.</div>'}
+        ${bills&&bills.length?`<div style="display:flex;justify-content:space-between;padding-top:10px;margin-top:6px;border-top:2px solid var(--gray-200);font-weight:700"><span>${bills.length} bill(s)</span><span>AED ${fmt(total)} due</span></div>`:''}
+      </div>
+    </div>
+  </div>`);
+}
+function drillZohoPayables(kind){
+  const P=INSIGHTS.data&&INSIGHTS.data.zoho_payables; if(!P)return;
+  if(kind==='due10')showBillListModal('Due within 10 days',P.due_within_10d,'Soonest due date first');
+  else if(kind==='overdue')showBillListModal('Overdue bills',(P.bills||[]).filter(b=>b.balance>0&&b.due_date&&new Date(b.due_date)<new Date()),'Past due date, as of now');
+}
+function showZohoVendorModal(vendorName){
+  const P=INSIGHTS.data&&INSIGHTS.data.zoho_payables||{};
+  const bills=(P.bills||[]).filter(b=>b.vendor_name===vendorName);
+  showBillListModal(vendorName+' — Bills',bills);
+}
+
 // ── Business Performance (year-based Zoho financial view) ──────────────────
 // Extends the Zoho Sales section above with year filters, YoY growth, a
 // monthly invoiced-vs-collected trend, receivables ageing, and quote-to-
@@ -4692,6 +4739,60 @@ function insightsHTML(){
       </div>`);
   }
 
+  // ── Zoho Payables (org-wide vendor bills, Accounts Payable) ─────────────
+  // Sourced straight from Zoho Books via /api/integrations/sync-payables --
+  // distinct from the manual, quote-linked "Payables" section further down
+  // (Vendor payment tracker), which only covers vendor amounts a user typed
+  // into a specific Awarded quote. Current/Overdue mirrors Zoho's own
+  // Accounts Payable dashboard widget; "Due within 10 days" is QTcal's own
+  // addition -- the actual cash-planning question of what goes out soon.
+  if(d.zoho_payables){
+    const P=d.zoho_payables;
+    const pct=P.total_unpaid?Math.round(P.total_current/P.total_unpaid*100):0;
+    sections.push(`
+      <div class="insights-sec">
+        <div class="insights-sec-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <span>📥 Zoho Payables <span style="font-size:11px;color:var(--gray-500);font-weight:500">(all vendor bills, org-wide)</span></span>
+          <button class="btn" style="font-size:12px;padding:5px 10px" onclick="syncZohoPayables()" ${ZOHO_PAYABLES_SYNCING?'disabled':''}>${ZOHO_PAYABLES_SYNCING?'⏳ Syncing…':'🔄 Sync Now'}</button>
+        </div>
+        ${P.bill_count?`<div style="background:var(--white);border:1.5px solid var(--gray-200);border-radius:12px;padding:16px;margin-bottom:14px">
+          <div class="mcard-label" style="margin-bottom:6px">Total Unpaid Bills</div>
+          <div style="font-size:26px;font-weight:700;color:var(--navy);margin-bottom:10px">AED ${fmt(P.total_unpaid)}</div>
+          <div style="height:8px;border-radius:4px;overflow:hidden;display:flex;background:var(--gray-100);margin-bottom:8px">
+            <div style="width:${pct}%;background:var(--navy)"></div>
+            <div style="width:${100-pct}%;background:var(--amber)"></div>
+          </div>
+          <div style="display:flex;gap:18px;font-size:13px">
+            <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--navy);margin-right:5px"></span>Current: AED ${fmt(P.total_current)}</span>
+            <span><span style="display:inline-block;width:9px;height:9px;border-radius:2px;background:var(--amber);margin-right:5px"></span>Overdue: AED ${fmt(P.total_overdue)}</span>
+          </div>
+        </div>
+        <div class="dash-metrics">
+          <div class="mcard" style="cursor:pointer" onclick="drillZohoPayables('due10')" title="Unpaid bills whose due date falls within the next 10 days.">
+            <div class="mcard-label">Due within 10 days</div><div class="mcard-val ${P.due_within_10d_count?'amber':'green'}">AED ${fmt(P.due_within_10d_total)}</div>
+            <div class="mcard-sub">${P.due_within_10d_count} bill(s) · click to view</div>
+          </div>
+          <div class="mcard" style="cursor:pointer" onclick="drillZohoPayables('overdue')"><div class="mcard-label">Overdue</div><div class="mcard-val ${P.total_overdue?'red':'green'}">AED ${fmt(P.total_overdue)}</div><div class="mcard-sub">click to view</div></div>
+          <div class="mcard"><div class="mcard-label">Vendors</div><div class="mcard-val navy">${P.vendors.length}</div></div>
+          <div class="mcard"><div class="mcard-label">Total bills</div><div class="mcard-val navy">${P.bill_count}</div></div>
+        </div>
+        ${P.due_within_10d.length?`<div class="insights-list">
+          <div class="insights-list-title">Due within 10 days — soonest first</div>
+          ${P.due_within_10d.map(b=>`<div class="insights-row" style="display:grid;grid-template-columns:1.3fr 1fr 0.8fr;gap:12px;align-items:center">
+            <span>${esc(b.vendor_name)}<br><span style="font-size:11px;color:var(--gray-500)">${esc(b.bill_number||'')}</span></span>
+            <span style="text-align:right;color:var(--gray-500)">${b.due_date?new Date(b.due_date).toLocaleDateString():'—'}</span>
+            <span style="text-align:right;font-weight:700">AED ${fmt(b.balance)}</span>
+          </div>`).join('')}
+        </div>`:`<div style="color:var(--gray-500);padding:12px 0;font-size:13px">Nothing due in the next 10 days.</div>`}
+        <div class="insights-list">
+          <div class="insights-list-title">By vendor — click a row for its bills</div>
+          ${P.vendors.slice(0,15).map(v=>`<div class="insights-row" style="cursor:pointer;display:grid;grid-template-columns:1fr 130px 150px;gap:12px;align-items:center" onclick="showZohoVendorModal(${esc(JSON.stringify(v.vendor))})"><span>${esc(v.vendor)}</span><span style="color:var(--gray-500);text-align:right">${v.count} bill(s)</span><span style="font-weight:700;text-align:right;color:${v.outstanding>0?'var(--amber)':'var(--green)'}">AED ${fmt(v.outstanding)}</span></div>`).join('')}
+        </div>
+        ${P.last_synced_at?`<div style="font-size:11px;color:var(--gray-500);margin-top:8px">Last synced ${_insightsAgo(new Date(P.last_synced_at))}</div>`:''}`
+        :`<div style="color:var(--gray-500);padding:16px 0">No bills synced yet — click Sync Now above.</div>`}
+      </div>`);
+  }
+
   // ── Loans (admin-picked Chart-of-Accounts liability accounts) ───────────
   // current_balance is Zoho's own ledger balance (authoritative). total_
   // borrowed/total_repaid are computed at sync time from that account's
@@ -4812,7 +4913,7 @@ function insightsHTML(){
       </div>
     </div>
     ${INSIGHTS.error?`<div class="auth-err" style="margin:12px 0">${esc(INSIGHTS.error)}</div>`:''}
-    ${d.finance_hidden?`<div style="font-size:12px;color:var(--gray-500);background:var(--gray-100);border-radius:8px;padding:8px 12px;margin-bottom:14px">Loans, Bank Reconciliation, Payables, and Financial Health are hidden for your role. Ask an admin for the "Insights — Finance & Loans" permission if you need them.</div>`:''}
+    ${d.finance_hidden?`<div style="font-size:12px;color:var(--gray-500);background:var(--gray-100);border-radius:8px;padding:8px 12px;margin-bottom:14px">Loans, Bank Reconciliation, Payables (including Zoho Payables), and Financial Health are hidden for your role. Ask an admin for the "Insights — Finance & Loans" permission if you need them.</div>`:''}
     ${sections.join('')}
   </div>`;
 }
@@ -8304,7 +8405,7 @@ ${hasFeature('vouchers')?`<div class="card" style="max-width:640px;margin-top:16
 </div>
 <div class="card" style="max-width:640px;margin-top:16px">
   <div class="card-title">Public Insights Link</div>
-  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Turn on a link that opens the mobile Insights dashboard with no login — handy for a phone home-screen shortcut or an office TV display. <strong>Anyone with this link can view your Sales &amp; Pipeline, Zoho Sales, and Business Performance data, no password required</strong>, so treat it like a password: don't post it anywhere public. Loans, Bank Reconciliation, Payables, and Financial Health (project margins/cash exposure) are always left out of this shared view, regardless of what's visible when you're signed in. This link is permanent — turning sharing off blocks access immediately, but turning it back on restores this exact same link rather than issuing a new one, so if it ever leaks, turning it off is the only way to stop it (there's no "get a fresh link" option). Admin only.</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Turn on a link that opens the mobile Insights dashboard with no login — handy for a phone home-screen shortcut or an office TV display. <strong>Anyone with this link can view your Sales &amp; Pipeline, Zoho Sales, and Business Performance data, no password required</strong>, so treat it like a password: don't post it anywhere public. Loans, Bank Reconciliation, Payables (including Zoho Payables), and Financial Health (project margins/cash exposure) are always left out of this shared view, regardless of what's visible when you're signed in. This link is permanent — turning sharing off blocks access immediately, but turning it back on restores this exact same link rather than issuing a new one, so if it ever leaks, turning it off is the only way to stop it (there's no "get a fresh link" option). Admin only.</div>
   <div id="shareLinkBox"><div style="color:var(--gray-500)">Loading…</div></div>
 </div>
 <div class="card" style="max-width:640px;margin-top:16px">
@@ -8822,7 +8923,7 @@ function renderShareLinkBox(enabled){
   `;
 }
 async function generateInsightsShareLink(){
-  if(!confirm('Turn on the public Insights link? Anyone with this link can view your Sales, Zoho Sales, and Business Performance data with no login (Loans, Bank Reconciliation, Payables, and Financial Health are always excluded from this view), and the link never changes once shared.'))return;
+  if(!confirm('Turn on the public Insights link? Anyone with this link can view your Sales, Zoho Sales, and Business Performance data with no login (Loans, Bank Reconciliation, Payables, Zoho Payables, and Financial Health are always excluded from this view), and the link never changes once shared.'))return;
   const r=await api('POST','/api/insights/share-link');
   if(r.error){alert(r.error);return;}
   renderShareLinkBox(true);

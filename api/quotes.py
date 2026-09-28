@@ -1734,6 +1734,63 @@ def _build_insights_payload(claims):
             'last_synced_at': max(synced_ats) if synced_ats else None,
         }
 
+    # ── Zoho Payables (org-wide vendor bills synced via /api/integrations/
+    # sync-payables) ─────────────────────────────────────────────────────
+    # Mirrors Zoho Sales above but for Accounts Payable: every vendor bill
+    # in the Zoho Books org (not just ones tied to a tracked Project),
+    # sourced straight from Zoho -- distinct from the manual, quote-linked
+    # 'payables' section (Vendor payment tracker) below, which only covers
+    # vendor amounts a user typed into a specific Awarded quote. This is
+    # what actually answers "what do we owe, and what's due soon" without
+    # depending on anyone having entered anything by hand. current/overdue
+    # mirrors Zoho's own Accounts Payable dashboard widget (split on
+    # due_date vs today); due_within_10d is QTcal's own addition, since
+    # that's the actual planning question ("what clears in the next 10
+    # days") that Zoho's stock widget doesn't answer directly.
+    if zc and zc[0].get('status') == 'connected':
+        bill_rows = sb.table('zoho_bills').select(
+            'id,bill_number,bill_date,due_date,status,total,balance,vendor_name,synced_at'
+        ).eq('company_id', company_id).order('due_date').execute().data or []
+        now = datetime.utcnow()
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        in10 = today + timedelta(days=10)
+        unpaid = [b for b in bill_rows if _numf(b.get('balance')) > 0]
+        def _due(b):
+            return _insights_parse_dt(b.get('due_date'))
+        overdue = [b for b in unpaid if _due(b) and _due(b) < today]
+        overdue_ids = {b.get('id') for b in overdue}
+        current = [b for b in unpaid if b.get('id') not in overdue_ids]
+        due_soon = [b for b in unpaid if _due(b) and today <= _due(b) <= in10]
+        due_soon.sort(key=lambda b: b.get('due_date') or '')
+        by_vendor = {}
+        for b in bill_rows:
+            name = (b.get('vendor_name') or '').strip() or 'Unknown vendor'
+            v = by_vendor.setdefault(name, {'vendor': name, 'billed': 0.0, 'outstanding': 0.0, 'count': 0})
+            v['billed'] += _numf(b.get('total'))
+            v['outstanding'] += _numf(b.get('balance'))
+            v['count'] += 1
+        vendors = sorted(by_vendor.values(), key=lambda v: v['outstanding'], reverse=True)
+        synced_ats = [b['synced_at'] for b in bill_rows if b.get('synced_at')]
+        def _bill_row(b):
+            return {
+                'id': b.get('id'), 'bill_number': b.get('bill_number'), 'bill_date': b.get('bill_date'),
+                'due_date': b.get('due_date'), 'status': b.get('status'), 'total': _numf(b.get('total')),
+                'balance': _numf(b.get('balance')),
+                'vendor_name': (b.get('vendor_name') or '').strip() or 'Unknown vendor',
+            }
+        out['zoho_payables'] = {
+            'total_unpaid': sum(_numf(b.get('balance')) for b in unpaid),
+            'total_current': sum(_numf(b.get('balance')) for b in current),
+            'total_overdue': sum(_numf(b.get('balance')) for b in overdue),
+            'due_within_10d_total': sum(_numf(b.get('balance')) for b in due_soon),
+            'due_within_10d_count': len(due_soon),
+            'due_within_10d': [_bill_row(b) for b in due_soon],
+            'bill_count': len(bill_rows),
+            'vendors': vendors,
+            'bills': [_bill_row(b) for b in bill_rows],
+            'last_synced_at': max(synced_ats) if synced_ats else None,
+        }
+
     # ── Loans (admin-picked Chart-of-Accounts liability accounts) ──────────
     # Only shown once an admin has actually picked at least one account via
     # /api/integrations/loan-accounts -- see migration-add-loan-accounts.sql
@@ -2070,7 +2127,7 @@ def revoke_insights_share_link():
 # Revenue-side sections (Sales & Pipeline, Zoho Sales, Business Performance)
 # and operational sections (AMC & Field Service) are not considered
 # sensitive in the same way and are never stripped by this helper.
-_FINANCE_SECTIONS = ('loans', 'bank_recon', 'payables', 'financial')
+_FINANCE_SECTIONS = ('loans', 'bank_recon', 'payables', 'zoho_payables', 'financial')
 
 def _strip_finance_sections(payload):
     hidden_any = False
