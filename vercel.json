@@ -107,6 +107,7 @@
     { "path": "/api/integrations/run-auto-sync", "schedule": "0 3 * * *" },
     { "path": "/api/pp-sync/run-auto-sync", "schedule": "0 4 * * *" },
     { "path": "/api/fsm_pm/run-auto-generate", "schedule": "0 5 * * *" },
-    { "path": "/api/fsm_notify/run-checks", "schedule": "0 6 * * *" }
+    { "path": "/api/fsm_notify/run-checks", "schedule": "0 6 * * *" },
+    { "path": "/api/insights/run-payable-reminders", "schedule": "0 7 * * *" }
   ]
 }

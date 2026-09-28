@@ -17,6 +17,8 @@ JWT_SECRET   = os.environ.get('JWT_SECRET')
 MS_TENANT_ID = os.environ.get('MS_TENANT_ID', 'b36855d2-9d26-43a4-bec6-82268a7713fb')
 MS_CLIENT_ID = os.environ.get('MS_CLIENT_ID', '491f22c7-9dee-4c30-b828-acf8ba8d948c')
 MS_CLIENT_SECRET = os.environ.get('MS_CLIENT_SECRET')
+SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'nishant@sysconic.com')
+CRON_SECRET = os.environ.get('CRON_SECRET')
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -1546,6 +1548,37 @@ def insights_summary():
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
     return jsonify(_build_insights_payload(claims))
 
+# Shared by the Insights "Payables" section above and the daily payables
+# reminder cron below (run_payable_reminders()) -- turns a list of quote rows
+# (id/title/customer/vendor_data) into the flat list of individual vendor-
+# payable line items, each carrying its own amount (incl. the same 5% VAT
+# the quote editor itself calculates), target date, and status. Pure
+# function, no query -- callers do their own scoping (per-user for the
+# Insights payload, company-wide for the reminder email).
+def _aggregate_payable_items(payable_quotes):
+    items = []
+    for q in payable_quotes:
+        vd = q.get('vendor_data') or []
+        if isinstance(vd, str):
+            try:
+                vd = json.loads(vd)
+            except Exception:
+                vd = []
+        for v in vd:
+            payable = _numf(v.get('payable'))
+            if payable <= 0:
+                continue
+            items.append({
+                'quote_id': q.get('id'),
+                'quote_title': q.get('title'),
+                'customer': q.get('customer'),
+                'vendor': v.get('vendor') or 'Vendor',
+                'amount': round(payable * 1.05, 2),
+                'date': v.get('date') or None,
+                'status': v.get('status') or 'pending',
+            })
+    return items
+
 # Pulled out of insights_summary() so the public share-link endpoint below
 # (/api/insights/public) can produce the exact same payload for an
 # unauthenticated viewer -- it builds a synthetic admin-level `claims` dict
@@ -1692,28 +1725,7 @@ def _build_insights_payload(claims):
     pyq = sb.table('quotes').select('id,title,customer,status,vendor_data').eq('company_id', company_id).eq('status', 'awarded')
     if not _can_view_all_quotes(claims):
         pyq = pyq.eq('created_by', claims['user_id'])
-    payable_quotes = pyq.execute().data or []
-    payable_items = []
-    for q in payable_quotes:
-        vd = q.get('vendor_data') or []
-        if isinstance(vd, str):
-            try:
-                vd = json.loads(vd)
-            except Exception:
-                vd = []
-        for v in vd:
-            payable = _numf(v.get('payable'))
-            if payable <= 0:
-                continue
-            payable_items.append({
-                'quote_id': q.get('id'),
-                'quote_title': q.get('title'),
-                'customer': q.get('customer'),
-                'vendor': v.get('vendor') or 'Vendor',
-                'amount': round(payable * 1.05, 2),
-                'date': v.get('date') or None,
-                'status': v.get('status') or 'pending',
-            })
+    payable_items = _aggregate_payable_items(pyq.execute().data or [])
     if payable_items:
         payable_items.sort(key=lambda r: (r['status'] == 'paid', r['date'] or '9999-12-31'))
         out['payables'] = {
@@ -1813,6 +1825,109 @@ def _build_insights_payload(claims):
         }
 
     return out
+
+
+# ── Payables reminder (daily cron) ──────────────────────────────────────────
+# The Vendor payment tracker is manually entered per quote, easy to lose
+# track of once there are several awarded quotes each with their own vendor
+# payment dates -- the whole point of this job is to surface "what's due"
+# without anyone having to remember to open Insights and check. Same
+# CRON_SECRET pattern as api/fsm_notify.py's run-checks and api/integrations.
+# py's run-auto-sync; same MS Graph sendMail approach as _send_review_
+# notification above. Sends at most one digest per company per day (tracked
+# in payable_reminder_state), re-sending the next day for as long as an item
+# stays unpaid -- there's no separate per-item dedup, since the exact point
+# is to keep reminding until someone marks it paid.
+PAYABLE_REMINDER_WARNING_DAYS = 3
+
+def _fetch_company_payable_items(sb_client, company_id):
+    rows = sb_client.table('quotes').select('id,title,customer,status,vendor_data') \
+        .eq('company_id', company_id).eq('status', 'awarded').execute().data or []
+    return _aggregate_payable_items(rows)
+
+def _send_payable_reminder_email(to_email, overdue_items, due_soon_items):
+    """Best-effort -- a failed/misconfigured mail send should never crash the
+    whole cron run for every other company."""
+    if not MS_CLIENT_SECRET or not to_email:
+        return False
+    try:
+        token = get_ms_token()
+        if not token:
+            return False
+        def _rows_html(items):
+            return ''.join(
+                f"<tr><td style='padding:4px 10px;border-bottom:1px solid #eee'>{it['vendor']}</td>"
+                f"<td style='padding:4px 10px;border-bottom:1px solid #eee;color:#667085'>{it['quote_title'] or ''}</td>"
+                f"<td style='padding:4px 10px;border-bottom:1px solid #eee;text-align:right'>AED {it['amount']:,.2f}</td>"
+                f"<td style='padding:4px 10px;border-bottom:1px solid #eee'>{it['date'] or ''}</td></tr>"
+                for it in items
+            )
+        sections = ''
+        if overdue_items:
+            sections += (f"<h3 style='color:#b91c1c;margin:18px 0 8px'>Overdue ({len(overdue_items)})</h3>"
+                         f"<table style='border-collapse:collapse;width:100%;font-size:13px'>{_rows_html(overdue_items)}</table>")
+        if due_soon_items:
+            sections += (f"<h3 style='color:#b45309;margin:18px 0 8px'>Due within {PAYABLE_REMINDER_WARNING_DAYS} days ({len(due_soon_items)})</h3>"
+                         f"<table style='border-collapse:collapse;width:100%;font-size:13px'>{_rows_html(due_soon_items)}</table>")
+        body_html = f"""
+        <html><body style="font-family:Segoe UI,Arial,sans-serif;color:#1a1a1a;max-width:640px;margin:0 auto;padding:20px">
+            <p style="line-height:1.6">Here's what needs attention on your vendor payables:</p>
+            {sections}
+            <p style="color:#667085;font-size:12px;margin-top:22px;line-height:1.5">From each quote's Vendor payment tracker (Quote editor → Vendors tab). Mark a payable "paid" there once it's settled to stop these reminders for it. Full list: Insights dashboard → Payables.</p>
+        </body></html>
+        """
+        payload = {
+            'message': {
+                'subject': f"Payables reminder — {len(overdue_items)} overdue, {len(due_soon_items)} due soon",
+                'body': {'contentType': 'HTML', 'content': body_html},
+                'toRecipients': [{'emailAddress': {'address': to_email}}],
+                'from': {'emailAddress': {'address': SENDER_EMAIL}},
+            },
+            'saveToSentItems': True,
+        }
+        r = requests.post(
+            f'https://graph.microsoft.com/v1.0/users/{SENDER_EMAIL}/sendMail',
+            json=payload, headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
+            timeout=15
+        )
+        return r.status_code == 202
+    except Exception:
+        traceback.print_exc()
+        return False
+
+@app.route('/api/insights/run-payable-reminders', methods=['GET', 'POST'])
+def run_payable_reminders():
+    auth = request.headers.get('Authorization', '')
+    provided = auth[7:] if auth.startswith('Bearer ') else ''
+    provided = provided or request.args.get('secret') or request.headers.get('X-Cron-Secret') or ''
+    if not CRON_SECRET or provided != CRON_SECRET:
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    today = datetime.utcnow().date()
+    today_iso = today.isoformat()
+    warn_by_iso = (today + timedelta(days=PAYABLE_REMINDER_WARNING_DAYS)).isoformat()
+    companies = sb.table('companies').select('id').execute().data or []
+    results = []
+    for co in companies:
+        cid = co['id']
+        items = _fetch_company_payable_items(sb, cid)
+        relevant = [it for it in items if it['status'] != 'paid' and it['date']]
+        overdue = [it for it in relevant if it['date'] < today_iso]
+        due_soon = [it for it in relevant if today_iso <= it['date'] <= warn_by_iso]
+        if not overdue and not due_soon:
+            continue
+        state = sb.table('payable_reminder_state').select('last_sent_date').eq('company_id', cid).execute().data
+        if state and state[0].get('last_sent_date') == today_iso:
+            continue  # already sent today -- try again tomorrow if still unpaid
+        admins = sb.table('users').select('email').eq('company_id', cid).eq('role', 'admin').execute().data or []
+        admin_emails = [a['email'] for a in admins if a.get('email')]
+        sent = sum(1 for email in admin_emails if _send_payable_reminder_email(email, overdue, due_soon))
+        if sent:
+            sb.table('payable_reminder_state').upsert({
+                'company_id': cid, 'last_sent_date': today_iso, 'updated_at': datetime.utcnow().isoformat(),
+            }, on_conflict='company_id').execute()
+            results.append({'company_id': cid, 'overdue': len(overdue), 'due_soon': len(due_soon), 'emails_sent': sent})
+    return jsonify({'companies_processed': len(companies), 'results': results})
 
 
 # ── Insights public share link ──────────────────────────────────────────────
