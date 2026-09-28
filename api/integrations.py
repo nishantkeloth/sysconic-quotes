@@ -586,6 +586,33 @@ class ZohoAdapter:
             'raw': r,
         } for r in rows if r.get('invoice_id')]
 
+    def fetch_all_bills(self, creds):
+        """Org-wide vendor-bill pull for the Insights 'Payables' widget --
+        mirrors fetch_all_invoices() above but for Zoho Books Bills
+        (Accounts Payable), not filtered by project_id, so it captures every
+        vendor bill regardless of whether it's tied to a tracked Project.
+        Shares the same zoho_bills table as the per-project fetch_bills()
+        above (see migration-add-zoho-payables-sync.sql): rows written here
+        never set project_id, so a bill already linked to a Project by the
+        Financial Health sync keeps that link untouched on upsert, while a
+        plain bill with no project gets project_id = NULL. Unlike
+        fetch_bills(), this doesn't fetch each bill's line-item detail --
+        Insights only needs the header-level total/balance/due_date, not
+        per-line cost categorization."""
+        rows = self._fetch_paginated(creds, '/bills', {}, 'bills')
+        return [{
+            'zoho_bill_id': r.get('bill_id'),
+            'bill_number': r.get('bill_number'),
+            'bill_date': r.get('date'),
+            'due_date': r.get('due_date'),
+            'status': r.get('status'),
+            'total': r.get('total') or 0,
+            'balance': r.get('balance') or 0,
+            'vendor_name': r.get('vendor_name') or '',
+            'vendor_id': r.get('vendor_id') or '',
+            'raw': r,
+        } for r in rows if r.get('bill_id')]
+
     def fetch_payments(self, creds, invoice_ids):
         """Zoho Books payments aren't project-scoped directly -- they're
         applied to invoices. Called with the invoice IDs already synced for
@@ -1014,6 +1041,44 @@ def sync_sales():
             return jsonify({'error': f'Could not save synced invoices: {str(e)[:300]}'}), 502
 
     return jsonify({'synced': len(invoices)})
+
+# ── Org-wide payables sync: powers the Insights "Zoho Payables" widget ──────────
+# Mirrors sync_sales above but for vendor Bills (Accounts Payable). Pulls
+# EVERY bill in the Zoho Books org, not just ones tied to a tracked Project,
+# so Insights can show a true company-wide "what do we owe, and what's due
+# soon" total. Shares the same zoho_bills table used by the per-project
+# Financial Health sync (see migration-add-zoho-payables-sync.sql): rows
+# written here never include a project_id key, so upserting a bill that's
+# already linked to a project leaves that link untouched -- only
+# vendor_name/total/balance/due_date/status/raw get refreshed.
+@app.route('/api/integrations/sync-payables', methods=['POST'])
+def sync_payables():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not is_admin(claims): return jsonify(ADMIN_ONLY), 403
+
+    company_id = claims['company_id']
+    creds = _get_creds_for(company_id, 'zoho')
+    adapter = ADAPTERS.get('zoho')
+    if not creds or not adapter or not adapter.is_configured(creds):
+        return jsonify({'error': 'Zoho Books is not connected. Connect it in Settings → Integrations first.'}), 400
+
+    try:
+        bills = adapter.fetch_all_bills(creds)
+    except Exception as e:
+        return jsonify({'error': f'Zoho payables sync failed: {str(e)[:300]}'}), 502
+
+    for b in bills:
+        b['company_id'] = company_id
+        # Deliberately no project_id key here -- see comment above.
+
+    if bills:
+        try:
+            sb.table('zoho_bills').upsert(bills, on_conflict='company_id,zoho_bill_id').execute()
+        except Exception as e:
+            return jsonify({'error': f'Could not save synced bills: {str(e)[:300]}'}), 502
+
+    return jsonify({'synced': len(bills)})
 
 # ── Loans (Insights "Loans" section) ────────────────────────────────────────────
 # See ZohoAdapter.fetch_liability_accounts/fetch_account_transactions above and

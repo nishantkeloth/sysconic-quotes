@@ -297,7 +297,7 @@ function _tabsAvailable(d){
   return {
     overview:true,
     sales:true,
-    finance:!!(d.loans||d.payables||d.bank_recon),
+    finance:!!(d.loans||d.payables||d.bank_recon||d.zoho_payables),
     projects:!!d.financial,
     service:!!d.fsm,
   };
@@ -348,6 +348,10 @@ const METRIC_CATALOGUE={
   payables_total:{label:'Total payable',def:'Sum of every vendor payment entered in the Vendor Payment Tracker across all Awarded quotes, including 5% VAT.',source:'QTcal Vendor Payment Tracker (per-quote, manual entry)',basis:'Incl. 5% VAT, AED'},
   payables_outstanding:{label:'Outstanding',def:'Vendor payments entered in the tracker that aren\'t yet marked Paid.',source:'QTcal Vendor Payment Tracker (manual entry)',basis:'Incl. 5% VAT, AED'},
   payables_paid:{label:'Paid',def:'Vendor payments entered in the tracker that have been marked Paid.',source:'QTcal Vendor Payment Tracker (manual entry)',basis:'Incl. 5% VAT, AED'},
+  zoho_payables_unpaid:{label:'Total Unpaid Bills',def:'Sum of the outstanding balance across every vendor bill in the Zoho Books org, computed live right now.',source:'Zoho Books (Bills)',basis:'Live, AED'},
+  zoho_payables_current:{label:'Current',def:'Unpaid bill balance not yet past its due date (or with no due date set).',source:'Zoho Books (Bills)',basis:'Live, AED'},
+  zoho_payables_overdue:{label:'Overdue',def:'Unpaid bill balance past its due date, as of right now.',source:'Zoho Books (Bills)',basis:'Live, AED'},
+  zoho_payables_due10:{label:'Due within 10 days',def:'Unpaid bills whose due date falls between today and 10 days from now -- QTcal\'s own addition to Zoho\'s stock Accounts Payable view, for planning what cash goes out soon.',source:'Zoho Books (Bills)',basis:'Live, AED'},
   bankrecon_reconciled:{label:'Reconciled',def:'Number of account-months where Zoho\'s own bank reconciliation record confirms the month is fully reconciled, out of every month in that account\'s history.',source:'Zoho Books reconciliation records',basis:'All history, per account'},
   bankrecon_uncategorized:{label:'Uncategorized',def:'Live count of bank-feed transactions in Zoho that haven\'t yet been categorized or matched to a book entry.',source:'Zoho Books bank feed',basis:'As of last sync'},
   active_projects:{label:'Active projects',def:'Count of Project Performance projects currently marked Active.',source:'QTcal Project Performance',basis:'Live'},
@@ -905,6 +909,62 @@ function loansSectionHTML(L){
   </div>`;
 }
 
+// Zoho Payables -- every vendor bill in the Zoho Books org, synced via
+// /api/integrations/sync-payables. Distinct from the manual, quote-linked
+// Payables section below (Vendor payment tracker): this is org-wide AP,
+// sourced straight from Zoho, not tied to any specific quote. Current/
+// Overdue mirrors Zoho's own AP dashboard widget; "Due within 10 days" is
+// QTcal's own addition -- the actual planning question of what clears soon.
+let ZOHO_PAYABLES_SYNCING_M=false;
+async function syncZohoPayablesMobile(){
+  if(ZOHO_PAYABLES_SYNCING_M)return;
+  ZOHO_PAYABLES_SYNCING_M=true; render();
+  const r=await api('POST','/api/integrations/sync-payables',{});
+  ZOHO_PAYABLES_SYNCING_M=false;
+  if(r.error){ alert('Sync failed: '+r.error); render(); return; }
+  await loadInsights(true);
+}
+function zohoPayablesSectionHTML(P){
+  const pct=P.total_unpaid?Math.round(P.total_current/P.total_unpaid*100):0;
+  return `<div class="sec">
+    <div class="sec-title"><span>📥 Zoho Payables</span><span style="font-size:12px;color:var(--gray-500);font-weight:500;cursor:pointer" onclick="syncZohoPayablesMobile()">${ZOHO_PAYABLES_SYNCING_M?'⏳':'🔄 Sync'}</span></div>
+    <div style="background:var(--white);border:1px solid var(--gray-200);border-radius:12px;padding:14px;margin-bottom:12px">
+      <div class="card-label" style="margin-bottom:6px">${mLbl('zoho_payables_unpaid','Total Unpaid Bills')}</div>
+      <div style="font-size:22px;font-weight:700;color:var(--navy);margin-bottom:8px">AED ${fmt(P.total_unpaid)}</div>
+      <div style="height:8px;border-radius:4px;overflow:hidden;display:flex;background:var(--gray-100);margin-bottom:8px">
+        <div style="width:${pct}%;background:var(--navy)"></div>
+        <div style="width:${100-pct}%;background:var(--amber)"></div>
+      </div>
+      <div style="display:flex;gap:14px;font-size:12px;flex-wrap:wrap">
+        <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--navy);margin-right:4px"></span>${mLbl('zoho_payables_current','Current')}: AED ${fmt(P.total_current)}</span>
+        <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--amber);margin-right:4px"></span>${mLbl('zoho_payables_overdue','Overdue')}: AED ${fmt(P.total_overdue)}</span>
+      </div>
+    </div>
+    <div class="cards">
+      <div class="card" style="cursor:pointer" onclick="drillZohoPayablesMobile('due10')"><div class="card-label">${mLbl('zoho_payables_due10','Due within 10 days')}</div><div class="card-val ${P.due_within_10d_count?'amber':'green'}">AED ${fmt(P.due_within_10d_total)}</div><div class="card-sub">${P.due_within_10d_count} bill(s)</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillZohoPayablesMobile('overdue')"><div class="card-label">Overdue bills</div><div class="card-val ${P.total_overdue?'red':'green'}">AED ${fmt(P.total_overdue)}</div></div>
+    </div>
+    ${P.vendors&&P.vendors.length?`<div class="list">
+      <div class="list-row-name" style="padding:6px 0;font-size:12px;color:var(--gray-500);text-transform:uppercase;font-weight:700">By vendor</div>
+      ${P.vendors.slice(0,10).map(v=>`<div class="list-row" onclick="drillZohoPayablesMobile('vendor',${esc(JSON.stringify(v.vendor))})">
+        <span class="list-row-name">${esc(v.vendor)}</span>
+        <span class="list-row-val" style="color:${v.outstanding>0?'var(--amber)':'var(--green)'}">AED ${fmt(v.outstanding)}</span>
+      </div>`).join('')}
+    </div>`:''}
+    ${P.last_synced_at?`<div style="font-size:11px;color:var(--gray-500);margin-top:8px">Last synced ${_insightsAgo(new Date(P.last_synced_at))}</div>`:''}
+  </div>`;
+}
+function drillZohoPayablesMobile(kind,vendorName){
+  const d=S.data||{}; const P=d.zoho_payables; if(!P)return;
+  const renderRow=b=>`<div class="inv-row">
+    <div class="inv-row-top"><span>${esc(b.bill_number||'Bill')}</span><span>AED ${fmt(b.balance)}</span></div>
+    <div class="inv-row-bottom"><span>${esc(b.vendor_name||'')}</span><span>Due ${b.due_date?new Date(b.due_date).toLocaleDateString():'—'}</span></div>
+  </div>`;
+  if(kind==='due10')openRecordSheet('Due within 10 days',P.due_within_10d||[],renderRow,'Soonest due date first');
+  else if(kind==='overdue')openRecordSheet('Overdue bills',(P.bills||[]).filter(b=>b.balance>0&&b.due_date&&new Date(b.due_date)<new Date()),renderRow,'Past due date, as of now');
+  else if(kind==='vendor')openRecordSheet(vendorName+' — Bills',(P.bills||[]).filter(b=>b.vendor_name===vendorName),renderRow);
+}
+
 // Payables -- aggregated from each quote's Vendor payment tracker (awarded
 // quotes only). Manually entered, not synced from Zoho -- see the backend
 // comment in api/quotes.py _build_insights_payload(). Sorted soonest-due
@@ -1155,17 +1215,24 @@ function overviewSectionHTML(d){
   const sAll=d.sales?salesFiltered(d.sales,'all'):null;
   const asOf=d.zoho_sales?_bizAsOfNow():null;
   const k=d.financial, P=(d.payables&&d.payables.items&&d.payables.items.length)?d.payables:null, f=d.fsm;
+  const ZP=(d.zoho_payables&&d.zoho_payables.bill_count)?d.zoho_payables:null;
 
   const kpis=[];
   if(sAll)kpis.push(['Awarded value','AED '+fmt(sAll.awarded_value),'navy',"goTab('sales')",'awarded_value']);
   if(sAll)kpis.push(['Win rate',sAll.win_rate_pct+'%','amber',"goTab('sales')",'win_rate']);
   if(asOf)kpis.push(['Outstanding (all invoices)','AED '+fmt(asOf.outstanding),'amber','bizDrillOutstanding()','biz_outstanding_all']);
+  if(ZP)kpis.push(['Payables due in 10 days','AED '+fmt(ZP.due_within_10d_total),ZP.due_within_10d_count?'amber':'green',"goTab('finance')",'zoho_payables_due10']);
   if(P)kpis.push(['Payables outstanding','AED '+fmt(P.total_outstanding),'amber',"goTab('finance')",'payables_outstanding']);
   if(k)kpis.push(['Projects at risk / critical',k.projects_at_risk+' / '+k.critical_projects,k.critical_projects>0?'amber':'navy',"drillProjects('risk')",'at_risk_critical']);
   if(f)kpis.push(['SLA breaches',f.sla_breaches,f.sla_breaches>0?'amber':'green',f.sla_breaches?'drillSlaBreaches()':"goTab('service')",'sla_breaches']);
 
   const today=new Date();today.setHours(0,0,0,0);
   const attn=[];
+  if(ZP){
+    (ZP.due_within_10d||[]).slice(0,4).forEach(b=>{
+      attn.push({label:b.vendor_name,sub:(b.bill_number||'')+' · due '+(b.due_date?new Date(b.due_date).toLocaleDateString():'—'),val:'AED '+fmt(b.balance),badge:'Due soon',cls:'amber',onclick:"goTab('finance')"});
+    });
+  }
   if(P){
     P.items.filter(it=>it.status!=='paid'&&it.date&&new Date(it.date)<today).slice(0,4).forEach(it=>{
       attn.push({label:it.vendor,sub:(it.quote_title||'')+' · due '+new Date(it.date).toLocaleDateString(),val:'AED '+fmt(it.amount),badge:'Overdue',cls:'red',onclick:"goTab('finance')"});
@@ -1216,6 +1283,7 @@ function tabBodyHTML(tab,d){
   }
   if(tab==='finance'){
     let b='';
+    if(d.zoho_payables&&d.zoho_payables.bill_count)b+=zohoPayablesSectionHTML(d.zoho_payables);
     if(d.payables&&d.payables.items&&d.payables.items.length)b+=payablesSectionHTML(d.payables);
     if(d.loans&&d.loans.accounts&&d.loans.accounts.length)b+=loansSectionHTML(d.loans);
     if(d.bank_recon&&d.bank_recon.accounts&&d.bank_recon.accounts.length)b+=bankReconSectionHTML(d.bank_recon);
