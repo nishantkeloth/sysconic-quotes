@@ -459,6 +459,14 @@ function bizDrillOutstanding(){
   const invoices=_bizAllInvoices().filter(_bizNonDraft).filter(inv=>(inv.balance||0)>0);
   openSheet('Current outstanding',invoices,'As of '+new Date().toLocaleString());
 }
+function bizDrillOverdue(){
+  const now=new Date();
+  const invoices=_bizAllInvoices().filter(_bizNonDraft).filter(inv=>{
+    const bal=inv.balance||0; if(bal<=0||!inv.due_date)return false;
+    return Math.floor((now-new Date(inv.due_date))/86400000)>0;
+  });
+  openSheet('Overdue invoices',invoices,'All ageing buckets, as of '+now.toLocaleString());
+}
 function downloadCsv(filename,rows){
   const escCsv=v=>{ const s=(v==null?'':String(v)); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
   const csv=rows.map(r=>r.map(escCsv).join(',')).join('\r\n');
@@ -543,6 +551,30 @@ function loginHTML(){
   </div>`;
 }
 
+// Drills a Sales & Pipeline KPI card down to the actual quotes behind it,
+// respecting whatever date range is currently selected (same quotes array
+// salesFiltered() itself filters from) rather than always showing all-time.
+function drillQuotes(status){
+  const d=S.data||{}; if(!d.sales)return;
+  const bounds=rangeBounds(S.salesRange);
+  const quotes=(d.sales.quotes||[]).filter(q=>{
+    if(status&&q.status!==status)return false;
+    if(!bounds)return true;
+    if(!q.created_at)return false;
+    const dt=new Date(q.created_at);
+    return dt>=bounds[0]&&dt<bounds[1];
+  });
+  const titles={awarded:'Awarded quotes',sent:'Pending quotes',draft:'Draft quotes','':'All quotes'};
+  openRecordSheet(titles[status||'']||'Quotes',quotes,q=>`<div class="inv-row">
+    <div class="inv-row-top"><span>${esc(q.title||'Untitled quote')}</span><span>AED ${fmt(q.total_sell)}</span></div>
+    <div class="inv-row-bottom"><span>${esc(q.customer||'')}</span><span>${q.created_at?new Date(q.created_at).toLocaleDateString():''}</span></div>
+  </div>`,rangeOptsLabel(S.salesRange));
+}
+function rangeOptsLabel(range){
+  const m={all:'All time',this_month:'This month',last_month:'Last month',this_quarter:'This quarter',last_quarter:'Last quarter',this_year:'This year',last_year:'Last year'};
+  return m[range]||'All time';
+}
+
 function salesSectionHTML(sRaw,deals){
   const s=salesFiltered(sRaw);
   const rangeOpts=[['all','All time'],['this_month','This month'],['last_month','Last month'],['this_quarter','This quarter'],['last_quarter','Last quarter'],['this_year','This year'],['last_year','Last year']];
@@ -554,11 +586,11 @@ function salesSectionHTML(sRaw,deals){
       </select>
     </div>
     <div class="cards">
-      <div class="card"><div class="card-label">Total quotes</div><div class="card-val navy">${s.total_quotes}</div><div class="card-sub">${s.awarded_count} awarded</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillQuotes('')"><div class="card-label">Total quotes</div><div class="card-val navy">${s.total_quotes}</div><div class="card-sub">${s.awarded_count} awarded</div></div>
       <div class="card"><div class="card-label">Win rate</div><div class="card-val amber">${s.win_rate_pct}%</div><div class="card-sub">of ${s.closed_count} closed</div></div>
-      <div class="card"><div class="card-label">Awarded value</div><div class="card-val green">AED ${fmt(s.awarded_value)}</div></div>
-      <div class="card"><div class="card-label">Pending value</div><div class="card-val amber">AED ${fmt(s.pending_value)}</div></div>
-      <div class="card"><div class="card-label">Draft value</div><div class="card-val navy">AED ${fmt(s.draft_value)}</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillQuotes('awarded')"><div class="card-label">Awarded value</div><div class="card-val green">AED ${fmt(s.awarded_value)}</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillQuotes('sent')"><div class="card-label">Pending value</div><div class="card-val amber">AED ${fmt(s.pending_value)}</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillQuotes('draft')"><div class="card-label">Draft value</div><div class="card-val navy">AED ${fmt(s.draft_value)}</div></div>
       <div class="card"><div class="card-label">Avg margin</div><div class="card-val green">${s.avg_margin_pct}%</div></div>
       ${deals?`<div class="card"><div class="card-label">Open deals</div><div class="card-val navy">${deals.open_count}</div><div class="card-sub">AED ${fmt(deals.open_value)}</div></div>
       <div class="card"><div class="card-label">Deals won</div><div class="card-val green">${deals.won_count}</div></div>`:''}
@@ -775,6 +807,75 @@ function loanTxnSheetHTML(){
   </div>`;
 }
 
+// ── Generic drill-down sheet ────────────────────────────────────────────
+// Universal "tap a KPI -> contributing records" mechanism (release 1 spec).
+// Unlike the invoice-specific sheet above, this takes a caller-supplied row
+// renderer so any list-shaped payload (projects, contracts, tickets, ...)
+// can drill without a bespoke sheet component per data type.
+let RECORD_SHEET=null; // {title, subtitle, rows, renderRow} | null
+function openRecordSheet(title,rows,renderRow,subtitle){ RECORD_SHEET={title,subtitle,rows:rows||[],renderRow}; render(); }
+function closeRecordSheet(){ RECORD_SHEET=null; render(); }
+function recordSheetHTML(){
+  if(!RECORD_SHEET)return '';
+  const {title,subtitle,rows,renderRow}=RECORD_SHEET;
+  return `<div class="sheet-overlay" onclick="if(event.target===this)closeRecordSheet()">
+    <div class="sheet">
+      <div class="sheet-head">
+        <div><div class="sheet-title">${esc(title)}</div>${subtitle?`<div style="font-size:12px;color:var(--gray-500);margin-top:2px">${esc(subtitle)}</div>`:''}</div>
+        <button class="sheet-close" onclick="closeRecordSheet()">✕</button>
+      </div>
+      ${rows.length?rows.map(renderRow).join(''):'<div class="center-msg">No records found.</div>'}
+    </div>
+  </div>`;
+}
+
+// Drills any Financial Health (Projects tab) KPI card down to the specific
+// projects behind it, using the full per-project rows the backend now
+// includes in d.financial.projects (see api/quotes.py).
+function drillProjects(kind){
+  const d=S.data||{}; const k=d.financial;
+  if(!k||!k.projects)return;
+  let rows=k.projects.slice(), title='Projects', subtitle='Tracked projects only';
+  if(kind==='active'){
+    rows=rows.filter(p=>p.status==='active'); title='Active projects';
+  }else if(kind==='receivables'){
+    rows=rows.filter(p=>(p.invoiced_value-p.collected_value)>0.01).sort((a,b)=>(b.invoiced_value-b.collected_value)-(a.invoiced_value-a.collected_value));
+    title='Outstanding receivables';
+  }else if(kind==='unbilled'){
+    rows=rows.filter(p=>(p.revenue_forecast-p.invoiced_value)>0.01).sort((a,b)=>(b.revenue_forecast-b.invoiced_value)-(a.revenue_forecast-a.invoiced_value));
+    title='Unbilled value';
+  }else if(kind==='cash'){
+    rows=rows.filter(p=>p.net_cash_position<0).sort((a,b)=>a.net_cash_position-b.net_cash_position);
+    title='Cash exposure'; subtitle='Negative net cash position, tracked projects only';
+  }else if(kind==='risk'){
+    rows=rows.filter(p=>p.health_status==='at_risk'||p.health_status==='critical').sort((a,b)=>(a.health_status==='critical'?0:1)-(b.health_status==='critical'?0:1));
+    title='At risk / Critical projects';
+  }
+  openRecordSheet(title,rows,p=>`<div class="inv-row">
+    <div class="inv-row-top"><span>${esc(p.name||'')}</span><span>AED ${fmt(p.revenue_forecast)}</span></div>
+    <div class="inv-row-bottom">
+      <span>${esc(p.customer||'')}</span>
+      <span>${kind==='receivables'?'AED '+fmt(p.invoiced_value-p.collected_value)+' due':kind==='unbilled'?'AED '+fmt(p.revenue_forecast-p.invoiced_value)+' unbilled':kind==='cash'?'AED '+fmt(p.net_cash_position):kind==='risk'?(p.health_status==='critical'?'Critical':'At risk'):fmt(p.forecast_gp_pct)+'% GP'}</span>
+    </div>
+  </div>`,subtitle);
+}
+function drillContracts(){
+  const d=S.data||{}; const f=d.fsm;
+  if(!f)return;
+  openRecordSheet('Contracts expiring (90 days)',f.all_expiring_contracts||[],c=>`<div class="inv-row">
+    <div class="inv-row-top"><span>${esc(c.contract_number||'Contract')}</span><span>${esc((c.contract_type||'').toUpperCase())}</span></div>
+    <div class="inv-row-bottom"><span>Expires ${c.end_date?new Date(c.end_date).toLocaleDateString():'—'}</span></div>
+  </div>`,'Soonest first');
+}
+function drillSlaBreaches(){
+  const d=S.data||{}; const f=d.fsm;
+  if(!f)return;
+  openRecordSheet('SLA breaches',f.sla_breach_list||[],t=>`<div class="inv-row">
+    <div class="inv-row-top"><span>${esc(t.ticket_number||'Ticket')}</span><span style="color:var(--red);text-transform:capitalize">${esc(t.priority||'')}</span></div>
+    <div class="inv-row-bottom"><span>${esc(t.subject||'')}</span><span>Due ${t.sla_resolution_due_at?new Date(t.sla_resolution_due_at).toLocaleString():'—'}</span></div>
+  </div>`,'Open tickets past their SLA resolution time');
+}
+
 function bankReconSectionHTML(BR){
   const monthsSet=[...new Set(BR.months.map(m=>m.month))].sort();
   if(!monthsSet.length) return '';
@@ -826,10 +927,12 @@ function financialSectionHTML(k){
       <span style="font-size:11.5px;color:var(--gray-500);font-weight:500">${k.last_synced_at?'Synced '+new Date(k.last_synced_at).toLocaleString():'tracked projects'}</span>
     </div>
     <div class="cards">
-      <div class="card"><div class="card-label">Active projects</div><div class="card-val navy">${k.active_projects}</div><div class="card-sub">AED ${fmt(k.total_active_value)}</div></div>
-      <div class="card"><div class="card-label">Portfolio GP%</div><div class="card-val green">${k.portfolio_gp_pct}%</div></div>
-      <div class="card"><div class="card-label">At risk / Critical</div><div class="card-val ${k.critical_projects>0?'amber':'navy'}">${k.projects_at_risk} / ${k.critical_projects}</div></div>
-      <div class="card"><div class="card-label">Outstanding receivables</div><div class="card-val amber">AED ${fmt(k.outstanding_receivables)}</div><div class="card-sub">tracked projects only</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillProjects('active')"><div class="card-label">Active projects</div><div class="card-val navy">${k.active_projects}</div><div class="card-sub">AED ${fmt(k.total_active_value)}</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillProjects('active')"><div class="card-label">Portfolio GP%</div><div class="card-val green">${k.portfolio_gp_pct}%</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillProjects('risk')"><div class="card-label">At risk / Critical</div><div class="card-val ${k.critical_projects>0?'amber':'navy'}">${k.projects_at_risk} / ${k.critical_projects}</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillProjects('receivables')"><div class="card-label">Outstanding receivables</div><div class="card-val amber">AED ${fmt(k.outstanding_receivables)}</div><div class="card-sub">tracked projects only</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillProjects('unbilled')"><div class="card-label">Unbilled value</div><div class="card-val navy">AED ${fmt(k.unbilled_value)}</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillProjects('cash')"><div class="card-label">Cash exposure</div><div class="card-val ${k.cash_exposure<0?'red':'green'}">AED ${fmt(k.cash_exposure)}</div></div>
     </div>
     ${k.at_risk_projects&&k.at_risk_projects.length?`<div class="list" style="margin-top:12px">
       ${k.at_risk_projects.map(p=>`<div class="list-row"><span class="list-row-name">${esc(p.name||'')}</span><span class="list-row-meta">${esc(p.customer||'')}</span><span class="attn-badge ${p.health_status==='critical'?'red':'amber'}">${p.health_status==='critical'?'Critical':'At risk'}</span></div>`).join('')}
@@ -841,9 +944,9 @@ function fsmSectionHTML(f){
   return `<div class="sec">
     <div class="sec-title"><span>🔧 AMC &amp; Field Service</span></div>
     <div class="cards">
-      <div class="card"><div class="card-label">Contracts expiring (90d)</div><div class="card-val ${f.expiring_30d?'amber':'navy'}">${f.contracts_expiring_90d}</div></div>
+      <div class="card" ${f.contracts_expiring_90d?`style="cursor:pointer" onclick="drillContracts()"`:''}><div class="card-label">Contracts expiring (90d)</div><div class="card-val ${f.expiring_30d?'amber':'navy'}">${f.contracts_expiring_90d}</div></div>
       <div class="card"><div class="card-label">Open tickets</div><div class="card-val navy">${f.open_tickets}</div></div>
-      <div class="card"><div class="card-label">SLA breaches</div><div class="card-val ${f.sla_breaches?'amber':'green'}">${f.sla_breaches}</div></div>
+      <div class="card" ${f.sla_breaches?`style="cursor:pointer" onclick="drillSlaBreaches()"`:''}><div class="card-label">SLA breaches</div><div class="card-val ${f.sla_breaches?'amber':'green'}">${f.sla_breaches}</div></div>
       <div class="card"><div class="card-label">PM visits due (7d)</div><div class="card-val amber">${f.pm_due_7d}</div></div>
     </div>
   </div>`;
@@ -885,12 +988,12 @@ function overviewSectionHTML(d){
   const k=d.financial, P=(d.payables&&d.payables.items&&d.payables.items.length)?d.payables:null, f=d.fsm;
 
   const kpis=[];
-  if(sAll)kpis.push(['Awarded value','AED '+fmt(sAll.awarded_value),'navy']);
-  if(sAll)kpis.push(['Win rate',sAll.win_rate_pct+'%','amber']);
-  if(asOf)kpis.push(['Outstanding (all invoices)','AED '+fmt(asOf.outstanding),'amber']);
-  if(P)kpis.push(['Payables outstanding','AED '+fmt(P.total_outstanding),'amber']);
-  if(k)kpis.push(['Projects at risk / critical',k.projects_at_risk+' / '+k.critical_projects,k.critical_projects>0?'amber':'navy']);
-  if(f)kpis.push(['SLA breaches',f.sla_breaches,f.sla_breaches>0?'amber':'green']);
+  if(sAll)kpis.push(['Awarded value','AED '+fmt(sAll.awarded_value),'navy',"goTab('sales')"]);
+  if(sAll)kpis.push(['Win rate',sAll.win_rate_pct+'%','amber',"goTab('sales')"]);
+  if(asOf)kpis.push(['Outstanding (all invoices)','AED '+fmt(asOf.outstanding),'amber','bizDrillOutstanding()']);
+  if(P)kpis.push(['Payables outstanding','AED '+fmt(P.total_outstanding),'amber',"goTab('finance')"]);
+  if(k)kpis.push(['Projects at risk / critical',k.projects_at_risk+' / '+k.critical_projects,k.critical_projects>0?'amber':'navy',"drillProjects('risk')"]);
+  if(f)kpis.push(['SLA breaches',f.sla_breaches,f.sla_breaches>0?'amber':'green',f.sla_breaches?'drillSlaBreaches()':"goTab('service')"]);
 
   const today=new Date();today.setHours(0,0,0,0);
   const attn=[];
@@ -901,23 +1004,23 @@ function overviewSectionHTML(d){
   }
   if(k&&k.at_risk_projects&&k.at_risk_projects.length){
     k.at_risk_projects.slice(0,4).forEach(p=>{
-      attn.push({label:p.name||'',sub:p.customer||'',val:'',badge:p.health_status==='critical'?'Critical':'At risk',cls:p.health_status==='critical'?'red':'amber',onclick:"goTab('projects')"});
+      attn.push({label:p.name||'',sub:p.customer||'',val:'',badge:p.health_status==='critical'?'Critical':'At risk',cls:p.health_status==='critical'?'red':'amber',onclick:"drillProjects('risk')"});
     });
   }
   if(asOf&&asOf.overdue>0){
-    attn.push({label:'Overdue invoices',sub:'Across all customers, all time',val:'AED '+fmt(asOf.overdue),badge:'Overdue',cls:'red',onclick:"goTab('sales');setTimeout(()=>bizDrillAging('b1_30'),0)"});
+    attn.push({label:'Overdue invoices',sub:'Across all customers, all time',val:'AED '+fmt(asOf.overdue),badge:'Overdue',cls:'red',onclick:'bizDrillOverdue()'});
   }
   if(f&&f.sla_breaches>0){
-    attn.push({label:'SLA breaches',sub:'Open field-service tickets',val:String(f.sla_breaches),badge:'Action needed',cls:'red',onclick:"goTab('service')"});
+    attn.push({label:'SLA breaches',sub:'Open field-service tickets',val:String(f.sla_breaches),badge:'Action needed',cls:'red',onclick:'drillSlaBreaches()'});
   }
   if(f&&f.contracts_expiring_90d>0){
-    attn.push({label:'Contracts expiring',sub:'Within 90 days',val:String(f.contracts_expiring_90d),badge:'Upcoming',cls:'amber',onclick:"goTab('service')"});
+    attn.push({label:'Contracts expiring',sub:'Within 90 days',val:String(f.contracts_expiring_90d),badge:'Upcoming',cls:'amber',onclick:'drillContracts()'});
   }
 
   return `<div class="sec">
     <div class="sec-title"><span>👋 Overview</span></div>
     ${kpis.length?`<div class="cards">
-      ${kpis.map(([label,val,cls])=>`<div class="card"><div class="card-label">${esc(label)}</div><div class="card-val ${cls}">${esc(String(val))}</div></div>`).join('')}
+      ${kpis.map(([label,val,cls,onclick])=>`<div class="card" style="cursor:pointer" onclick="${onclick}"><div class="card-label">${esc(label)}</div><div class="card-val ${cls}">${esc(String(val))}</div></div>`).join('')}
     </div>`:'<div class="center-msg">No data available yet.</div>'}
     ${attn.length?`<div class="card-label" style="margin:16px 2px 8px">Needs attention</div>
     <div class="list">
@@ -1003,7 +1106,8 @@ function dashboardHTML(){
     ${(!S.loading||S.data)?bottomNavHTML(d):''}
   </div>
   ${invoiceSheetHTML()}
-  ${loanTxnSheetHTML()}`;
+  ${loanTxnSheetHTML()}
+  ${recordSheetHTML()}`;
 }
 
 function render(){

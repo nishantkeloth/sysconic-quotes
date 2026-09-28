@@ -1599,14 +1599,16 @@ def _build_insights_payload(claims):
     out = {}
 
     # ── Sales & Pipeline (Quotes) ────────────────────────────────────────
-    # 'quotes' below carries the minimal per-quote fields (status/value/date)
-    # so the frontend can apply the same date-range filter (All time / This
-    # month / This quarter / This year / etc) client-side, exactly like the
-    # Zoho Sales section does with its own invoice list -- no extra round
-    # trip needed when the user just changes the range dropdown. The
+    # 'quotes' below carries the minimal per-quote fields (title/customer/
+    # status/value/date) so the frontend can apply the same date-range
+    # filter (All time / This month / This quarter / This year / etc)
+    # client-side, exactly like the Zoho Sales section does with its own
+    # invoice list -- no extra round trip needed when the user just changes
+    # the range dropdown. title/customer are included so a KPI card (e.g.
+    # "Awarded value") can drill down to the actual quotes behind it. The
     # top-level aggregates below remain the all-time totals, used for the
     # very first render before any range filter is applied.
-    qq = sb.table('quotes').select('status,total_sell,total_gp,created_at').eq('company_id', company_id)
+    qq = sb.table('quotes').select('title,customer,status,total_sell,total_gp,created_at').eq('company_id', company_id)
     if not _can_view_all_quotes(claims):
         qq = qq.eq('created_by', claims['user_id'])
     quotes = qq.execute().data or []
@@ -1631,7 +1633,12 @@ def _build_insights_payload(claims):
         'win_rate_pct': round(len(awarded) / closed_count * 100) if closed_count else 0,
         'closed_count': closed_count,
         'avg_margin_pct': round(awarded_gp / awarded_value * 1000) / 10 if awarded_value else 0,
+        # title/customer included so the UI can drill a KPI card (e.g.
+        # "Awarded value") down to the actual quotes behind it, not just
+        # recompute the aggregate.
         'quotes': [{
+            'title': q.get('title'),
+            'customer': q.get('customer'),
             'status': q.get('status'),
             'total_sell': _numf(q.get('total_sell')),
             'total_gp': _numf(q.get('total_gp')),
@@ -1797,6 +1804,19 @@ def _build_insights_payload(claims):
             'cash_exposure': sum(min(0.0, _numf(r.get('net_cash_position'))) for r in rows),
             'at_risk_projects': [{'name': r.get('name'), 'customer': r.get('customer'), 'health_status': r.get('health_status')} for r in at_risk[:6]],
             'last_synced_at': max(financial_synced_ats) if financial_synced_ats else None,
+            # Full per-project rows so the UI can drill any KPI card down to
+            # its contributing projects client-side (active list, receivables
+            # sorted by balance, unbilled sorted by gap, cash exposure) rather
+            # than the backend needing a dedicated endpoint per KPI.
+            'projects': [{
+                'name': r.get('name'), 'customer': r.get('customer'), 'status': r.get('status'),
+                'health_status': r.get('health_status'),
+                'revenue_forecast': _numf(r.get('revenue_forecast')),
+                'forecast_gp_pct': _numf(r.get('forecast_gp_pct')),
+                'invoiced_value': _numf(r.get('invoiced_value')),
+                'collected_value': _numf(r.get('collected_value')),
+                'net_cash_position': _numf(r.get('net_cash_position')),
+            } for r in rows],
         }
 
     # ── AMC & Field Service ─────────────────────────────────────────────
@@ -1814,7 +1834,7 @@ def _build_insights_payload(claims):
         exp60 = len([1 for ed, c in expiring if in30 < ed <= in60])
         exp90 = len(expiring) - exp30 - exp60
 
-        tickets = (sb.table('fsm_tickets').select('status,priority,sla_resolution_due_at')
+        tickets = (sb.table('fsm_tickets').select('ticket_number,subject,status,priority,sla_resolution_due_at')
                    .eq('company_id', company_id).eq('is_deleted', False).execute().data or [])
         open_statuses = {'new', 'acknowledged', 'assigned', 'accepted', 'travelling', 'on_site',
                           'diagnosis', 'waiting_customer', 'waiting_parts', 'waiting_approval'}
@@ -1825,6 +1845,7 @@ def _build_insights_payload(claims):
                 by_priority[t['priority']] += 1
         now_iso = now.isoformat()
         sla_breaches = [t for t in open_tickets if t.get('sla_resolution_due_at') and str(t['sla_resolution_due_at']) < now_iso]
+        sla_breaches.sort(key=lambda t: t.get('sla_resolution_due_at') or '')
 
         pm = sb.table('fsm_pm_schedules').select('is_active,next_due_date').eq('company_id', company_id).execute().data or []
         in7 = now + timedelta(days=7)
@@ -1839,6 +1860,15 @@ def _build_insights_payload(claims):
             'by_priority': by_priority,
             'sla_breaches': len(sla_breaches),
             'pm_due_7d': len(pm_due),
+            # Full (untruncated) lists for the "tap a KPI -> contributing
+            # records" drill-down -- kept separate from upcoming_renewals
+            # above (which stays capped at 6 for the existing inline preview
+            # list on desktop) since a drill sheet should show everything
+            # that makes up the count, not just a preview.
+            'all_expiring_contracts': [{'contract_number': c.get('contract_number'), 'contract_type': c.get('contract_type'),
+                                         'end_date': c.get('end_date')} for ed, c in expiring],
+            'sla_breach_list': [{'ticket_number': t.get('ticket_number'), 'subject': t.get('subject'),
+                                  'priority': t.get('priority'), 'sla_resolution_due_at': t.get('sla_resolution_due_at')} for t in sla_breaches],
         }
 
     return out
