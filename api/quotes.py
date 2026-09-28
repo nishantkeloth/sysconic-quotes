@@ -1552,18 +1552,34 @@ def _insights_parse_dt(s):
     except (ValueError, TypeError):
         return None
 
+# Deliberately NOT just has_page_access(claims, 'insightsFinance') --
+# 'insightsFinance' didn't exist before this feature shipped, so every role
+# created before today has 'insights': true/false but no 'insightsFinance'
+# key at all in its stored permissions dict. has_page_access() would treat
+# that absence as False (hidden), which would silently strip finance data
+# from every existing role's Insights view the moment this deploys, with no
+# admin action taken. Instead: if a role has never had its own
+# 'insightsFinance' value explicitly set, it inherits whatever 'insights'
+# already granted it -- unchanged behavior for every pre-existing role.
+# An admin opts a role OUT of finance visibility by explicitly unchecking
+# the new "Insights — Finance & Loans" box (see index.html Roles &
+# Permissions), which is the only thing that writes an explicit False here.
+def _has_insights_finance_access(claims):
+    if claims.get('role') == 'admin':
+        return True
+    rp = claims.get('role_permissions')
+    if rp is None:
+        return True
+    if 'insightsFinance' in rp:
+        return bool(rp['insightsFinance'])
+    return bool(rp.get('insights'))
+
 @app.route('/api/insights/summary', methods=['GET'])
 def insights_summary():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
     payload = _build_insights_payload(claims)
-    # A role that can see Insights at all (the 'insights' page key) but
-    # lacks the separate 'insightsFinance' key gets the same revenue-only
-    # view as the public share link -- see _strip_finance_sections() above.
-    # Admins, and any role with no custom role assigned at all (role_
-    # permissions is None, same fail-open default has_page_access() uses
-    # everywhere else), always see the full payload.
-    if not has_page_access(claims, 'insightsFinance'):
+    if not _has_insights_finance_access(claims):
         payload = _strip_finance_sections(payload)
     return jsonify(payload)
 
