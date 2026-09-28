@@ -118,9 +118,16 @@ const S={
   // be opened directly (a home-screen shortcut), not switched to mid-session.
   shareToken:new URLSearchParams(location.search).get('share')||null,
   data:null, loading:false, error:null, loginError:null, loggingIn:false,
-  zohoRange:'all', salesRange:'all',
+  // Period/filter selections -- remembered across app opens (see
+  // setFilter() below) so re-opening the PWA doesn't silently reset back
+  // to "All time"/"YTD" if the user had drilled into a specific period.
+  zohoRange:localStorage.getItem('qtcal_mobile_zohoRange')||'all',
+  salesRange:localStorage.getItem('qtcal_mobile_salesRange')||'all',
   sheet:null, // generic bottom sheet: {title, invoices, subtitle} | null -- see openSheet()/closeSheet()
-  bizPeriod:'ytd', bizYear:null, quotes:null,
+  bizPeriod:localStorage.getItem('qtcal_mobile_bizPeriod')||'ytd',
+  bizYear:localStorage.getItem('qtcal_mobile_bizYear')?parseInt(localStorage.getItem('qtcal_mobile_bizYear')):null,
+  bankReconYear:localStorage.getItem('qtcal_mobile_bankReconYear')?parseInt(localStorage.getItem('qtcal_mobile_bankReconYear')):undefined,
+  quotes:null,
   // Bottom-nav tab: overview|sales|finance|projects|service. Remembered
   // across app opens (same spirit as the token/user/company persistence
   // above) so re-opening the PWA lands wherever the user last was, not
@@ -298,6 +305,17 @@ function goTab(t){
   S.tab=t; localStorage.setItem('qtcal_mobile_tab',t);
   render();
   window.scrollTo(0,0);
+}
+
+// ── Filter persistence ──────────────────────────────────────────────────
+// Every period/range/year picker (Sales range, Zoho range, Business
+// Performance period+year, Bank Reconciliation year) goes through this so
+// the choice survives closing and reopening the app, same as the active
+// tab above. isNum covers the two year pickers, which store as numbers.
+function setFilter(key,val,isNum){
+  S[key]=isNum?parseInt(val):val;
+  localStorage.setItem('qtcal_mobile_'+key,String(S[key]));
+  render();
 }
 function openInvoiceSheet(customerName){
   const z=zohoFiltered(S.data&&S.data.zoho_sales)||{invoices:[]};
@@ -531,7 +549,7 @@ function salesSectionHTML(sRaw,deals){
   return `<div class="sec">
     <div class="sec-title">
       <span>📈 Sales &amp; Pipeline</span>
-      <select class="range-sel" onchange="S.salesRange=this.value;render()">
+      <select class="range-sel" onchange="setFilter('salesRange',this.value)">
         ${rangeOpts.map(([v,l])=>`<option value="${v}" ${S.salesRange===v?'selected':''}>${l}</option>`).join('')}
       </select>
     </div>
@@ -557,7 +575,7 @@ function zohoSectionHTML(zRaw){
     <div class="sec-title">
       <span>🧾 Zoho Sales</span>
       <div style="display:flex;gap:6px;align-items:center">
-        <select class="range-sel" onchange="S.zohoRange=this.value;render()">
+        <select class="range-sel" onchange="setFilter('zohoRange',this.value)">
           ${rangeOpts.map(([v,l])=>`<option value="${v}" ${S.zohoRange===v?'selected':''}>${l}</option>`).join('')}
         </select>
         ${S.shareToken?'':`<button class="icon-btn" style="background:var(--navy);width:auto;padding:0 10px;font-size:13px;font-weight:700" onclick="syncZohoSales()" ${ZOHO_SYNCING?'disabled':''}>${ZOHO_SYNCING?'⏳':'🔄 Sync'}</button>`}
@@ -601,10 +619,10 @@ function bizSectionHTML(){
     <div class="sec-title">
       <span>📊 Business Performance</span>
       <div style="display:flex;gap:6px">
-        <select class="range-sel" onchange="S.bizPeriod=this.value;render()">
+        <select class="range-sel" onchange="setFilter('bizPeriod',this.value)">
           ${periodOpts.map(([v,l])=>`<option value="${v}" ${mode===v?'selected':''}>${l}</option>`).join('')}
         </select>
-        ${mode!=='all'?`<select class="range-sel" onchange="S.bizYear=parseInt(this.value);render()">
+        ${mode!=='all'?`<select class="range-sel" onchange="setFilter('bizYear',this.value,true)">
           ${availYears.map(y=>`<option value="${y}" ${curYear===y?'selected':''}>FY${y}</option>`).join('')}
         </select>`:''}
       </div>
@@ -779,7 +797,7 @@ function bankReconSectionHTML(BR){
   return `<div class="sec">
     <div class="sec-title">
       <span>📒 Bank Reconciliation</span>
-      <select class="range-sel" onchange="S.bankReconYear=parseInt(this.value);render()">
+      <select class="range-sel" onchange="setFilter('bankReconYear',this.value,true)">
         ${years.map(y=>`<option value="${y}" ${selYear===y?'selected':''}>${y}</option>`).join('')}
       </select>
     </div>
