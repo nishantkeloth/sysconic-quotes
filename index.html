@@ -3209,7 +3209,7 @@ function draw(){
   if(A.page==='team'){setTimeout(loadTeam,50);}
   if(A.page==='integrations'){setTimeout(loadIntegrations,50);setTimeout(loadSyncConfig,50);}
   if(A.page==='platform'){setTimeout(loadPlatformCompanies,50);}
-  if(A.page==='companyProfile'){setTimeout(loadCompanyProfile,50);setTimeout(loadQuoteNumbering,50);if(hasFeature('delivery_challans'))setTimeout(loadDcNumbering,50);setTimeout(loadSelfServeAddons,50);setTimeout(loadInsightsShareLink,50);}
+  if(A.page==='companyProfile'){setTimeout(loadCompanyProfile,50);setTimeout(loadQuoteNumbering,50);if(hasFeature('delivery_challans'))setTimeout(loadDcNumbering,50);if(hasFeature('vouchers'))setTimeout(loadRvNumbering,50);setTimeout(loadSelfServeAddons,50);setTimeout(loadInsightsShareLink,50);}
   if(A.page==='zohoReconciliation'){setTimeout(loadLoanAccountsBox,50);setTimeout(loadBankReconBox,50);}
   if(A.page==='zohoReport'){setTimeout(loadZrPage,50);}
   if(A.page==='rolesPermissions'){setTimeout(loadRolesPermissions,50);}
@@ -3218,6 +3218,11 @@ function draw(){
   if(A.page==='products')setTimeout(loadProducts,50);
   if(A.page==='customers')setTimeout(loadCustomersPage,50);
   if(A.page==='vouchers')setTimeout(loadVouchersPage,50);
+  if(A.page==='receiptVouchers'&&A.rvList==null)setTimeout(loadReceiptVouchers,50);
+  if(A.page==='receiptVoucherDetail'&&A.rvDetail==null){
+    if(A.rvDetailId)setTimeout(function(){loadReceiptVoucherDetail(A.rvDetailId);},50);
+    else setTimeout(initNewReceiptVoucher,50);
+  }
   if(A.page==='projects'&&A.projects==null)setTimeout(loadProjectsPage,50);
   if(A.page==='fsm'&&A.fsmTickets==null)setTimeout(loadFSMPage,50);
   if(A.page==='fsmDetail'&&A.fsmDetail==null)setTimeout(function(){loadFSMDetail(A.fsmDetailId);},50);
@@ -3719,7 +3724,8 @@ function appHTML(){
         hasFeature('delivery_challans')&&hasPageAccess('deliveryChallans')?`<div class="sb-item ${(A.page==='deliveryChallans'||A.page==='deliveryChallanDetail')?'active':''}" onclick="${nav('deliveryChallans')}"><span class="sb-icon">🚚</span>Delivery Challans</div>`:''
       ])}
       ${sbGroupHTML('finance','Finance',[
-        hasFeature('vouchers')&&hasPageAccess('vouchers')?`<div class="sb-item ${A.page==='vouchers'?'active':''}" onclick="${nav('vouchers')}"><span class="sb-icon">🧾</span>Payment Vouchers</div>`:''
+        hasFeature('vouchers')&&hasPageAccess('vouchers')?`<div class="sb-item ${A.page==='vouchers'?'active':''}" onclick="${nav('vouchers')}"><span class="sb-icon">🧾</span>Payment Vouchers</div>`:'',
+        hasFeature('vouchers')&&hasPageAccess('receiptVouchers')?`<div class="sb-item ${(A.page==='receiptVouchers'||A.page==='receiptVoucherDetail')?'active':''}" onclick="${nav('receiptVouchers')}"><span class="sb-icon">🧾</span>Receipt Vouchers</div>`:''
       ])}
       ${sbGroupHTML('projects','Projects',[
         hasFeature('projects')&&hasPageAccess('projects')?`<div class="sb-item ${A.page==='projects'?'active':''}" onclick="${nav('projects')}"><span class="sb-icon">📁</span>Projects</div>`:'',
@@ -3773,6 +3779,8 @@ function appHTML(){
   else if(A.page==='products')pageContent=productsHTML();
   else if(A.page==='customers')pageContent=customersHTML();
   else if(A.page==='vouchers')pageContent=vouchersHTML();
+  else if(A.page==='receiptVouchers')pageContent=receiptVouchersHTML();
+  else if(A.page==='receiptVoucherDetail')pageContent=receiptVoucherDetailHTML();
   else if(A.page==='projects')pageContent=projectsHTML();
   else if(A.page==='fsm')pageContent=fsmHTML();
   else if(A.page==='fsmDetail')pageContent=fsmDetailHTML();
@@ -7302,6 +7310,228 @@ async function saveVoucherModal(){
   if(warnings.length)alert(warnings.join(' '));
 }
 
+// ── Receipt Vouchers (money received -- counterpart to Payment Vouchers
+//    above, but no approval workflow: create & print directly, like a
+//    physical receipt book). See api/receipt_vouchers.py and
+//    migration-add-receipt-vouchers.sql. ─────────────────────────────────────
+const RV_PAYMENT_METHOD_LABELS={cash:'Cash',cheque:'Cheque',bank_transfer:'Bank transfer',card:'Card'};
+
+// Number-to-words for the printed voucher's "The Sum of Dhs. ... Only."
+// line -- nothing like this existed in the codebase yet. Handles up to
+// billions (more than enough for any voucher amount) and splits the
+// fractional part into the currency's minor unit (Fils for AED, Cents for
+// USD/EUR, etc; falls back to a generic "point" phrase for an unlisted
+// currency rather than guessing a minor-unit name).
+const _NUM_WORDS_ONES=['','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten',
+  'Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen','Seventeen','Eighteen','Nineteen'];
+const _NUM_WORDS_TENS=['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety'];
+function _numWordsBelowThousand(n){
+  if(n===0)return'';
+  if(n<20)return _NUM_WORDS_ONES[n];
+  if(n<100)return _NUM_WORDS_TENS[Math.floor(n/10)]+(n%10?' '+_NUM_WORDS_ONES[n%10]:'');
+  return _NUM_WORDS_ONES[Math.floor(n/100)]+' Hundred'+(n%100?' '+_numWordsBelowThousand(n%100):'');
+}
+function numberToWords(n){
+  n=Math.floor(Math.abs(n));
+  if(n===0)return'Zero';
+  const groups=[[1e9,'Billion'],[1e6,'Million'],[1e3,'Thousand'],[1,'']];
+  let out=[],rem=n;
+  for(const[size,label]of groups){
+    if(rem>=size){
+      const count=Math.floor(rem/size);
+      rem-=count*size;
+      out.push(_numWordsBelowThousand(count)+(label?' '+label:''));
+    }
+  }
+  return out.join(' ').replace(/\s+/g,' ').trim();
+}
+const CURRENCY_UNIT_NAMES={AED:['Dirham','Fils'],USD:['Dollar','Cent'],EUR:['Euro','Cent'],GBP:['Pound','Pence'],
+  SAR:['Riyal','Halala'],QAR:['Riyal','Dirham'],INR:['Rupee','Paisa'],OMR:['Rial','Baisa'],KWD:['Dinar','Fils'],BHD:['Dinar','Fils']};
+function amountInWords(amount,currency){
+  amount=Number(amount)||0;
+  const whole=Math.floor(amount);
+  const frac=Math.round((amount-whole)*100);
+  const units=CURRENCY_UNIT_NAMES[(currency||'AED').toUpperCase()];
+  const majorName=units?units[0]+(whole===1?'':'s'):(currency||'').toUpperCase();
+  let phrase=numberToWords(whole)+' '+majorName;
+  if(frac>0){
+    const minorName=units?units[1]+(frac===1?'':'s'):'Cents';
+    phrase+=' and '+numberToWords(frac)+' '+minorName;
+  }
+  return phrase+' Only';
+}
+
+async function loadReceiptVouchers(){
+  const qs=A.rvSearchQuery?('?search='+encodeURIComponent(A.rvSearchQuery)):'';
+  const r=await api('GET','/api/receipt_vouchers'+qs);
+  if(r.error){A.rvList=[];alert(r.error);draw();return;}
+  A.rvList=r.receipts||[];draw();
+}
+function rvSetSearch(val){A.rvSearchQuery=val;A.rvList=null;draw();loadReceiptVouchers();}
+
+function receiptVouchersHTML(){
+  const list=A.rvList;
+  const rows=(list||[]).map(v=>`<tr style="border-bottom:1px solid var(--gray-100);cursor:pointer" onclick="A.page='receiptVoucherDetail';A.rvDetailId='${v.id}';A.rvDetail=null;draw()">
+    <td style="padding:8px;font-weight:600">${esc(v.receipt_number)}</td>
+    <td style="padding:8px">${v.receipt_date?new Date(v.receipt_date).toLocaleDateString():''}</td>
+    <td style="padding:8px">${esc(v.received_from||'')}</td>
+    <td style="padding:8px">${esc(RV_PAYMENT_METHOD_LABELS[v.payment_method]||v.payment_method)}</td>
+    <td style="padding:8px;text-align:right;font-weight:600">${esc(v.currency||'AED')} ${fmt(v.amount)}</td>
+  </tr>`).join('');
+  return `<div style="font-size:12px;color:var(--gray-500);margin-bottom:4px">Finance / Receipt Vouchers</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Record money received from a customer -- cash, cheque, bank transfer, or card -- and print a numbered receipt. No approval step; each one is final once saved, same as a physical receipt book.</div>
+  <div class="card" style="max-width:1250px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+      <input class="iinput" placeholder="Search receipt # or received-from" style="max-width:260px" onkeydown="if(event.key==='Enter')rvSetSearch(this.value)">
+      <button class="btn btn-navy" onclick="A.page='receiptVoucherDetail';A.rvDetailId=null;A.rvDetail=null;draw()">+ New Receipt Voucher</button>
+    </div>
+    <div style="background:#fff;border-radius:10px;overflow:auto">
+      ${list==null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
+      :!list.length?`<div style="padding:22px;color:var(--gray-500)">No receipt vouchers yet — create your first one above.</div>`
+      :`<table style="width:100%;border-collapse:collapse;font-size:14px">
+        <thead><tr style="text-align:left;border-bottom:1px solid var(--gray-200)">
+          <th style="padding:8px">Receipt #</th><th style="padding:8px">Date</th><th style="padding:8px">Received from</th><th style="padding:8px">Method</th><th style="padding:8px;text-align:right">Amount</th>
+        </tr></thead><tbody>${rows}</tbody></table>`}
+    </div>
+  </div>`;
+}
+
+function initNewReceiptVoucher(){
+  A.rvDetail={id:null,receipt_date:new Date().toISOString().slice(0,10),received_from:'',amount:'',
+    currency:'AED',payment_method:'cash',cheque_number:'',bank_name:'',project_id:'',notes:''};
+  if(A.projects==null)loadProjectsPage();
+  draw();
+}
+async function loadReceiptVoucherDetail(id){
+  const r=await api('GET','/api/receipt_vouchers/'+id);
+  if(r.error){alert(r.error);A.page='receiptVouchers';draw();return;}
+  A.rvDetail=r;A.rvDetailId=r.id;
+  if(A.projects==null)loadProjectsPage();
+  draw();
+}
+function rvOnProjectChange(projectId){
+  A.rvDetail.project_id=projectId;
+  const project=(A.projects||[]).find(p=>p.id===projectId);
+  if(project&&project.customer)A.rvDetail.received_from=project.customer;
+  draw();
+}
+async function saveReceiptVoucher(){
+  const d=A.rvDetail;
+  if(!(d.received_from||'').trim()){alert('Received from is required');return;}
+  if(!d.amount||Number(d.amount)<=0){alert('Enter an amount greater than 0');return;}
+  const body={
+    receipt_date:d.receipt_date,received_from:d.received_from,amount:Number(d.amount),currency:d.currency||'AED',
+    payment_method:d.payment_method,cheque_number:d.payment_method==='cheque'?(d.cheque_number||null):null,
+    bank_name:d.bank_name||null,project_id:d.project_id||null,notes:d.notes||null,
+  };
+  const r=d.id?await api('PUT','/api/receipt_vouchers/'+d.id,body):await api('POST','/api/receipt_vouchers',body);
+  if(r.error){alert(r.error);return;}
+  A.rvDetail=r;A.rvDetailId=r.id;A.rvList=null;draw();
+}
+async function deleteReceiptVoucher(){
+  if(!confirm('Delete this receipt voucher? This cannot be undone.'))return;
+  const r=await api('DELETE','/api/receipt_vouchers/'+A.rvDetail.id);
+  if(r.error){alert(r.error);return;}
+  A.page='receiptVouchers';A.rvDetail=null;A.rvList=null;draw();loadReceiptVouchers();
+}
+
+function receiptVoucherDetailHTML(){
+  const d=A.rvDetail;
+  if(!d)return `<div style="padding:24px;color:var(--gray-500)">Loading…</div>`;
+  const isNew=!d.id;
+  const projectOpts=(A.projects||[]).map(p=>`<option value="${p.id}" ${d.project_id===p.id?'selected':''}>${esc(p.name)}</option>`).join('');
+  const field=(label,inputHtml)=>`<div><div style="font-size:12px;color:var(--gray-500);margin-bottom:4px">${label}</div>${inputHtml}</div>`;
+
+  const headerGrid=`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+      ${field('Receipt date',`<input class="iinput" type="date" value="${d.receipt_date||''}" onchange="A.rvDetail.receipt_date=this.value">`)}
+      ${field('Project (optional)',`<select class="iinput" onchange="rvOnProjectChange(this.value)">${A.projects==null?'<option>Loading…</option>':'<option value="">— none —</option>'+projectOpts}</select>`)}
+      ${field('Received from',`<input class="iinput" placeholder="Mr./M/s. company or person name" value="${esc(d.received_from||'')}" oninput="A.rvDetail.received_from=this.value">`)}
+      ${field('Amount',`<div style="display:flex;gap:8px"><input class="iinput" style="width:80px" value="${esc(d.currency||'AED')}" oninput="A.rvDetail.currency=this.value.toUpperCase();draw()"><input class="iinput" type="number" min="0" step="0.01" value="${d.amount||''}" oninput="A.rvDetail.amount=this.value;draw()"></div>`)}
+      ${field('Payment method',`<select class="iinput" onchange="A.rvDetail.payment_method=this.value;draw()">${Object.entries(RV_PAYMENT_METHOD_LABELS).map(([k,l])=>`<option value="${k}" ${d.payment_method===k?'selected':''}>${l}</option>`).join('')}</select>`)}
+      ${d.payment_method==='cheque'?field('Cheque number',`<input class="iinput" value="${esc(d.cheque_number||'')}" oninput="A.rvDetail.cheque_number=this.value">`):''}
+      ${field('Bank'+(d.payment_method==='cheque'?'':' (optional)'),`<input class="iinput" value="${esc(d.bank_name||'')}" oninput="A.rvDetail.bank_name=this.value">`)}
+    </div>
+    <div style="margin-top:12px">${field('Notes (optional)',`<textarea class="iinput" rows="2" oninput="A.rvDetail.notes=this.value">${esc(d.notes||'')}</textarea>`)}</div>
+    ${d.amount&&Number(d.amount)>0?`<div style="margin-top:10px;font-size:13px;color:var(--gray-500)">The Sum of ${esc(d.currency||'AED')}. ${esc(amountInWords(d.amount,d.currency))}.</div>`:''}`;
+
+  const actions=[`<button class="btn btn-navy" onclick="saveReceiptVoucher()">${isNew?'Create receipt voucher':'Save changes'}</button>`];
+  if(!isNew){
+    actions.push(`<button class="btn" onclick="downloadReceiptVoucherPDF()">📄 Download PDF</button>`);
+    actions.push(`<button class="idel" style="padding:8px 14px" onclick="deleteReceiptVoucher()">Delete</button>`);
+  }
+
+  return `<div style="padding:24px;max-width:900px">
+    <button class="btn" style="margin-bottom:12px" onclick="A.page='receiptVouchers';A.rvDetail=null;draw();loadReceiptVouchers()">← Back to Receipt Vouchers</button>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0">${isNew?'New receipt voucher':esc(d.receipt_number)}</h2>
+    </div>
+    <div class="card">${headerGrid}</div>
+    <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">${actions.join('')}</div>
+  </div>`;
+}
+
+function receiptVoucherPdfHTML(d){
+  const logoHTML=PRINTCO?.logo_url?`<img src="${esc(PRINTCO.logo_url)}" alt="" class="stamp">`:'';
+  const project=(A.projects||[]).find(p=>p.id===d.project_id);
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+    @page{size:A4;margin:15mm 15mm 15mm 15mm}
+    body{font-family:Arial,Helvetica,sans-serif;color:#1a1f2b;margin:0;padding:20px 30px;font-size:14px}
+    .title-row{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:28px}
+    .title-row h1{font-size:28px;margin:0;font-weight:400}
+    .title-row .num{font-size:22px}
+    .line{margin-bottom:22px;line-height:1.6}
+    .line label{display:inline-block;min-width:150px}
+    .fill{border-bottom:1px dotted #333;padding:0 6px 2px;display:inline-block}
+    .row3{display:flex;align-items:baseline;gap:6px;margin-bottom:14px}
+    .row3 .fill{flex:1}
+    .cheque-note{font-size:13px;margin:18px 0}
+    .sign-row{display:flex;justify-content:space-between;margin-top:70px;font-size:13px}
+    .stamp{max-height:110px;max-width:170px;object-fit:contain;margin-top:40px}
+  </style></head><body>
+    <div class="title-row"><h1>Receipt Voucher</h1><div class="num">No: ${esc(d.receipt_number)}</div></div>
+
+    <div class="line">Received from Mr./M/s. <span class="fill">${esc(d.received_from||'')}</span></div>
+    <div class="line">The Sum of ${esc(d.currency||'AED')}. ${esc(amountInWords(d.amount,d.currency))}.${project?` <span style="color:#667085;font-size:12px">(${esc(project.name)})</span>`:''}</div>
+
+    <div class="row3">
+      <span>By ${esc(RV_PAYMENT_METHOD_LABELS[d.payment_method]||d.payment_method)}${d.payment_method==='cheque'?' / Cheque No.':''}</span>
+      <span class="fill">${d.payment_method==='cheque'?esc(d.cheque_number||''):''}</span>
+      <span>Date</span>
+      <span class="fill" style="flex:0 0 140px">${d.receipt_date?new Date(d.receipt_date).toLocaleDateString():''}</span>
+    </div>
+    <div class="row3"><span>Bank</span><span class="fill">${esc(d.bank_name||'')}</span></div>
+
+    ${d.payment_method==='cheque'?`<div class="cheque-note">Subject to Realization of Cheque</div>`:''}
+    ${d.notes?`<div class="line" style="font-size:12.5px;color:#374151">${esc(d.notes)}</div>`:''}
+
+    <div class="sign-row">
+      <div>Accountant Signature ..........................................</div>
+      <div>Receiver's Signature ..........................................</div>
+    </div>
+    ${logoHTML}
+  </body></html>`;
+}
+
+async function downloadReceiptVoucherPDF(){
+  const d=A.rvDetail;
+  if(!d||!d.id){alert('Save the receipt voucher before downloading a PDF.');return;}
+  const btn=event?.target;
+  if(btn){btn.disabled=true;btn.textContent='⏳ Generating…';}
+  try{
+    await ensurePrintCompany();
+    if(A.projects==null)await loadProjectsPage();
+    const html=receiptVoucherPdfHTML(d);
+    const r=await api2Blob('/api/pdf/render2',{html,filename:`${d.receipt_number}.pdf`});
+    if(!r)return;
+    const{blob,filename}=r;
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);a.download=filename;
+    document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+  }catch(e){alert('Could not generate the PDF.');}
+  finally{if(btn){btn.disabled=false;btn.textContent='📄 Download PDF';}}
+}
+
 // ── Deals (lightweight CRM pipeline that feeds into Quotes) ───────────────────
 let DEALS={list:[],stages:[],dragId:null};
 
@@ -7886,7 +8116,7 @@ function importVendorsMaster(event){
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────
-const RBAC_PAGE_LABELS = {insights:'Insights',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service',myJobs:'My Jobs (Engineer)',deliveryChallans:'Delivery Challans',vouchers:'Payment Vouchers',workflowSettings:'Workflow Settings',zohoReconciliation:'Zoho — Reconciliation',zohoReport:'Zoho — Report'};
+const RBAC_PAGE_LABELS = {insights:'Insights',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service',myJobs:'My Jobs (Engineer)',deliveryChallans:'Delivery Challans',vouchers:'Payment Vouchers',receiptVouchers:'Receipt Vouchers',workflowSettings:'Workflow Settings',zohoReconciliation:'Zoho — Reconciliation',zohoReport:'Zoho — Report'};
 let RBAC_PAGE_KEYS_FE = [];
 let RBAC_ROLES_CACHE = [];
 
@@ -7979,6 +8209,11 @@ ${hasFeature('delivery_challans')?`<div class="card" style="max-width:640px;marg
   <div class="card-title">Delivery Challan numbering</div>
   <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">New delivery challans get an auto-generated reference like DC-2026-0001. The counter resets every calendar year. Admin only.</div>
   <div id="dcnBox"><div style="color:var(--gray-500)">Loading…</div></div>
+</div>`:''}
+${hasFeature('vouchers')?`<div class="card" style="max-width:640px;margin-top:16px">
+  <div class="card-title">Receipt Voucher numbering</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">New receipt vouchers get an auto-generated reference like RV-2026-0001. The counter resets every calendar year. Admin only.</div>
+  <div id="rvnBox"><div style="color:var(--gray-500)">Loading…</div></div>
 </div>`:''}
 <div class="card" style="max-width:640px;margin-top:16px">
   <div class="card-title">Add-ons</div>
@@ -8265,6 +8500,60 @@ async function addDcYearRange(){
   const r=await api('PATCH','/api/delivery_challans/numbering',{year,next_number});
   if(r.error){alert(r.error);return;}
   loadDcNumbering();
+}
+let RVN={};
+async function loadRvNumbering(){
+  const el=document.getElementById('rvnBox');if(!el)return;
+  const r=await api('GET','/api/receipt_vouchers/numbering');
+  if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  RVN=r;
+  const seqByYear={};(r.sequences||[]).forEach(s=>seqByYear[s.year]=s.next_number);
+  if(!(r.current_year in seqByYear))seqByYear[r.current_year]=1;
+  const years=Object.keys(seqByYear).map(Number).sort((a,b)=>b-a);
+  el.innerHTML=`
+    <div style="display:flex;gap:12px">
+      <div class="fld" style="max-width:160px"><label>Prefix</label><input id="rvnPrefix" maxlength="20" value="${esc(r.prefix)}"></div>
+      <div class="fld" style="max-width:160px"><label>Digits (zero-padding)</label><input id="rvnPadding" type="number" min="1" max="6" value="${esc(r.padding)}"></div>
+    </div>
+    <button class="btn btn-navy btn-sm" onclick="saveRvNumberingFormat()">Save format</button>
+
+    <div style="font-weight:600;font-size:14px;margin:18px 0 10px;border-top:1px solid var(--gray-100);padding-top:16px">Number ranges by year</div>
+    ${years.map(y=>`<div style="display:flex;gap:10px;align-items:center;margin-bottom:8px">
+      <span style="width:60px;font-weight:600">${y}${y===r.current_year?' (current)':''}</span>
+      <span style="color:var(--gray-500);font-size:13px">Next number:</span>
+      <input id="rvnNext_${y}" type="number" min="1" value="${seqByYear[y]}" style="width:110px">
+      <button class="btn btn-sm" onclick="saveRvYearNumber(${y})">Save</button>
+      <span style="font-size:12px;color:var(--gray-500)">→ next ref will be ${esc(r.prefix)}-${y}-${String(seqByYear[y]).padStart(r.padding,'0')}</span>
+    </div>`).join('')}
+
+    <div style="display:flex;gap:10px;align-items:center;margin-top:12px;border-top:1px solid var(--gray-100);padding-top:14px">
+      <span style="font-size:13px;color:var(--gray-500)">Pre-set a year:</span>
+      <input id="rvnNewYear" type="number" placeholder="2027" style="width:90px">
+      <input id="rvnNewStart" type="number" min="1" placeholder="Starting number" style="width:130px">
+      <button class="btn btn-sm" onclick="addRvYearRange()">Add</button>
+    </div>
+  `;
+}
+async function saveRvNumberingFormat(){
+  const prefix=document.getElementById('rvnPrefix').value;
+  const padding=document.getElementById('rvnPadding').value;
+  const r=await api('PATCH','/api/receipt_vouchers/numbering',{prefix,padding});
+  if(r.error){alert(r.error);return;}
+  RVN=r;loadRvNumbering();
+}
+async function saveRvYearNumber(year){
+  const next_number=document.getElementById('rvnNext_'+year).value;
+  const r=await api('PATCH','/api/receipt_vouchers/numbering',{year,next_number});
+  if(r.error){alert(r.error);return;}
+  loadRvNumbering();
+}
+async function addRvYearRange(){
+  const year=document.getElementById('rvnNewYear').value;
+  const next_number=document.getElementById('rvnNewStart').value;
+  if(!year||!next_number){alert('Enter both a year and a starting number.');return;}
+  const r=await api('PATCH','/api/receipt_vouchers/numbering',{year,next_number});
+  if(r.error){alert(r.error);return;}
+  loadRvNumbering();
 }
 let CP={logo_url:''};
 async function loadCompanyProfile(){
