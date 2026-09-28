@@ -7446,7 +7446,7 @@ function receiptVoucherDetailHTML(){
       ${field('Receipt date',`<input class="iinput" type="date" value="${d.receipt_date||''}" onchange="A.rvDetail.receipt_date=this.value">`)}
       ${field('Project (optional)',`<select class="iinput" onchange="rvOnProjectChange(this.value)">${A.projects==null?'<option>Loading…</option>':'<option value="">— none —</option>'+projectOpts}</select>`)}
       ${field('Received from',`<input class="iinput" placeholder="Mr./M/s. company or person name" value="${esc(d.received_from||'')}" oninput="A.rvDetail.received_from=this.value">`)}
-      ${field('Amount',`<div style="display:flex;gap:8px"><input class="iinput" style="width:80px" value="${esc(d.currency||'AED')}" oninput="A.rvDetail.currency=this.value.toUpperCase();draw()"><input class="iinput" type="number" min="0" step="0.01" value="${d.amount||''}" oninput="A.rvDetail.amount=this.value;draw()"></div>`)}
+      ${field('Amount',`<div style="display:flex;gap:8px"><input id="rvCurrency" class="iinput" style="width:80px" value="${esc(d.currency||'AED')}" oninput="A.rvDetail.currency=this.value.toUpperCase();draw()"><input id="rvAmount" class="iinput" type="number" min="0" step="0.01" value="${d.amount||''}" oninput="A.rvDetail.amount=this.value;draw()"></div>`)}
       ${field('Payment method',`<select class="iinput" onchange="A.rvDetail.payment_method=this.value;draw()">${Object.entries(RV_PAYMENT_METHOD_LABELS).map(([k,l])=>`<option value="${k}" ${d.payment_method===k?'selected':''}>${l}</option>`).join('')}</select>`)}
       ${d.payment_method==='cheque'?field('Cheque number',`<input class="iinput" value="${esc(d.cheque_number||'')}" oninput="A.rvDetail.cheque_number=this.value">`):''}
       ${field('Bank'+(d.payment_method==='cheque'?'':' (optional)'),`<input class="iinput" value="${esc(d.bank_name||'')}" oninput="A.rvDetail.bank_name=this.value">`)}
@@ -7471,7 +7471,7 @@ function receiptVoucherDetailHTML(){
 }
 
 function receiptVoucherPdfHTML(d){
-  const logoHTML=PRINTCO?.logo_url?`<img src="${esc(PRINTCO.logo_url)}" alt="" class="stamp">`:'';
+  const sealHTML=PRINTCO?.voucher_seal_url?`<img src="${esc(PRINTCO.voucher_seal_url)}" alt="" class="stamp">`:'';
   const project=(A.projects||[]).find(p=>p.id===d.project_id);
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
     @page{size:A4;margin:15mm 15mm 15mm 15mm}
@@ -7508,7 +7508,7 @@ function receiptVoucherPdfHTML(d){
       <div>Accountant Signature ..........................................</div>
       <div>Receiver's Signature ..........................................</div>
     </div>
-    ${logoHTML}
+    ${sealHTML}
   </body></html>`;
 }
 
@@ -8214,6 +8214,15 @@ ${hasFeature('vouchers')?`<div class="card" style="max-width:640px;margin-top:16
   <div class="card-title">Receipt Voucher numbering</div>
   <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">New receipt vouchers get an auto-generated reference like RV-2026-0001. The counter resets every calendar year. Admin only.</div>
   <div id="rvnBox"><div style="color:var(--gray-500)">Loading…</div></div>
+  <div style="margin-top:18px;border-top:1px solid var(--gray-100);padding-top:14px">
+    <div style="font-weight:600;font-size:13px;margin-bottom:8px">Seal / stamp for printed vouchers</div>
+    <div style="display:flex;align-items:center;gap:16px">
+      <div style="width:80px;height:80px;border:1.5px solid var(--gray-200);border-radius:50%;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#fafbfc" id="rvSealPreview">
+        ${CP.voucher_seal_url?`<img src="${esc(CP.voucher_seal_url)}" style="max-width:100%;max-height:100%">`:`<span style="font-size:10px;color:var(--gray-500);text-align:center">Loading…</span>`}
+      </div>
+      <label class="btn btn-sm" style="cursor:pointer">Upload seal<input type="file" accept="image/png,image/jpeg,image/webp" style="display:none" onchange="uploadVoucherSeal(event)"></label>
+    </div>
+  </div>
 </div>`:''}
 <div class="card" style="max-width:640px;margin-top:16px">
   <div class="card-title">Add-ons</div>
@@ -8555,12 +8564,14 @@ async function addRvYearRange(){
   if(r.error){alert(r.error);return;}
   loadRvNumbering();
 }
-let CP={logo_url:''};
+let CP={logo_url:'',voucher_seal_url:''};
 async function loadCompanyProfile(){
   const el=document.getElementById('cpBox');if(!el)return;
   const r=await api('GET','/api/auth/company-profile');
   if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
-  const p=r.profile||{};CP.logo_url=p.logo_url||'';
+  const p=r.profile||{};CP.logo_url=p.logo_url||'';CP.voucher_seal_url=p.voucher_seal_url||'';
+  const sealEl=document.getElementById('rvSealPreview');
+  if(sealEl)sealEl.innerHTML=CP.voucher_seal_url?`<img src="${esc(CP.voucher_seal_url)}" style="max-width:100%;max-height:100%">`:`<span style="font-size:10px;color:var(--gray-500);text-align:center">No seal</span>`;
   el.innerHTML=`
     <div style="display:flex;align-items:center;gap:16px;margin-bottom:18px">
       <div style="width:72px;height:72px;border:1.5px solid var(--gray-200);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;overflow:hidden;background:#fafbfc" id="cpLogoPreview">
@@ -8622,6 +8633,18 @@ async function uploadCompanyLogo(event){
     CP.logo_url=r.logo_url;
     const el=document.getElementById('cpLogoPreview');
     if(el)el.innerHTML=`<img src="${esc(r.logo_url)}" style="max-width:100%;max-height:100%">`;
+  };
+  reader.readAsDataURL(file);
+}
+async function uploadVoucherSeal(event){
+  const file=event.target.files[0];if(!file)return;event.target.value='';
+  const reader=new FileReader();
+  reader.onload=async function(e){
+    const r=await api('POST','/api/auth/company-profile/voucher-seal',{data:e.target.result,content_type:file.type});
+    if(r.error){alert(r.error);return;}
+    CP.voucher_seal_url=r.voucher_seal_url;
+    const el=document.getElementById('rvSealPreview');
+    if(el)el.innerHTML=`<img src="${esc(r.voucher_seal_url)}" style="max-width:100%;max-height:100%">`;
   };
   reader.readAsDataURL(file);
 }

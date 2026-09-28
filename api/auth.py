@@ -944,7 +944,7 @@ def update_invite_can_view_all_quotes(token):
 # review. Editing is admin-only; any logged-in user can read it (needed so the
 # PDF/proposal generation flow can pull it for the current company).
 COMPANY_PROFILE_FIELDS = [
-    'legal_name', 'address', 'trn', 'phone', 'website', 'logo_url',
+    'legal_name', 'address', 'trn', 'phone', 'website', 'logo_url', 'voucher_seal_url',
     'bank_name', 'bank_account_name', 'bank_account_no', 'bank_iban', 'bank_swift', 'bank_branch',
     'certifications', 'founded_year', 'notable_clients',
     'about_us_text', 'why_us_bullets', 'scope_ours_bullets', 'scope_client_bullets', 'warranty_text',
@@ -1012,7 +1012,7 @@ def update_company_profile():
         d = request.json or {}
         update = {}
         for f in COMPANY_PROFILE_FIELDS:
-            if f in d and f != 'logo_url':  # logo is set separately via the upload endpoint
+            if f in d and f not in ('logo_url', 'voucher_seal_url'):  # both are set separately via their own upload endpoints
                 if f == 'founded_year':
                     # This is an integer column -- an empty <input type=number>
                     # sends '' (not null), which Postgres rejects outright
@@ -1101,6 +1101,54 @@ def upload_company_logo():
 
         sb.table('companies').update({'logo_url': signed_url}).eq('id', claims['company_id']).execute()
         return jsonify({'logo_url': signed_url})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+# The round company seal/stamp printed at the bottom of a Receipt Voucher PDF
+# (see receiptVoucherPdfHTML() in index.html) -- deliberately a separate
+# upload/column from logo_url, since a rectangular letterhead logo and a
+# round rubber-stamp image are different assets in practice (confirmed by
+# the user's own sample voucher, which uses a round stamp, not their
+# letterhead logo). Otherwise an exact mirror of upload_company_logo() above.
+@app.route('/api/auth/company-profile/voucher-seal', methods=['POST'])
+def upload_voucher_seal():
+    try:
+        sb = get_sb()
+        claims = verify_token(request)
+        if not claims: return jsonify({'error': 'Unauthorized'}), 401
+        if claims['role'] != 'admin': return jsonify({'error': 'Admin only'}), 403
+
+        d = request.json or {}
+        raw = str(d.get('data') or '')
+        if not raw: return jsonify({'error': 'No image data provided'}), 400
+        if ',' in raw: raw = raw.split(',', 1)[1]  # strip data: prefix
+        try:
+            data = base64.b64decode(raw)
+        except Exception:
+            return jsonify({'error': 'Invalid image data'}), 400
+
+        ctype = str(d.get('content_type') or 'image/png').split(';')[0].strip().lower()
+        ext = {'image/jpeg':'jpg','image/jpg':'jpg','image/png':'png','image/webp':'webp'}.get(ctype)
+        if not ext:
+            return jsonify({'error': f'Unsupported image type ({ctype or "unknown"}). Use JPG, PNG or WEBP.'}), 400
+        if len(data) > MAX_LOGO_BYTES:
+            return jsonify({'error': 'Image is larger than 4 MB. Please use a smaller image.'}), 400
+
+        path = f"{claims['company_id']}/voucher-seal-{int(time.time())}.{ext}"
+        try:
+            sb.storage.from_(LOGO_BUCKET).upload(path, data, {'content-type': ctype})
+        except Exception:
+            return jsonify({'error': 'Could not save image to storage. Check that the company-assets bucket exists.'}), 502
+
+        try:
+            signed_url = _signed_url(LOGO_BUCKET, path)
+        except Exception as e:
+            return jsonify({'error': f'Image uploaded but could not generate its access URL: {str(e)[:200]}'}), 502
+
+        sb.table('companies').update({'voucher_seal_url': signed_url}).eq('id', claims['company_id']).execute()
+        return jsonify({'voucher_seal_url': signed_url})
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
