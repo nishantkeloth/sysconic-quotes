@@ -317,6 +317,79 @@ function setFilter(key,val,isNum){
   localStorage.setItem('qtcal_mobile_'+key,String(S[key]));
   render();
 }
+
+// ── Metric catalogue v1 ─────────────────────────────────────────────────
+// Release 1 spec item: every KPI should have a single, findable definition
+// of what it means, where it comes from, and what date/VAT basis it uses --
+// grounded in the actual calculation in api/quotes.py / insights-app.html,
+// not just a label. Tap the ⓘ next to a metric's label (see mCardLabel()
+// below) to see its entry here. v1 is a flat lookup, not literally
+// versioned/stored -- if a calculation changes, update the entry alongside
+// the code change that changed it.
+const METRIC_CATALOGUE={
+  total_quotes:{label:'Total quotes',def:'Count of every quote created in the selected period (draft, sent, awarded, and lost).',source:'QTcal Quotes',basis:'Created-date basis'},
+  win_rate:{label:'Win rate',def:'Awarded quotes as a % of closed quotes (awarded + lost) in the selected period. Quotes still Draft or Sent aren\'t counted as closed.',source:'QTcal Quotes',basis:'Created-date basis'},
+  awarded_value:{label:'Awarded value',def:'Total sell value of quotes marked Awarded in the selected period.',source:'QTcal Quotes (total_sell)',basis:'Created-date basis, AED'},
+  pending_value:{label:'Pending value',def:'Total sell value of quotes currently Sent (awaiting the customer\'s decision) in the selected period.',source:'QTcal Quotes (total_sell)',basis:'Created-date basis, AED'},
+  draft_value:{label:'Draft value',def:'Total sell value of quotes still in Draft status in the selected period.',source:'QTcal Quotes (total_sell)',basis:'Created-date basis, AED'},
+  avg_margin:{label:'Avg margin',def:'Gross profit as a % of sell value, across every Awarded quote in the selected period (total GP ÷ total sell).',source:'QTcal Quotes (total_gp / total_sell)',basis:'Created-date basis'},
+  zoho_invoiced:{label:'Invoiced',def:'Total value of every Zoho invoice raised in the selected period.',source:'Zoho Books',basis:'Invoice-date basis, incl. VAT, AED'},
+  zoho_collected:{label:'Collected',def:'Invoiced amount minus each invoice\'s current outstanding balance, for invoices in the selected period. A proxy for cash collected, not a bank-reconciled cash figure.',source:'Zoho Books',basis:'Invoice-date basis, incl. VAT, AED'},
+  zoho_outstanding_period:{label:'Outstanding (this period)',def:'Invoiced minus collected for invoices raised within the selected period only -- invoices from outside the period aren\'t counted even if still unpaid. See "Outstanding (all invoices)" for the org-wide, always-live figure.',source:'Zoho Books',basis:'Invoice-date basis, incl. VAT, AED'},
+  biz_invoiced:{label:'Invoiced (incl. VAT)',def:'Total value of every Zoho invoice raised within the selected fiscal year, regardless of when (or whether) it was paid.',source:'Zoho Books',basis:'Invoice-date basis, incl. VAT, AED'},
+  biz_collected:{label:'Collected (proxy)',def:'Invoiced amount minus each invoice\'s current outstanding balance, for invoices in the selected fiscal year. A proxy for cash collected, not a bank-reconciled cash figure.',source:'Zoho Books',basis:'Invoice-date basis, incl. VAT, AED'},
+  biz_outstanding_all:{label:'Outstanding (all invoices)',def:'Every unpaid invoice balance across the company\'s entire Zoho invoice history, computed live right now -- not scoped to the selected period or fiscal year, so it reads the same no matter which filter is selected.',source:'Zoho Books',basis:'Live, incl. VAT, AED'},
+  biz_overdue:{label:'Overdue',def:'Unpaid invoice balances that are past their due date, computed live right now, across every invoice regardless of period.',source:'Zoho Books',basis:'Live, incl. VAT, AED'},
+  awarded_uninvoiced:{label:'Awarded, uninvoiced',def:'Awarded quote value with no confirmed matching Zoho invoice yet, based on the Quote-to-Invoice reconciliation list below. QTcal quotes and Zoho invoices have no guaranteed link, so this is an approximation, not an exact figure.',source:'QTcal Quotes + Zoho Books (matched)',basis:'Live'},
+  loans_borrowed:{label:'Borrowed',def:'Sum of every balance-increasing transaction Zoho has ever recorded against the company\'s designated loan accounts.',source:'Zoho Books (Chart of Accounts)',basis:'Lifetime, AED'},
+  loans_repaid:{label:'Repaid',def:'Sum of every balance-reducing transaction against the same loan accounts.',source:'Zoho Books (Chart of Accounts)',basis:'Lifetime, AED'},
+  loans_outstanding:{label:'Outstanding',def:'Zoho\'s current running balance for the company\'s designated loan accounts.',source:'Zoho Books (Chart of Accounts)',basis:'As of last sync, AED'},
+  payables_total:{label:'Total payable',def:'Sum of every vendor payment entered in the Vendor Payment Tracker across all Awarded quotes, including 5% VAT.',source:'QTcal Vendor Payment Tracker (per-quote, manual entry)',basis:'Incl. 5% VAT, AED'},
+  payables_outstanding:{label:'Outstanding',def:'Vendor payments entered in the tracker that aren\'t yet marked Paid.',source:'QTcal Vendor Payment Tracker (manual entry)',basis:'Incl. 5% VAT, AED'},
+  payables_paid:{label:'Paid',def:'Vendor payments entered in the tracker that have been marked Paid.',source:'QTcal Vendor Payment Tracker (manual entry)',basis:'Incl. 5% VAT, AED'},
+  bankrecon_reconciled:{label:'Reconciled',def:'Number of account-months where Zoho\'s own bank reconciliation record confirms the month is fully reconciled, out of every month in that account\'s history.',source:'Zoho Books reconciliation records',basis:'All history, per account'},
+  bankrecon_uncategorized:{label:'Uncategorized',def:'Live count of bank-feed transactions in Zoho that haven\'t yet been categorized or matched to a book entry.',source:'Zoho Books bank feed',basis:'As of last sync'},
+  active_projects:{label:'Active projects',def:'Count of Project Performance projects currently marked Active.',source:'QTcal Project Performance',basis:'Live'},
+  portfolio_gp:{label:'Portfolio GP%',def:'Forecast gross profit %, weighted by each project\'s revenue forecast, across every Active project.',source:'QTcal Project Performance',basis:'Live'},
+  at_risk_critical:{label:'At risk / Critical',def:'Count of Active projects flagged At risk or Critical, based on each project\'s manually-set health status.',source:'QTcal Project Performance',basis:'Live'},
+  proj_outstanding_receivables:{label:'Outstanding receivables',def:'Invoiced minus collected value, summed across Project Performance\'s tracked projects only. Not the same figure as "Outstanding (all invoices)" above, which covers every Zoho invoice company-wide -- these are two genuinely different, correctly-scoped numbers.',source:'Zoho Books, via Project Performance sync',basis:'As of last project sync, AED'},
+  unbilled_value:{label:'Unbilled value',def:'Revenue forecast minus invoiced value, summed across tracked projects -- work planned or delivered but not yet invoiced.',source:'QTcal Project Performance + Zoho Books',basis:'As of last project sync, AED'},
+  cash_exposure:{label:'Cash exposure',def:'Sum of negative net cash positions across tracked projects -- projects currently costing more than they\'ve brought in.',source:'QTcal Project Performance',basis:'As of last project sync, AED'},
+  contracts_expiring:{label:'Contracts expiring',def:'AMC/service contracts with an end date within the next 90 days.',source:'QTcal Field Service',basis:'Live'},
+  open_tickets:{label:'Open tickets',def:'Field-service tickets not yet closed or resolved.',source:'QTcal Field Service',basis:'Live'},
+  sla_breaches:{label:'SLA breaches',def:'Open tickets past their SLA resolution due time.',source:'QTcal Field Service',basis:'Live'},
+  pm_due:{label:'PM visits due',def:'Active preventive-maintenance schedules with their next visit due within 7 days.',source:'QTcal Field Service',basis:'Live'},
+};
+function showMetricInfo(key){
+  const m=METRIC_CATALOGUE[key]; if(!m)return;
+  METRIC_INFO=m; render();
+}
+function closeMetricInfo(){ METRIC_INFO=null; render(); }
+let METRIC_INFO=null;
+function metricInfoHTML(){
+  if(!METRIC_INFO)return '';
+  const m=METRIC_INFO;
+  return `<div class="sheet-overlay" onclick="if(event.target===this)closeMetricInfo()">
+    <div class="sheet" style="max-height:60vh">
+      <div class="sheet-head">
+        <div class="sheet-title">${esc(m.label)}</div>
+        <button class="sheet-close" onclick="closeMetricInfo()">✕</button>
+      </div>
+      <div style="font-size:14px;line-height:1.5;margin-bottom:14px">${esc(m.def)}</div>
+      <div style="font-size:12px;color:var(--gray-500)"><strong>Source:</strong> ${esc(m.source)}</div>
+      <div style="font-size:12px;color:var(--gray-500);margin-top:4px"><strong>Basis:</strong> ${esc(m.basis)}</div>
+    </div>
+  </div>`;
+}
+// Renders a card-label with a tap-to-define ⓘ, for any label with a
+// METRIC_CATALOGUE entry. stopPropagation so tapping the ⓘ opens the
+// definition instead of triggering the card's own drill-down onclick.
+function mLbl(key,displayText){
+  const m=METRIC_CATALOGUE[key];
+  const text=displayText!==undefined?displayText:(m?m.label:key);
+  if(!m)return esc(text);
+  return `${esc(text)} <span onclick="event.stopPropagation();showMetricInfo('${key}')" style="color:var(--gray-500);cursor:help;font-weight:400">ⓘ</span>`;
+}
 function openInvoiceSheet(customerName){
   const z=zohoFiltered(S.data&&S.data.zoho_sales)||{invoices:[]};
   openSheet(customerName, z.invoices.filter(i=>(i.customer_name||'Unknown customer')===customerName));
@@ -586,12 +659,12 @@ function salesSectionHTML(sRaw,deals){
       </select>
     </div>
     <div class="cards">
-      <div class="card" style="cursor:pointer" onclick="drillQuotes('')"><div class="card-label">Total quotes</div><div class="card-val navy">${s.total_quotes}</div><div class="card-sub">${s.awarded_count} awarded</div></div>
-      <div class="card"><div class="card-label">Win rate</div><div class="card-val amber">${s.win_rate_pct}%</div><div class="card-sub">of ${s.closed_count} closed</div></div>
-      <div class="card" style="cursor:pointer" onclick="drillQuotes('awarded')"><div class="card-label">Awarded value</div><div class="card-val green">AED ${fmt(s.awarded_value)}</div></div>
-      <div class="card" style="cursor:pointer" onclick="drillQuotes('sent')"><div class="card-label">Pending value</div><div class="card-val amber">AED ${fmt(s.pending_value)}</div></div>
-      <div class="card" style="cursor:pointer" onclick="drillQuotes('draft')"><div class="card-label">Draft value</div><div class="card-val navy">AED ${fmt(s.draft_value)}</div></div>
-      <div class="card"><div class="card-label">Avg margin</div><div class="card-val green">${s.avg_margin_pct}%</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillQuotes('')"><div class="card-label">${mLbl('total_quotes')}</div><div class="card-val navy">${s.total_quotes}</div><div class="card-sub">${s.awarded_count} awarded</div></div>
+      <div class="card"><div class="card-label">${mLbl('win_rate')}</div><div class="card-val amber">${s.win_rate_pct}%</div><div class="card-sub">of ${s.closed_count} closed</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillQuotes('awarded')"><div class="card-label">${mLbl('awarded_value')}</div><div class="card-val green">AED ${fmt(s.awarded_value)}</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillQuotes('sent')"><div class="card-label">${mLbl('pending_value')}</div><div class="card-val amber">AED ${fmt(s.pending_value)}</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillQuotes('draft')"><div class="card-label">${mLbl('draft_value')}</div><div class="card-val navy">AED ${fmt(s.draft_value)}</div></div>
+      <div class="card"><div class="card-label">${mLbl('avg_margin')}</div><div class="card-val green">${s.avg_margin_pct}%</div></div>
       ${deals?`<div class="card"><div class="card-label">Open deals</div><div class="card-val navy">${deals.open_count}</div><div class="card-sub">AED ${fmt(deals.open_value)}</div></div>
       <div class="card"><div class="card-label">Deals won</div><div class="card-val green">${deals.won_count}</div></div>`:''}
     </div>
@@ -614,9 +687,9 @@ function zohoSectionHTML(zRaw){
       </div>
     </div>
     <div class="cards">
-      <div class="card"><div class="card-label">Invoiced</div><div class="card-val navy">AED ${fmt(z.total_invoiced)}</div><div class="card-sub">${z.invoice_count} invoice(s)</div></div>
-      <div class="card"><div class="card-label">Collected</div><div class="card-val green">AED ${fmt(z.total_collected)}</div></div>
-      <div class="card"><div class="card-label">Outstanding (this period)</div><div class="card-val amber">AED ${fmt(z.total_invoiced-z.total_collected)}</div></div>
+      <div class="card"><div class="card-label">${mLbl('zoho_invoiced','Invoiced')}</div><div class="card-val navy">AED ${fmt(z.total_invoiced)}</div><div class="card-sub">${z.invoice_count} invoice(s)</div></div>
+      <div class="card"><div class="card-label">${mLbl('zoho_collected','Collected')}</div><div class="card-val green">AED ${fmt(z.total_collected)}</div></div>
+      <div class="card"><div class="card-label">${mLbl('zoho_outstanding_period')}</div><div class="card-val amber">AED ${fmt(z.total_invoiced-z.total_collected)}</div></div>
       <div class="card"><div class="card-label">Customers</div><div class="card-val navy">${(z.customers||[]).length}</div></div>
     </div>
     <div class="chart-card"><div class="card-label">Sales trend — last 12 months</div><div class="chart-box"><canvas id="mTrendChart"></canvas></div></div>
@@ -661,11 +734,11 @@ function bizSectionHTML(){
     </div>
     <div style="font-size:11.5px;color:var(--gray-500);margin:-6px 0 10px">${esc(bounds.label)}${bounds.compareLabel?` · vs ${esc(bounds.compareLabel)}`:''}</div>
     <div class="cards">
-      <div class="card"><div class="card-label">Invoiced (incl. VAT)</div><div class="card-val navy">AED ${fmt(totals.invoiced)}</div><div class="card-sub">${totals.count} inv.${totals.yoy_pct!=null?` · ${totals.yoy_pct>=0?'+':''}${totals.yoy_pct}% YoY`:''}</div></div>
-      <div class="card"><div class="card-label">Collected (proxy)</div><div class="card-val green">AED ${fmt(totals.collected)}</div></div>
-      <div class="card" onclick="bizDrillOutstanding()"><div class="card-label">Outstanding (all invoices)</div><div class="card-val amber">AED ${fmt(asOf.outstanding)}</div><div class="card-sub">live, as of now</div></div>
-      <div class="card" onclick="bizDrillAging('b1_30')"><div class="card-label">Overdue</div><div class="card-val ${asOf.overdue>0?'amber':'green'}">AED ${fmt(asOf.overdue)}</div><div class="card-sub">as of now</div></div>
-      ${S.shareToken?'':`<div class="card"><div class="card-label">Awarded, uninvoiced</div><div class="card-val navy">AED ${fmt(awardedUninvoiced)}</div><div class="card-sub">backlog</div></div>`}
+      <div class="card"><div class="card-label">${mLbl('biz_invoiced','Invoiced (incl. VAT)')}</div><div class="card-val navy">AED ${fmt(totals.invoiced)}</div><div class="card-sub">${totals.count} inv.${totals.yoy_pct!=null?` · ${totals.yoy_pct>=0?'+':''}${totals.yoy_pct}% YoY`:''}</div></div>
+      <div class="card"><div class="card-label">${mLbl('biz_collected','Collected (proxy)')}</div><div class="card-val green">AED ${fmt(totals.collected)}</div></div>
+      <div class="card" onclick="bizDrillOutstanding()"><div class="card-label">${mLbl('biz_outstanding_all')}</div><div class="card-val amber">AED ${fmt(asOf.outstanding)}</div><div class="card-sub">live, as of now</div></div>
+      <div class="card" onclick="bizDrillAging('b1_30')"><div class="card-label">${mLbl('biz_overdue','Overdue')}</div><div class="card-val ${asOf.overdue>0?'amber':'green'}">AED ${fmt(asOf.overdue)}</div><div class="card-sub">as of now</div></div>
+      ${S.shareToken?'':`<div class="card"><div class="card-label">${mLbl('awarded_uninvoiced','Awarded, uninvoiced')}</div><div class="card-val navy">AED ${fmt(awardedUninvoiced)}</div><div class="card-sub">backlog</div></div>`}
     </div>
     <div class="chart-card"><div class="card-label">FY${curYear} — invoiced vs. collected by month</div><div class="chart-box"><canvas id="mBizMonthChart"></canvas></div></div>
     <div class="card-label" style="margin:4px 2px 8px">Year-wise — tap a year for its invoices</div>
@@ -723,9 +796,9 @@ function loansSectionHTML(L){
   return `<div class="sec">
     <div class="sec-title"><span>🏦 Loans</span></div>
     <div class="cards">
-      <div class="card"><div class="card-label">Borrowed</div><div class="card-val navy">AED ${fmt(L.total_borrowed)}</div><div class="card-sub">lifetime</div></div>
-      <div class="card"><div class="card-label">Repaid</div><div class="card-val green">AED ${fmt(L.total_repaid)}</div></div>
-      <div class="card"><div class="card-label">Outstanding</div><div class="card-val amber">AED ${fmt(L.total_outstanding)}</div><div class="card-sub">as of now</div></div>
+      <div class="card"><div class="card-label">${mLbl('loans_borrowed','Borrowed')}</div><div class="card-val navy">AED ${fmt(L.total_borrowed)}</div><div class="card-sub">lifetime</div></div>
+      <div class="card"><div class="card-label">${mLbl('loans_repaid','Repaid')}</div><div class="card-val green">AED ${fmt(L.total_repaid)}</div></div>
+      <div class="card"><div class="card-label">${mLbl('loans_outstanding','Outstanding')}</div><div class="card-val amber">AED ${fmt(L.total_outstanding)}</div><div class="card-sub">as of now</div></div>
     </div>
     <div class="list">
       ${(L.accounts||[]).map(a=>`<div class="list-row" ${S.shareToken?'':`onclick="openLoanTxnSheet('${a.id}',${esc(JSON.stringify(a.account_name))})"`}>
@@ -757,9 +830,9 @@ function payablesSectionHTML(P){
   return `<div class="sec">
     <div class="sec-title"><span>📤 Payables</span></div>
     <div class="cards">
-      <div class="card"><div class="card-label">Total payable</div><div class="card-val navy">AED ${fmt(P.total_payable)}</div><div class="card-sub">incl. VAT</div></div>
-      <div class="card"><div class="card-label">Outstanding</div><div class="card-val amber">AED ${fmt(P.total_outstanding)}</div></div>
-      <div class="card"><div class="card-label">Paid</div><div class="card-val green">AED ${fmt(P.total_paid)}</div></div>
+      <div class="card"><div class="card-label">${mLbl('payables_total','Total payable')}</div><div class="card-val navy">AED ${fmt(P.total_payable)}</div><div class="card-sub">incl. VAT</div></div>
+      <div class="card"><div class="card-label">${mLbl('payables_outstanding','Outstanding')}</div><div class="card-val amber">AED ${fmt(P.total_outstanding)}</div></div>
+      <div class="card"><div class="card-label">${mLbl('payables_paid','Paid')}</div><div class="card-val green">AED ${fmt(P.total_paid)}</div></div>
     </div>
     <div class="list">
       ${P.items.map(it=>`<div class="list-row" style="flex-direction:column;align-items:stretch;gap:2px">
@@ -904,8 +977,8 @@ function bankReconSectionHTML(BR){
     </div>
     <div style="font-size:11.5px;color:var(--gray-500);margin:-6px 0 10px">${earliestLabel} – ${latestLabel} · all accounts</div>
     <div class="cards">
-      <div class="card"><div class="card-label">Reconciled</div><div class="card-val ${reconciledCount===BR.months.length?'green':'amber'}">${reconciledCount}/${BR.months.length}</div><div class="card-sub">all history, all accounts</div></div>
-      <div class="card"><div class="card-label">Uncategorized</div><div class="card-val ${totalUncategorized>0?'amber':'green'}">${totalUncategorized}</div><div class="card-sub">as of now</div></div>
+      <div class="card"><div class="card-label">${mLbl('bankrecon_reconciled','Reconciled')}</div><div class="card-val ${reconciledCount===BR.months.length?'green':'amber'}">${reconciledCount}/${BR.months.length}</div><div class="card-sub">all history, all accounts</div></div>
+      <div class="card"><div class="card-label">${mLbl('bankrecon_uncategorized','Uncategorized')}</div><div class="card-val ${totalUncategorized>0?'amber':'green'}">${totalUncategorized}</div><div class="card-sub">as of now</div></div>
     </div>
     <div class="card-label" style="margin:4px 2px 8px">${selYear} by account</div>
     <div class="list">
@@ -927,12 +1000,12 @@ function financialSectionHTML(k){
       <span style="font-size:11.5px;color:var(--gray-500);font-weight:500">${k.last_synced_at?'Synced '+new Date(k.last_synced_at).toLocaleString():'tracked projects'}</span>
     </div>
     <div class="cards">
-      <div class="card" style="cursor:pointer" onclick="drillProjects('active')"><div class="card-label">Active projects</div><div class="card-val navy">${k.active_projects}</div><div class="card-sub">AED ${fmt(k.total_active_value)}</div></div>
-      <div class="card" style="cursor:pointer" onclick="drillProjects('active')"><div class="card-label">Portfolio GP%</div><div class="card-val green">${k.portfolio_gp_pct}%</div></div>
-      <div class="card" style="cursor:pointer" onclick="drillProjects('risk')"><div class="card-label">At risk / Critical</div><div class="card-val ${k.critical_projects>0?'amber':'navy'}">${k.projects_at_risk} / ${k.critical_projects}</div></div>
-      <div class="card" style="cursor:pointer" onclick="drillProjects('receivables')"><div class="card-label">Outstanding receivables</div><div class="card-val amber">AED ${fmt(k.outstanding_receivables)}</div><div class="card-sub">tracked projects only</div></div>
-      <div class="card" style="cursor:pointer" onclick="drillProjects('unbilled')"><div class="card-label">Unbilled value</div><div class="card-val navy">AED ${fmt(k.unbilled_value)}</div></div>
-      <div class="card" style="cursor:pointer" onclick="drillProjects('cash')"><div class="card-label">Cash exposure</div><div class="card-val ${k.cash_exposure<0?'red':'green'}">AED ${fmt(k.cash_exposure)}</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillProjects('active')"><div class="card-label">${mLbl('active_projects')}</div><div class="card-val navy">${k.active_projects}</div><div class="card-sub">AED ${fmt(k.total_active_value)}</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillProjects('active')"><div class="card-label">${mLbl('portfolio_gp')}</div><div class="card-val green">${k.portfolio_gp_pct}%</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillProjects('risk')"><div class="card-label">${mLbl('at_risk_critical')}</div><div class="card-val ${k.critical_projects>0?'amber':'navy'}">${k.projects_at_risk} / ${k.critical_projects}</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillProjects('receivables')"><div class="card-label">${mLbl('proj_outstanding_receivables')}</div><div class="card-val amber">AED ${fmt(k.outstanding_receivables)}</div><div class="card-sub">tracked projects only</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillProjects('unbilled')"><div class="card-label">${mLbl('unbilled_value')}</div><div class="card-val navy">AED ${fmt(k.unbilled_value)}</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillProjects('cash')"><div class="card-label">${mLbl('cash_exposure')}</div><div class="card-val ${k.cash_exposure<0?'red':'green'}">AED ${fmt(k.cash_exposure)}</div></div>
     </div>
     ${k.at_risk_projects&&k.at_risk_projects.length?`<div class="list" style="margin-top:12px">
       ${k.at_risk_projects.map(p=>`<div class="list-row"><span class="list-row-name">${esc(p.name||'')}</span><span class="list-row-meta">${esc(p.customer||'')}</span><span class="attn-badge ${p.health_status==='critical'?'red':'amber'}">${p.health_status==='critical'?'Critical':'At risk'}</span></div>`).join('')}
@@ -944,10 +1017,10 @@ function fsmSectionHTML(f){
   return `<div class="sec">
     <div class="sec-title"><span>🔧 AMC &amp; Field Service</span></div>
     <div class="cards">
-      <div class="card" ${f.contracts_expiring_90d?`style="cursor:pointer" onclick="drillContracts()"`:''}><div class="card-label">Contracts expiring (90d)</div><div class="card-val ${f.expiring_30d?'amber':'navy'}">${f.contracts_expiring_90d}</div></div>
-      <div class="card"><div class="card-label">Open tickets</div><div class="card-val navy">${f.open_tickets}</div></div>
-      <div class="card" ${f.sla_breaches?`style="cursor:pointer" onclick="drillSlaBreaches()"`:''}><div class="card-label">SLA breaches</div><div class="card-val ${f.sla_breaches?'amber':'green'}">${f.sla_breaches}</div></div>
-      <div class="card"><div class="card-label">PM visits due (7d)</div><div class="card-val amber">${f.pm_due_7d}</div></div>
+      <div class="card" ${f.contracts_expiring_90d?`style="cursor:pointer" onclick="drillContracts()"`:''}><div class="card-label">${mLbl('contracts_expiring','Contracts expiring (90d)')}</div><div class="card-val ${f.expiring_30d?'amber':'navy'}">${f.contracts_expiring_90d}</div></div>
+      <div class="card"><div class="card-label">${mLbl('open_tickets')}</div><div class="card-val navy">${f.open_tickets}</div></div>
+      <div class="card" ${f.sla_breaches?`style="cursor:pointer" onclick="drillSlaBreaches()"`:''}><div class="card-label">${mLbl('sla_breaches')}</div><div class="card-val ${f.sla_breaches?'amber':'green'}">${f.sla_breaches}</div></div>
+      <div class="card"><div class="card-label">${mLbl('pm_due','PM visits due (7d)')}</div><div class="card-val amber">${f.pm_due_7d}</div></div>
     </div>
   </div>`;
 }
@@ -988,12 +1061,12 @@ function overviewSectionHTML(d){
   const k=d.financial, P=(d.payables&&d.payables.items&&d.payables.items.length)?d.payables:null, f=d.fsm;
 
   const kpis=[];
-  if(sAll)kpis.push(['Awarded value','AED '+fmt(sAll.awarded_value),'navy',"goTab('sales')"]);
-  if(sAll)kpis.push(['Win rate',sAll.win_rate_pct+'%','amber',"goTab('sales')"]);
-  if(asOf)kpis.push(['Outstanding (all invoices)','AED '+fmt(asOf.outstanding),'amber','bizDrillOutstanding()']);
-  if(P)kpis.push(['Payables outstanding','AED '+fmt(P.total_outstanding),'amber',"goTab('finance')"]);
-  if(k)kpis.push(['Projects at risk / critical',k.projects_at_risk+' / '+k.critical_projects,k.critical_projects>0?'amber':'navy',"drillProjects('risk')"]);
-  if(f)kpis.push(['SLA breaches',f.sla_breaches,f.sla_breaches>0?'amber':'green',f.sla_breaches?'drillSlaBreaches()':"goTab('service')"]);
+  if(sAll)kpis.push(['Awarded value','AED '+fmt(sAll.awarded_value),'navy',"goTab('sales')",'awarded_value']);
+  if(sAll)kpis.push(['Win rate',sAll.win_rate_pct+'%','amber',"goTab('sales')",'win_rate']);
+  if(asOf)kpis.push(['Outstanding (all invoices)','AED '+fmt(asOf.outstanding),'amber','bizDrillOutstanding()','biz_outstanding_all']);
+  if(P)kpis.push(['Payables outstanding','AED '+fmt(P.total_outstanding),'amber',"goTab('finance')",'payables_outstanding']);
+  if(k)kpis.push(['Projects at risk / critical',k.projects_at_risk+' / '+k.critical_projects,k.critical_projects>0?'amber':'navy',"drillProjects('risk')",'at_risk_critical']);
+  if(f)kpis.push(['SLA breaches',f.sla_breaches,f.sla_breaches>0?'amber':'green',f.sla_breaches?'drillSlaBreaches()':"goTab('service')",'sla_breaches']);
 
   const today=new Date();today.setHours(0,0,0,0);
   const attn=[];
@@ -1020,7 +1093,7 @@ function overviewSectionHTML(d){
   return `<div class="sec">
     <div class="sec-title"><span>👋 Overview</span></div>
     ${kpis.length?`<div class="cards">
-      ${kpis.map(([label,val,cls,onclick])=>`<div class="card" style="cursor:pointer" onclick="${onclick}"><div class="card-label">${esc(label)}</div><div class="card-val ${cls}">${esc(String(val))}</div></div>`).join('')}
+      ${kpis.map(([label,val,cls,onclick,metricKey])=>`<div class="card" style="cursor:pointer" onclick="${onclick}"><div class="card-label">${metricKey?mLbl(metricKey,label):esc(label)}</div><div class="card-val ${cls}">${esc(String(val))}</div></div>`).join('')}
     </div>`:'<div class="center-msg">No data available yet.</div>'}
     ${attn.length?`<div class="card-label" style="margin:16px 2px 8px">Needs attention</div>
     <div class="list">
@@ -1107,7 +1180,8 @@ function dashboardHTML(){
   </div>
   ${invoiceSheetHTML()}
   ${loanTxnSheetHTML()}
-  ${recordSheetHTML()}`;
+  ${recordSheetHTML()}
+  ${metricInfoHTML()}`;
 }
 
 function render(){
