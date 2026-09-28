@@ -4812,6 +4812,7 @@ function insightsHTML(){
       </div>
     </div>
     ${INSIGHTS.error?`<div class="auth-err" style="margin:12px 0">${esc(INSIGHTS.error)}</div>`:''}
+    ${d.finance_hidden?`<div style="font-size:12px;color:var(--gray-500);background:var(--gray-100);border-radius:8px;padding:8px 12px;margin-bottom:14px">Loans, Bank Reconciliation, Payables, and Financial Health are hidden for your role. Ask an admin for the "Insights — Finance & Loans" permission if you need them.</div>`:''}
     ${sections.join('')}
   </div>`;
 }
@@ -8174,7 +8175,12 @@ function importVendorsMaster(event){
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────
-const RBAC_PAGE_LABELS = {insights:'Insights',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service',myJobs:'My Jobs (Engineer)',deliveryChallans:'Delivery Challans',vouchers:'Payment Vouchers',receiptVouchers:'Receipt Vouchers',workflowSettings:'Workflow Settings',zohoReconciliation:'Zoho — Reconciliation',zohoReport:'Zoho — Report'};
+const RBAC_PAGE_LABELS = {insights:'Insights',insightsFinance:'Insights — Finance & Loans',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service',myJobs:'My Jobs (Engineer)',deliveryChallans:'Delivery Challans',vouchers:'Payment Vouchers',receiptVouchers:'Receipt Vouchers',workflowSettings:'Workflow Settings',zohoReconciliation:'Zoho — Reconciliation',zohoReport:'Zoho — Report'};
+// 'insightsFinance' is a sub-permission of 'insights' (see RBAC_PAGE_KEYS in
+// api/auth.py) -- it only means anything once 'insights' itself is checked,
+// so it's indented under it in the Roles & Permissions list rather than
+// appearing as its own top-level page. See rolesPermissionsHTML() below.
+const RBAC_SUBKEYS = {insightsFinance:'insights'};
 let RBAC_PAGE_KEYS_FE = [];
 let RBAC_ROLES_CACHE = [];
 
@@ -8197,7 +8203,16 @@ async function loadRolesPermissions(){
   if(!RBAC_ROLES_CACHE.length){el.innerHTML='<div style="color:var(--gray-500)">No custom roles yet. Add one above.</div>';return;}
   el.innerHTML=RBAC_ROLES_CACHE.map(role=>{
     const perms=role.permissions||{};
-    const checks=RBAC_PAGE_KEYS_FE.map(k=>`<label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer"><input type="checkbox" ${perms[k]?'checked':''} onchange="toggleRolePermission('${role.id}','${k}',this.checked)">${esc(RBAC_PAGE_LABELS[k]||k)}</label>`).join('');
+    // A sub-key (see RBAC_SUBKEYS) only means anything once its parent page
+    // is checked -- shown indented and disabled otherwise so it's clear it
+    // can't be granted on its own.
+    const checks=RBAC_PAGE_KEYS_FE.map(k=>{
+      const parent=RBAC_SUBKEYS[k];
+      const parentOn=!parent||!!perms[parent];
+      return `<label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:${parentOn?'pointer':'not-allowed'};opacity:${parentOn?'1':'.5'};${parent?'margin-left:16px':''}" title="${parent&&!parentOn?'Requires '+esc(RBAC_PAGE_LABELS[parent]||parent)+' to be checked first':''}">
+        <input type="checkbox" ${perms[k]?'checked':''} ${parentOn?'':'disabled'} onchange="toggleRolePermission('${role.id}','${k}',this.checked)">${esc(RBAC_PAGE_LABELS[k]||k)}
+      </label>`;
+    }).join('');
     return `<div style="border:1px solid var(--gray-200);border-radius:8px;padding:14px;margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <div style="font-weight:700;font-size:15px">${esc(role.name)}</div>

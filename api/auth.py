@@ -1155,7 +1155,14 @@ def upload_voucher_seal():
 
 
 # ── RBAC Phase 1: custom, per-company roles (page-level view/hide) ─────────
-RBAC_PAGE_KEYS = ['insights','quotes','deals','products','customers','vendors','projects','projectPerformance','reviewQueue','testimonials','team','integrations','companyProfile','fsm','myJobs','deliveryChallans','vouchers','receiptVouchers','workflowSettings','zohoReconciliation','zohoReport']
+# 'insightsFinance' is a sub-permission of 'insights', not a separate page --
+# a role can see the Insights page (Sales/Pipeline, Zoho Sales, Business
+# Performance, AMC & Field Service) via 'insights' alone; 'insightsFinance'
+# additionally reveals Loans, Bank Reconciliation, Payables, and Financial
+# Health (see _strip_finance_sections() in api/quotes.py). Same fail-open
+# default as every other key here: a role with no custom permissions object
+# at all sees everything, same as an admin.
+RBAC_PAGE_KEYS = ['insights','insightsFinance','quotes','deals','products','customers','vendors','projects','projectPerformance','reviewQueue','testimonials','team','integrations','companyProfile','fsm','myJobs','deliveryChallans','vouchers','receiptVouchers','workflowSettings','zohoReconciliation','zohoReport']
 
 def _clean_permissions(d):
     out = {}

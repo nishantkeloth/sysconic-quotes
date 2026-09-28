@@ -1095,7 +1095,7 @@ function dashboardHTML(){
     <div class="topbar">
       <div>
         <div class="topbar-title">Insights</div>
-        <div class="topbar-sub">${esc(companyName)}${S.shareToken?' · Shared view (read-only'+(d.share_finance_hidden?', finance hidden':'')+')':''}</div>
+        <div class="topbar-sub">${esc(companyName)}${S.shareToken?' · Shared view (read-only'+(d.finance_hidden?', finance hidden':'')+')':d.finance_hidden?' · Finance hidden for your role':''}</div>
       </div>
       <div class="topbar-actions">
         <button class="icon-btn" title="Refresh" onclick="${S.shareToken?'loadInsightsPublic(true)':'loadInsights(true)'}">${S.loading?'⏳':'🔄'}</button>

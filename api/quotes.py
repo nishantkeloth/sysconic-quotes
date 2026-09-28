@@ -1556,7 +1556,16 @@ def _insights_parse_dt(s):
 def insights_summary():
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    return jsonify(_build_insights_payload(claims))
+    payload = _build_insights_payload(claims)
+    # A role that can see Insights at all (the 'insights' page key) but
+    # lacks the separate 'insightsFinance' key gets the same revenue-only
+    # view as the public share link -- see _strip_finance_sections() above.
+    # Admins, and any role with no custom role assigned at all (role_
+    # permissions is None, same fail-open default has_page_access() uses
+    # everywhere else), always see the full payload.
+    if not has_page_access(claims, 'insightsFinance'):
+        payload = _strip_finance_sections(payload)
+    return jsonify(payload)
 
 # Shared by the Insights "Payables" section above and the daily payables
 # reminder cron below (run_payable_reminders()) -- turns a list of quote rows
@@ -2025,29 +2034,34 @@ def revoke_insights_share_link():
     return jsonify({'ok': True})
 
 
-# The Insights share link is intentionally permanent and requires no login
-# or token rotation (an explicit, deliberate product decision -- see
-# create_insights_share_link()/revoke_insights_share_link() above: revoking
-# and re-sharing is the only "rotation" available). That's a real exposure
-# if the link ever leaks, since anyone with the URL can otherwise see
-# everything an admin sees. Rather than add the login/token/expiry the
-# mobile redesign spec originally called for (which would break the
-# "one permanent link, no sign-in" UX this was deliberately built for), the
-# mitigation is on the content side: a handful of the most sensitive
-# sections -- actual bank/loan balances, vendor payment obligations, and
-# project-level margins/cash exposure -- are left out of the payload
-# entirely for a shared/public viewer, by default. Revenue-side sections
-# (Sales & Pipeline, Zoho Sales, Business Performance) and operational
-# sections (AMC & Field Service) are not considered sensitive in the same
-# way and remain visible on the shared link.
-_SHARE_HIDDEN_SECTIONS = ('loans', 'bank_recon', 'payables', 'financial')
+# A handful of Insights sections carry the company's most sensitive
+# financial data -- actual bank/loan balances, vendor payment obligations,
+# and project-level margins/cash exposure. Two independent callers strip
+# these out of the payload with this same helper:
+#   1. insights_public() (below) -- always, unconditionally. The share link
+#      is intentionally permanent and requires no login or token rotation
+#      (see create_insights_share_link()/revoke_insights_share_link():
+#      revoking and re-sharing is the only "rotation" available), which is a
+#      real exposure if the link ever leaks. Rather than add the login/
+#      token/expiry the mobile redesign spec originally called for (which
+#      would break the "one permanent link, no sign-in" UX this was
+#      deliberately built for), the mitigation is on the content side.
+#   2. insights_summary() (below) -- for a signed-in user whose role lacks
+#      the 'insightsFinance' RBAC page key (see RBAC_PAGE_KEYS in
+#      api/auth.py), e.g. a sales or service role that should see the
+#      Sales/Pipeline and Zoho Sales figures but not the company's bank
+#      balances or project margins.
+# Revenue-side sections (Sales & Pipeline, Zoho Sales, Business Performance)
+# and operational sections (AMC & Field Service) are not considered
+# sensitive in the same way and are never stripped by this helper.
+_FINANCE_SECTIONS = ('loans', 'bank_recon', 'payables', 'financial')
 
-def _strip_hidden_sections_for_share(payload):
+def _strip_finance_sections(payload):
     hidden_any = False
-    for key in _SHARE_HIDDEN_SECTIONS:
+    for key in _FINANCE_SECTIONS:
         if payload.pop(key, None) is not None:
             hidden_any = True
-    payload['share_finance_hidden'] = hidden_any
+    payload['finance_hidden'] = hidden_any
     return payload
 
 @app.route('/api/insights/public', methods=['GET'])
@@ -2076,7 +2090,7 @@ def insights_public():
         'features': company.get('features') or {}, 'role_permissions': None,
     }
     payload = _build_insights_payload(fake_claims)
-    payload = _strip_hidden_sections_for_share(payload)
+    payload = _strip_finance_sections(payload)
     payload['company_name'] = company.get('name')
     return jsonify(payload)
 
