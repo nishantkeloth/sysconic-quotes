@@ -4576,7 +4576,7 @@ function insightsHTML(){
         <div class="dash-metrics">
           <div class="mcard"><div class="mcard-label">Total invoiced</div><div class="mcard-val navy">AED ${fmt(z.total_invoiced)}</div><div class="mcard-sub">${z.invoice_count} invoice(s)</div></div>
           <div class="mcard"><div class="mcard-label">Total collected</div><div class="mcard-val green">AED ${fmt(z.total_collected)}</div></div>
-          <div class="mcard"><div class="mcard-label">Outstanding</div><div class="mcard-val amber">AED ${fmt(z.total_invoiced-z.total_collected)}</div></div>
+          <div class="mcard"><div class="mcard-label">Outstanding (this period)</div><div class="mcard-val amber">AED ${fmt(z.total_invoiced-z.total_collected)}</div></div>
           <div class="mcard"><div class="mcard-label">Customers</div><div class="mcard-val navy">${customers.length}</div></div>
         </div>
         <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:16px;margin-bottom:16px">
@@ -4638,8 +4638,8 @@ function insightsHTML(){
             <div class="mcard-label">Collected <span style="font-weight:400">(proxy)</span></div><div class="mcard-val green">AED ${fmt(totals.collected)}</div>
             <div class="mcard-sub">period flow, invoice-date basis</div>
           </div>
-          <div class="mcard" style="cursor:pointer" onclick="bizDrillOutstanding()" title="All unpaid invoice balances, as of right now. Not a historical year-end snapshot.">
-            <div class="mcard-label">Outstanding</div><div class="mcard-val amber">AED ${fmt(asOf.outstanding)}</div>
+          <div class="mcard" style="cursor:pointer" onclick="bizDrillOutstanding()" title="All unpaid invoice balances across every Zoho invoice (org-wide), as of right now. Not a historical year-end snapshot, and not the same figure as Financial Health's 'Outstanding receivables' (tracked projects only).">
+            <div class="mcard-label">Outstanding (all invoices)</div><div class="mcard-val amber">AED ${fmt(asOf.outstanding)}</div>
             <div class="mcard-sub">as of now · click to view</div>
           </div>
           <div class="mcard" style="cursor:pointer" onclick="bizDrillAging('b1_30')" title="Unpaid balance past its due date, as of right now.">
@@ -4679,7 +4679,7 @@ function insightsHTML(){
         </div>
 
         <div class="insights-list">
-          <div class="insights-list-title">Receivables ageing — by due date, current balance · click a bucket for its invoices</div>
+          <div class="insights-list-title">Receivables ageing (all Zoho invoices, org-wide) — by due date, current balance · click a bucket for its invoices</div>
           <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px">
             ${[['not_due','Not yet due','navy'],['b1_30','1–30 days','amber'],['b31_60','31–60 days','amber'],['b61_90','61–90 days','red'],['b90_plus','90+ days','red']].map(([k,label,cls])=>`
               <div class="mcard" style="cursor:pointer" onclick="bizDrillAging('${k}')"><div class="mcard-label">${label}</div><div class="mcard-val ${cls}">AED ${fmt(asOf.buckets[k])}</div></div>
@@ -4766,12 +4766,12 @@ function insightsHTML(){
     const k=d.financial;
     sections.push(`
       <div class="insights-sec">
-        <div class="insights-sec-title">💰 Financial Health <span style="font-size:11px;color:var(--gray-500);font-weight:500">(synced from Zoho Books)</span></div>
+        <div class="insights-sec-title">💰 Financial Health <span style="font-size:11px;color:var(--gray-500);font-weight:500">(tracked projects, synced from Zoho Books${k.last_synced_at?' · last synced '+new Date(k.last_synced_at).toLocaleString():''})</span></div>
         <div class="dash-metrics">
           <div class="mcard"><div class="mcard-label">Active projects</div><div class="mcard-val navy">${k.active_projects}</div><div class="mcard-sub">AED ${fmt(k.total_active_value)}</div></div>
           <div class="mcard"><div class="mcard-label">Portfolio GP%</div><div class="mcard-val green">${k.portfolio_gp_pct}%</div></div>
           <div class="mcard"><div class="mcard-label">At risk / Critical</div><div class="mcard-val ${k.critical_projects>0?'red':'amber'}">${k.projects_at_risk} / ${k.critical_projects}</div></div>
-          <div class="mcard"><div class="mcard-label">Outstanding receivables</div><div class="mcard-val amber">AED ${fmt(k.outstanding_receivables)}</div></div>
+          <div class="mcard"><div class="mcard-label">Outstanding receivables</div><div class="mcard-val amber">AED ${fmt(k.outstanding_receivables)}</div><div class="mcard-sub">tracked projects only</div></div>
           <div class="mcard"><div class="mcard-label">Unbilled value</div><div class="mcard-val navy">AED ${fmt(k.unbilled_value)}</div></div>
           <div class="mcard"><div class="mcard-label">Cash exposure</div><div class="mcard-val ${k.cash_exposure<0?'red':'green'}">AED ${fmt(k.cash_exposure)}</div></div>
         </div>
@@ -4812,6 +4812,7 @@ function insightsHTML(){
       </div>
     </div>
     ${INSIGHTS.error?`<div class="auth-err" style="margin:12px 0">${esc(INSIGHTS.error)}</div>`:''}
+    ${d.finance_hidden?`<div style="font-size:12px;color:var(--gray-500);background:var(--gray-100);border-radius:8px;padding:8px 12px;margin-bottom:14px">Loans, Bank Reconciliation, Payables, and Financial Health are hidden for your role. Ask an admin for the "Insights — Finance & Loans" permission if you need them.</div>`:''}
     ${sections.join('')}
   </div>`;
 }
@@ -5139,7 +5140,7 @@ function vendorHTML(){
       <td style="font-weight:700;color:var(--navy)">${fmtC(v.payable+vat)}</td>
       <td><input type="number" style="width:110px" value="${v.p1}" oninput="vendors()[${i}].p1=+this.value;schedSave()"></td>
       <td><input type="number" style="width:110px" value="${v.p2}" oninput="vendors()[${i}].p2=+this.value;schedSave()"></td>
-      <td><input style="width:100px" value="${esc(v.date)}" oninput="vendors()[${i}].date=this.value;schedSave()"></td>
+      <td><input type="date" style="width:135px" value="${esc(v.date)}" onchange="vendors()[${i}].date=this.value;schedSave();draw()"></td>
       <td><select onchange="vendors()[${i}].status=this.value;schedSave();draw()">
         ${['pending','partial','paid'].map(s=>`<option ${v.status===s?'selected':''}>${s}</option>`).join('')}
       </select></td>
@@ -8174,7 +8175,12 @@ function importVendorsMaster(event){
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────
-const RBAC_PAGE_LABELS = {insights:'Insights',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service',myJobs:'My Jobs (Engineer)',deliveryChallans:'Delivery Challans',vouchers:'Payment Vouchers',receiptVouchers:'Receipt Vouchers',workflowSettings:'Workflow Settings',zohoReconciliation:'Zoho — Reconciliation',zohoReport:'Zoho — Report'};
+const RBAC_PAGE_LABELS = {insights:'Insights',insightsFinance:'Insights — Finance & Loans',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service',myJobs:'My Jobs (Engineer)',deliveryChallans:'Delivery Challans',vouchers:'Payment Vouchers',receiptVouchers:'Receipt Vouchers',workflowSettings:'Workflow Settings',zohoReconciliation:'Zoho — Reconciliation',zohoReport:'Zoho — Report'};
+// 'insightsFinance' is a sub-permission of 'insights' (see RBAC_PAGE_KEYS in
+// api/auth.py) -- it only means anything once 'insights' itself is checked,
+// so it's indented under it in the Roles & Permissions list rather than
+// appearing as its own top-level page. See rolesPermissionsHTML() below.
+const RBAC_SUBKEYS = {insightsFinance:'insights'};
 let RBAC_PAGE_KEYS_FE = [];
 let RBAC_ROLES_CACHE = [];
 
@@ -8197,7 +8203,16 @@ async function loadRolesPermissions(){
   if(!RBAC_ROLES_CACHE.length){el.innerHTML='<div style="color:var(--gray-500)">No custom roles yet. Add one above.</div>';return;}
   el.innerHTML=RBAC_ROLES_CACHE.map(role=>{
     const perms=role.permissions||{};
-    const checks=RBAC_PAGE_KEYS_FE.map(k=>`<label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer"><input type="checkbox" ${perms[k]?'checked':''} onchange="toggleRolePermission('${role.id}','${k}',this.checked)">${esc(RBAC_PAGE_LABELS[k]||k)}</label>`).join('');
+    // A sub-key (see RBAC_SUBKEYS) only means anything once its parent page
+    // is checked -- shown indented and disabled otherwise so it's clear it
+    // can't be granted on its own.
+    const checks=RBAC_PAGE_KEYS_FE.map(k=>{
+      const parent=RBAC_SUBKEYS[k];
+      const parentOn=!parent||!!perms[parent];
+      return `<label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:${parentOn?'pointer':'not-allowed'};opacity:${parentOn?'1':'.5'};${parent?'margin-left:16px':''}" title="${parent&&!parentOn?'Requires '+esc(RBAC_PAGE_LABELS[parent]||parent)+' to be checked first':''}">
+        <input type="checkbox" ${perms[k]?'checked':''} ${parentOn?'':'disabled'} onchange="toggleRolePermission('${role.id}','${k}',this.checked)">${esc(RBAC_PAGE_LABELS[k]||k)}
+      </label>`;
+    }).join('');
     return `<div style="border:1px solid var(--gray-200);border-radius:8px;padding:14px;margin-bottom:10px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <div style="font-weight:700;font-size:15px">${esc(role.name)}</div>
@@ -8289,7 +8304,7 @@ ${hasFeature('vouchers')?`<div class="card" style="max-width:640px;margin-top:16
 </div>
 <div class="card" style="max-width:640px;margin-top:16px">
   <div class="card-title">Public Insights Link</div>
-  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Turn on a link that opens the mobile Insights dashboard with no login — handy for a phone home-screen shortcut or an office TV display. <strong>Anyone with this link can view your sales and GP data, no password required</strong>, so treat it like a password: don't post it anywhere public. This link is permanent — turning sharing off blocks access immediately, but turning it back on restores this exact same link rather than issuing a new one, so if it ever leaks, turning it off is the only way to stop it (there's no "get a fresh link" option). Admin only.</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Turn on a link that opens the mobile Insights dashboard with no login — handy for a phone home-screen shortcut or an office TV display. <strong>Anyone with this link can view your Sales &amp; Pipeline, Zoho Sales, and Business Performance data, no password required</strong>, so treat it like a password: don't post it anywhere public. Loans, Bank Reconciliation, Payables, and Financial Health (project margins/cash exposure) are always left out of this shared view, regardless of what's visible when you're signed in. This link is permanent — turning sharing off blocks access immediately, but turning it back on restores this exact same link rather than issuing a new one, so if it ever leaks, turning it off is the only way to stop it (there's no "get a fresh link" option). Admin only.</div>
   <div id="shareLinkBox"><div style="color:var(--gray-500)">Loading…</div></div>
 </div>
 <div class="card" style="max-width:640px;margin-top:16px">
@@ -8807,7 +8822,7 @@ function renderShareLinkBox(enabled){
   `;
 }
 async function generateInsightsShareLink(){
-  if(!confirm('Turn on the public Insights link? Anyone with this link can view your Insights dashboard with no login, and the link never changes once shared.'))return;
+  if(!confirm('Turn on the public Insights link? Anyone with this link can view your Sales, Zoho Sales, and Business Performance data with no login (Loans, Bank Reconciliation, Payables, and Financial Health are always excluded from this view), and the link never changes once shared.'))return;
   const r=await api('POST','/api/insights/share-link');
   if(r.error){alert(r.error);return;}
   renderShareLinkBox(true);
