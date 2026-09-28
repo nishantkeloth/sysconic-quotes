@@ -1599,6 +1599,35 @@ def bank_vs_zoho_report():
             except Exception as e:
                 diag['resolution_error'] = str(e)[:300]  # best-effort resolution -- fall through with the empty result rather than failing the whole report
 
+    # Confirmed against a real customer account + Zoho's own official API
+    # docs (Sep 2026): /chartofaccounts/accounttransactions reliably returns
+    # data for non-bank ledger accounts (e.g. Loans, a liability type) but
+    # comes back genuinely empty -- correct scope, correct params, Zoho
+    # itself reports "success" -- for bank/cash type accounts, even when
+    # Zoho's own Chart-of-Accounts UI report shows real postings for that
+    # same account/month. That UI report apparently isn't backed by this
+    # public endpoint for bank/cash accounts.
+    #
+    # Rather than keep treating that as "0 books entries" (which reads as a
+    # data problem when it isn't one), fall back to the /banktransactions
+    # data we already fetched above: each line already carries Zoho's own
+    # status telling us whether it's linked to a books entry or not (see
+    # _BANK_TXN_FLAG_STATUSES / fetch_bank_transactions' docstring) -- for a
+    # bank/cash account, Zoho's Banking module *is* the authoritative record
+    # of what's in the books, so there's no need for a second ledger call at
+    # all. Only used when the direct+name-match ledger lookups above still
+    # came back empty, so an account/org where the ledger call does work
+    # keeps using that (richer) data untouched.
+    books_source = 'ledger'
+    if not ledger_rows and bank_rows:
+        linked = [r for r in bank_rows if (r.get('status') or '').lower() not in _BANK_TXN_FLAG_STATUSES]
+        diag['books_derived_from_banking'] = True
+        diag['banking_linked_count'] = len(linked)
+        if linked:
+            ledger_rows = linked
+            ledger_account_id = account_id
+            books_source = 'banking'
+
     bank_out = [{
         'transaction_id': r.get('transaction_id'), 'date': r.get('date'),
         'description': r.get('description') or r.get('payee') or '',
@@ -1609,15 +1638,35 @@ def bank_vs_zoho_report():
     } for r in bank_rows]
     bank_out.sort(key=lambda b: (not b['flagged'], b['date'] or ''))
 
-    ledger_out = [{
-        'transaction_id': r.get('transaction_id'), 'date': r.get('transaction_date'),
-        'description': r.get('description') or r.get('payee') or '',
-        'transaction_type': r.get('transaction_type'),
-        'debit_amount': r.get('debit_amount'), 'credit_amount': r.get('credit_amount'),
-        'reference_number': r.get('reference_number'),
-        'reconcile_status': r.get('reconcile_status'),
-        'flagged': not _is_reconciled_value(r.get('reconcile_status')),
-    } for r in ledger_rows]
+    if books_source == 'banking':
+        # ledger_rows here are raw /banktransactions rows (already filtered to
+        # the "linked" ones above), not chartofaccounts transactions -- map
+        # using the bank-side field names instead. There's no separate
+        # Zoho reconcile_status for these (that's a chartofaccounts-only
+        # concept), so nothing here is flagged -- by construction every row
+        # already cleared the same "linked to books" bar as the left column;
+        # reconcile_status instead carries Zoho's own Banking status
+        # (matched/categorized/manually_added) for visibility.
+        ledger_out = [{
+            'transaction_id': r.get('transaction_id'), 'date': r.get('date'),
+            'description': r.get('description') or r.get('payee') or '',
+            'transaction_type': r.get('status'),
+            'debit_amount': r.get('amount') if (r.get('debit_or_credit') or '').lower() == 'debit' else None,
+            'credit_amount': r.get('amount') if (r.get('debit_or_credit') or '').lower() == 'credit' else None,
+            'reference_number': r.get('reference_number'),
+            'reconcile_status': r.get('status'),
+            'flagged': False,
+        } for r in ledger_rows]
+    else:
+        ledger_out = [{
+            'transaction_id': r.get('transaction_id'), 'date': r.get('transaction_date'),
+            'description': r.get('description') or r.get('payee') or '',
+            'transaction_type': r.get('transaction_type'),
+            'debit_amount': r.get('debit_amount'), 'credit_amount': r.get('credit_amount'),
+            'reference_number': r.get('reference_number'),
+            'reconcile_status': r.get('reconcile_status'),
+            'flagged': not _is_reconciled_value(r.get('reconcile_status')),
+        } for r in ledger_rows]
     ledger_out.sort(key=lambda l: (not l['flagged'], l['date'] or ''))
 
     return jsonify({
@@ -1626,6 +1675,7 @@ def bank_vs_zoho_report():
         'bank_transactions': bank_out, 'ledger_transactions': ledger_out,
         'bank_flagged_count': sum(1 for b in bank_out if b['flagged']),
         'ledger_flagged_count': sum(1 for l in ledger_out if l['flagged']),
+        'books_source': books_source,
         'diagnostics': diag,
     })
 

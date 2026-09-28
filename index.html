@@ -8387,7 +8387,8 @@ function _zrBankBadge(status){
   const ok=status&&!['uncategorized','excluded'].includes(String(status).toLowerCase());
   return `<span style="font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;background:${ok?'var(--green-light)':'var(--amber-light)'};color:${ok?'var(--green)':'var(--amber)'}">${esc(status||'unknown')}</span>`;
 }
-function _zrLedgerBadge(flagged){
+function _zrLedgerBadge(flagged,status){
+  if(status)return `<span style="font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;background:var(--green-light);color:var(--green)">${esc(status)}</span>`;
   return flagged?`<span style="font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;background:var(--amber-light);color:var(--amber)">not reconciled</span>`
                :`<span style="font-size:11px;font-weight:700;padding:1px 7px;border-radius:10px;background:var(--green-light);color:var(--green)">reconciled</span>`;
 }
@@ -8401,8 +8402,9 @@ function renderZrResults(){
   el.innerHTML=`
     <div class="dash-metrics" style="margin-bottom:14px">
       <div class="mcard" title="Bank statement lines imported into Zoho for this account and month."><div class="mcard-label">Bank lines (Zoho Banking)</div><div class="mcard-val navy">${bank.length}</div><div class="mcard-sub">${D.bank_flagged_count} not linked to a books entry</div></div>
-      <div class="mcard" title="Zoho's own ledger entries for this account and month."><div class="mcard-label">Zoho books entries</div><div class="mcard-val navy">${ledger.length}</div><div class="mcard-sub">${D.ledger_flagged_count} not reconciled</div></div>
+      <div class="mcard" title="${D.books_source==='banking'?'Zoho doesn\'t expose a separate ledger for bank/cash accounts via this API, so these are the same Banking-module lines Zoho itself has already linked to books (matched/categorized).':'Zoho\'s own Chart-of-Accounts ledger entries for this account and month.'}"><div class="mcard-label">Zoho books entries${D.books_source==='banking'?' <span style="font-weight:400;color:var(--gray-500)">(from Banking)</span>':''}</div><div class="mcard-val navy">${ledger.length}</div><div class="mcard-sub">${D.books_source==='banking'?'already linked in Zoho Banking':D.ledger_flagged_count+' not reconciled'}</div></div>
     </div>
+    ${D.books_source==='banking'?'<div style="font-size:12px;color:var(--gray-500);margin-bottom:10px">Zoho\'s ledger API doesn\'t return data for bank/cash accounts, even though Zoho\'s own UI shows it — so the "Zoho Books" column below is the subset of the left-hand Banking lines that Zoho itself has already marked matched/categorized, not a second independent source.</div>':''}
     ${ledger.length===0?_zrDiagHTML(D.diagnostics):''}
     <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start">
       <div style="flex:1;min-width:380px">
@@ -8423,7 +8425,7 @@ function renderZrResults(){
           ${ledger.length?ledger.map(l=>`<div style="padding:8px 0;border-bottom:1px solid var(--gray-100);font-size:12.5px;${l.flagged?'background:var(--amber-light)':''}">
             <div style="display:flex;justify-content:space-between;gap:8px">
               <span>${esc(l.date)} — ${esc(l.description||'')}</span>
-              ${_zrLedgerBadge(l.flagged)}
+              ${_zrLedgerBadge(l.flagged,D.books_source==='banking'?l.reconcile_status:null)}
             </div>
             <div style="color:var(--gray-500);margin-top:2px">${esc(l.transaction_type||'')} · ${l.debit_amount?'Debit AED '+fmt(l.debit_amount):''}${l.credit_amount?'Credit AED '+fmt(l.credit_amount):''}${l.reference_number?' · Ref '+esc(l.reference_number):''}</div>
           </div>`).join(''):'<div style="color:var(--gray-500);font-size:12.5px">No Zoho transactions found for this account and month.</div>'}
