@@ -2024,6 +2024,32 @@ def revoke_insights_share_link():
     sb.table('companies').update({'insights_share_enabled': False}).eq('id', claims['company_id']).execute()
     return jsonify({'ok': True})
 
+
+# The Insights share link is intentionally permanent and requires no login
+# or token rotation (an explicit, deliberate product decision -- see
+# create_insights_share_link()/revoke_insights_share_link() above: revoking
+# and re-sharing is the only "rotation" available). That's a real exposure
+# if the link ever leaks, since anyone with the URL can otherwise see
+# everything an admin sees. Rather than add the login/token/expiry the
+# mobile redesign spec originally called for (which would break the
+# "one permanent link, no sign-in" UX this was deliberately built for), the
+# mitigation is on the content side: a handful of the most sensitive
+# sections -- actual bank/loan balances, vendor payment obligations, and
+# project-level margins/cash exposure -- are left out of the payload
+# entirely for a shared/public viewer, by default. Revenue-side sections
+# (Sales & Pipeline, Zoho Sales, Business Performance) and operational
+# sections (AMC & Field Service) are not considered sensitive in the same
+# way and remain visible on the shared link.
+_SHARE_HIDDEN_SECTIONS = ('loans', 'bank_recon', 'payables', 'financial')
+
+def _strip_hidden_sections_for_share(payload):
+    hidden_any = False
+    for key in _SHARE_HIDDEN_SECTIONS:
+        if payload.pop(key, None) is not None:
+            hidden_any = True
+    payload['share_finance_hidden'] = hidden_any
+    return payload
+
 @app.route('/api/insights/public', methods=['GET'])
 def insights_public():
     # "token" here is the company's own id (see create_insights_share_link()
@@ -2042,12 +2068,15 @@ def insights_public():
     company = row[0]
     # role='admin' gives the same full, company-wide (not per-user-filtered)
     # view an admin gets when opening Insights normally -- the right default
-    # for a shared dashboard link that isn't tied to any one person.
+    # for a shared dashboard link that isn't tied to any one person. Content
+    # is then narrowed for the public viewer -- see _strip_hidden_sections_
+    # for_share() above.
     fake_claims = {
         'company_id': company['id'], 'role': 'admin', 'user_id': None,
         'features': company.get('features') or {}, 'role_permissions': None,
     }
     payload = _build_insights_payload(fake_claims)
+    payload = _strip_hidden_sections_for_share(payload)
     payload['company_name'] = company.get('name')
     return jsonify(payload)
 

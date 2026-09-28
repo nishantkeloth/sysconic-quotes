@@ -8289,7 +8289,7 @@ ${hasFeature('vouchers')?`<div class="card" style="max-width:640px;margin-top:16
 </div>
 <div class="card" style="max-width:640px;margin-top:16px">
   <div class="card-title">Public Insights Link</div>
-  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Turn on a link that opens the mobile Insights dashboard with no login — handy for a phone home-screen shortcut or an office TV display. <strong>Anyone with this link can view your sales and GP data, no password required</strong>, so treat it like a password: don't post it anywhere public. This link is permanent — turning sharing off blocks access immediately, but turning it back on restores this exact same link rather than issuing a new one, so if it ever leaks, turning it off is the only way to stop it (there's no "get a fresh link" option). Admin only.</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Turn on a link that opens the mobile Insights dashboard with no login — handy for a phone home-screen shortcut or an office TV display. <strong>Anyone with this link can view your Sales &amp; Pipeline, Zoho Sales, and Business Performance data, no password required</strong>, so treat it like a password: don't post it anywhere public. Loans, Bank Reconciliation, Payables, and Financial Health (project margins/cash exposure) are always left out of this shared view, regardless of what's visible when you're signed in. This link is permanent — turning sharing off blocks access immediately, but turning it back on restores this exact same link rather than issuing a new one, so if it ever leaks, turning it off is the only way to stop it (there's no "get a fresh link" option). Admin only.</div>
   <div id="shareLinkBox"><div style="color:var(--gray-500)">Loading…</div></div>
 </div>
 <div class="card" style="max-width:640px;margin-top:16px">
@@ -8807,7 +8807,7 @@ function renderShareLinkBox(enabled){
   `;
 }
 async function generateInsightsShareLink(){
-  if(!confirm('Turn on the public Insights link? Anyone with this link can view your Insights dashboard with no login, and the link never changes once shared.'))return;
+  if(!confirm('Turn on the public Insights link? Anyone with this link can view your Sales, Zoho Sales, and Business Performance data with no login (Loans, Bank Reconciliation, Payables, and Financial Health are always excluded from this view), and the link never changes once shared.'))return;
   const r=await api('POST','/api/insights/share-link');
   if(r.error){alert(r.error);return;}
   renderShareLinkBox(true);
