@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
-import os, jwt, traceback, base64, requests, re, time, secrets, hashlib, uuid
+import os, jwt, traceback, base64, requests, re, time, secrets, hashlib, uuid, json
 from datetime import datetime, timedelta
 from supabase import create_client
 
@@ -1677,6 +1677,50 @@ def _build_insights_payload(claims):
             'total_borrowed': sum(_numf(r.get('total_borrowed')) for r in loan_rows),
             'total_repaid': sum(_numf(r.get('total_repaid')) for r in loan_rows),
             'last_synced_at': max(synced_ats) if synced_ats else None,
+        }
+
+    # ── Payables (Vendor payment tracker, aggregated across awarded quotes) ─
+    # The per-quote "Vendor payment tracker" (Quote editor -> Vendors tab)
+    # lets a user record what's owed to each supplier on that PO -- vendor
+    # name, payable amount, a target payment date, and a pending/partial/paid
+    # status. It's manually entered, not synced from Zoho (Zoho Books has no
+    # vendor-bill/AP object wired into this app -- see the Loans section's
+    # own comment above for the analogous limitation on the liability side).
+    # Only awarded quotes are counted here: an un-awarded quote's vendor
+    # entries aren't a real commitment yet. Amount includes the same 5% VAT
+    # the quote editor itself calculates (payable*1.05).
+    pyq = sb.table('quotes').select('id,title,customer,status,vendor_data').eq('company_id', company_id).eq('status', 'awarded')
+    if not _can_view_all_quotes(claims):
+        pyq = pyq.eq('created_by', claims['user_id'])
+    payable_quotes = pyq.execute().data or []
+    payable_items = []
+    for q in payable_quotes:
+        vd = q.get('vendor_data') or []
+        if isinstance(vd, str):
+            try:
+                vd = json.loads(vd)
+            except Exception:
+                vd = []
+        for v in vd:
+            payable = _numf(v.get('payable'))
+            if payable <= 0:
+                continue
+            payable_items.append({
+                'quote_id': q.get('id'),
+                'quote_title': q.get('title'),
+                'customer': q.get('customer'),
+                'vendor': v.get('vendor') or 'Vendor',
+                'amount': round(payable * 1.05, 2),
+                'date': v.get('date') or None,
+                'status': v.get('status') or 'pending',
+            })
+    if payable_items:
+        payable_items.sort(key=lambda r: (r['status'] == 'paid', r['date'] or '9999-12-31'))
+        out['payables'] = {
+            'total_payable': sum(r['amount'] for r in payable_items),
+            'total_outstanding': sum(r['amount'] for r in payable_items if r['status'] != 'paid'),
+            'total_paid': sum(r['amount'] for r in payable_items if r['status'] == 'paid'),
+            'items': payable_items,
         }
 
     # ── Bank Reconciliation (every bank/card account, synced monthly) ──────

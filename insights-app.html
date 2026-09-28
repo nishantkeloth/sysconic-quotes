@@ -644,6 +644,43 @@ function loansSectionHTML(L){
   </div>`;
 }
 
+// Payables -- aggregated from each quote's Vendor payment tracker (awarded
+// quotes only). Manually entered, not synced from Zoho -- see the backend
+// comment in api/quotes.py _build_insights_payload(). Sorted soonest-due
+// first (paid items already sink to the bottom server-side).
+function payablesSectionHTML(P){
+  const today=new Date();today.setHours(0,0,0,0);
+  const payBadgeText=it=>{
+    if(it.status==='paid')return 'Paid';
+    if(it.date&&new Date(it.date)<today)return 'Overdue';
+    if(it.status==='partial')return 'Partial';
+    return 'Pending';
+  };
+  const payBadgeColor=it=>{
+    if(it.status==='paid')return 'var(--green)';
+    if(it.date&&new Date(it.date)<today)return 'var(--red)';
+    if(it.status==='partial')return 'var(--amber)';
+    return 'var(--gray-500)';
+  };
+  return `<div class="sec">
+    <div class="sec-title"><span>📤 Payables</span></div>
+    <div class="cards">
+      <div class="card"><div class="card-label">Total payable</div><div class="card-val navy">AED ${fmt(P.total_payable)}</div><div class="card-sub">incl. VAT</div></div>
+      <div class="card"><div class="card-label">Outstanding</div><div class="card-val amber">AED ${fmt(P.total_outstanding)}</div></div>
+      <div class="card"><div class="card-label">Paid</div><div class="card-val green">AED ${fmt(P.total_paid)}</div></div>
+    </div>
+    <div class="list">
+      ${P.items.map(it=>`<div class="list-row" style="flex-direction:column;align-items:stretch;gap:2px">
+        <div style="display:flex;justify-content:space-between"><span class="list-row-name">${esc(it.vendor)}</span><span class="list-row-val">AED ${fmt(it.amount)}</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--gray-500)">
+          <span>${esc(it.quote_title||'')}</span>
+          <span>${it.date?new Date(it.date).toLocaleDateString():'No date set'} · <span style="color:${payBadgeColor(it)};font-weight:700">${payBadgeText(it)}</span></span>
+        </div>
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
+
 // Loan transaction drill-down -- fetched live from Zoho on tap, same
 // generic bottom sheet used for invoice drill-downs elsewhere in this app,
 // just with its own row template (borrowed/repaid instead of invoice total).
@@ -780,6 +817,7 @@ function dashboardHTML(){
     if(d.zoho_sales)body+=zohoSectionHTML(d.zoho_sales);
     if(d.zoho_sales)body+=bizSectionHTML();
     if(d.loans&&d.loans.accounts&&d.loans.accounts.length)body+=loansSectionHTML(d.loans);
+    if(d.payables&&d.payables.items&&d.payables.items.length)body+=payablesSectionHTML(d.payables);
     if(d.bank_recon&&d.bank_recon.accounts&&d.bank_recon.accounts.length)body+=bankReconSectionHTML(d.bank_recon);
     if(d.financial)body+=financialSectionHTML(d.financial);
     if(d.fsm)body+=fsmSectionHTML(d.fsm);

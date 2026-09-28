@@ -4721,6 +4721,41 @@ function insightsHTML(){
       </div>`);
   }
 
+  // ── Payables (Vendor payment tracker, aggregated across awarded quotes) ─
+  // Manually entered per-quote (Quote editor → Vendors tab), not synced from
+  // Zoho — see api/quotes.py _build_insights_payload() for the same caveat.
+  // Sorted soonest-due first; paid items sink to the bottom.
+  if(d.payables&&d.payables.items&&d.payables.items.length){
+    const P=d.payables;
+    const today=new Date();today.setHours(0,0,0,0);
+    const payBadge=it=>{
+      if(it.status==='paid')return '<span class="sbadge s-resolved">Paid</span>';
+      const overdue=it.date&&new Date(it.date)<today;
+      if(overdue)return '<span class="sbadge s-critical">Overdue</span>';
+      if(it.status==='partial')return '<span class="sbadge s-waiting">Partial</span>';
+      return '<span class="sbadge s-draft">Pending</span>';
+    };
+    sections.push(`
+      <div class="insights-sec">
+        <div class="insights-sec-title"><span>📤 Payables</span></div>
+        <div class="dash-metrics">
+          <div class="mcard"><div class="mcard-label">Total payable</div><div class="mcard-val navy">AED ${fmt(P.total_payable)}</div><div class="mcard-sub">incl. VAT, awarded quotes</div></div>
+          <div class="mcard"><div class="mcard-label">Outstanding</div><div class="mcard-val amber">AED ${fmt(P.total_outstanding)}</div></div>
+          <div class="mcard"><div class="mcard-label">Paid</div><div class="mcard-val green">AED ${fmt(P.total_paid)}</div></div>
+        </div>
+        <div class="insights-list">
+          <div class="insights-list-title">By vendor — upcoming payment date first</div>
+          ${P.items.map(it=>`<div class="insights-row" style="display:grid;grid-template-columns:1.4fr 1fr 0.8fr 0.8fr;gap:12px;align-items:center">
+            <span>${esc(it.vendor)}<br><span style="font-size:11px;color:var(--gray-500)">${esc(it.quote_title||'')}${it.customer?' · '+esc(it.customer):''}</span></span>
+            <span style="text-align:right;font-weight:700">AED ${fmt(it.amount)}</span>
+            <span style="text-align:right;color:var(--gray-500)">${it.date?new Date(it.date).toLocaleDateString():'No date set'}</span>
+            <span style="text-align:right">${payBadge(it)}</span>
+          </div>`).join('')}
+        </div>
+        <div style="font-size:11px;color:var(--gray-500);margin-top:8px">From each quote's Vendor payment tracker · manually entered, not synced from Zoho</div>
+      </div>`);
+  }
+
   // ── Bank Reconciliation (every bank/card account, synced monthly) ───────
   if(d.bank_recon&&d.bank_recon.accounts&&d.bank_recon.accounts.length){
     sections.push(`<div class="insights-sec"><div class="insights-sec-title"><span>📒 Bank Reconciliation</span></div>${_bankReconGridHTML(d.bank_recon)}</div>`);
