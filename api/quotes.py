@@ -523,7 +523,17 @@ def _activate_project_performance(claims, quote, won_option_index):
 # sent/awarded/lost, its content is locked — the only way to edit it again
 # is to explicitly set the status back to 'draft' first. This keeps what a
 # reviewer/customer saw for a given version from silently drifting.
-CONTENT_FIELDS = ['title','customer','currency','exchange_rate','pricing_type','quote_data','vendor_data','terms_data','proposal_data','total_sell','total_gp','margin']
+#
+# vendor_data is deliberately excluded: it's the internal Vendor payment
+# tracker (what's owed to suppliers), not part of the customer-facing
+# commercial baseline this lock protects -- and it's only really meaningful
+# once a quote is Awarded (that's when a real payable exists), so locking it
+# at exactly that point made the tracker unusable for its own stated purpose
+# (discovered when a real company had zero vendor-payable entries on any of
+# their 30 Awarded quotes -- every attempt to add one after award was being
+# silently rejected with the same "quote is locked" error as an edit to
+# pricing would get).
+CONTENT_FIELDS = ['title','customer','currency','exchange_rate','pricing_type','quote_data','terms_data','proposal_data','total_sell','total_gp','margin']
 
 @app.route('/api/quotes/<qid>', methods=['PUT'])
 def update_quote(qid):
