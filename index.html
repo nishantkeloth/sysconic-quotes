@@ -5140,7 +5140,7 @@ function vendorHTML(){
       <td style="font-weight:700;color:var(--navy)">${fmtC(v.payable+vat)}</td>
       <td><input type="number" style="width:110px" value="${v.p1}" oninput="vendors()[${i}].p1=+this.value;schedSave()"></td>
       <td><input type="number" style="width:110px" value="${v.p2}" oninput="vendors()[${i}].p2=+this.value;schedSave()"></td>
-      <td><input style="width:100px" value="${esc(v.date)}" oninput="vendors()[${i}].date=this.value;schedSave()"></td>
+      <td><input type="date" style="width:135px" value="${esc(v.date)}" onchange="vendors()[${i}].date=this.value;schedSave();draw()"></td>
       <td><select onchange="vendors()[${i}].status=this.value;schedSave();draw()">
         ${['pending','partial','paid'].map(s=>`<option ${v.status===s?'selected':''}>${s}</option>`).join('')}
       </select></td>
