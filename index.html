@@ -4576,7 +4576,7 @@ function insightsHTML(){
         <div class="dash-metrics">
           <div class="mcard"><div class="mcard-label">Total invoiced</div><div class="mcard-val navy">AED ${fmt(z.total_invoiced)}</div><div class="mcard-sub">${z.invoice_count} invoice(s)</div></div>
           <div class="mcard"><div class="mcard-label">Total collected</div><div class="mcard-val green">AED ${fmt(z.total_collected)}</div></div>
-          <div class="mcard"><div class="mcard-label">Outstanding</div><div class="mcard-val amber">AED ${fmt(z.total_invoiced-z.total_collected)}</div></div>
+          <div class="mcard"><div class="mcard-label">Outstanding (this period)</div><div class="mcard-val amber">AED ${fmt(z.total_invoiced-z.total_collected)}</div></div>
           <div class="mcard"><div class="mcard-label">Customers</div><div class="mcard-val navy">${customers.length}</div></div>
         </div>
         <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:16px;margin-bottom:16px">
@@ -4638,8 +4638,8 @@ function insightsHTML(){
             <div class="mcard-label">Collected <span style="font-weight:400">(proxy)</span></div><div class="mcard-val green">AED ${fmt(totals.collected)}</div>
             <div class="mcard-sub">period flow, invoice-date basis</div>
           </div>
-          <div class="mcard" style="cursor:pointer" onclick="bizDrillOutstanding()" title="All unpaid invoice balances, as of right now. Not a historical year-end snapshot.">
-            <div class="mcard-label">Outstanding</div><div class="mcard-val amber">AED ${fmt(asOf.outstanding)}</div>
+          <div class="mcard" style="cursor:pointer" onclick="bizDrillOutstanding()" title="All unpaid invoice balances across every Zoho invoice (org-wide), as of right now. Not a historical year-end snapshot, and not the same figure as Financial Health's 'Outstanding receivables' (tracked projects only).">
+            <div class="mcard-label">Outstanding (all invoices)</div><div class="mcard-val amber">AED ${fmt(asOf.outstanding)}</div>
             <div class="mcard-sub">as of now · click to view</div>
           </div>
           <div class="mcard" style="cursor:pointer" onclick="bizDrillAging('b1_30')" title="Unpaid balance past its due date, as of right now.">
@@ -4679,7 +4679,7 @@ function insightsHTML(){
         </div>
 
         <div class="insights-list">
-          <div class="insights-list-title">Receivables ageing — by due date, current balance · click a bucket for its invoices</div>
+          <div class="insights-list-title">Receivables ageing (all Zoho invoices, org-wide) — by due date, current balance · click a bucket for its invoices</div>
           <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px">
             ${[['not_due','Not yet due','navy'],['b1_30','1–30 days','amber'],['b31_60','31–60 days','amber'],['b61_90','61–90 days','red'],['b90_plus','90+ days','red']].map(([k,label,cls])=>`
               <div class="mcard" style="cursor:pointer" onclick="bizDrillAging('${k}')"><div class="mcard-label">${label}</div><div class="mcard-val ${cls}">AED ${fmt(asOf.buckets[k])}</div></div>
@@ -4766,12 +4766,12 @@ function insightsHTML(){
     const k=d.financial;
     sections.push(`
       <div class="insights-sec">
-        <div class="insights-sec-title">💰 Financial Health <span style="font-size:11px;color:var(--gray-500);font-weight:500">(synced from Zoho Books)</span></div>
+        <div class="insights-sec-title">💰 Financial Health <span style="font-size:11px;color:var(--gray-500);font-weight:500">(tracked projects, synced from Zoho Books${k.last_synced_at?' · last synced '+new Date(k.last_synced_at).toLocaleString():''})</span></div>
         <div class="dash-metrics">
           <div class="mcard"><div class="mcard-label">Active projects</div><div class="mcard-val navy">${k.active_projects}</div><div class="mcard-sub">AED ${fmt(k.total_active_value)}</div></div>
           <div class="mcard"><div class="mcard-label">Portfolio GP%</div><div class="mcard-val green">${k.portfolio_gp_pct}%</div></div>
           <div class="mcard"><div class="mcard-label">At risk / Critical</div><div class="mcard-val ${k.critical_projects>0?'red':'amber'}">${k.projects_at_risk} / ${k.critical_projects}</div></div>
-          <div class="mcard"><div class="mcard-label">Outstanding receivables</div><div class="mcard-val amber">AED ${fmt(k.outstanding_receivables)}</div></div>
+          <div class="mcard"><div class="mcard-label">Outstanding receivables</div><div class="mcard-val amber">AED ${fmt(k.outstanding_receivables)}</div><div class="mcard-sub">tracked projects only</div></div>
           <div class="mcard"><div class="mcard-label">Unbilled value</div><div class="mcard-val navy">AED ${fmt(k.unbilled_value)}</div></div>
           <div class="mcard"><div class="mcard-label">Cash exposure</div><div class="mcard-val ${k.cash_exposure<0?'red':'green'}">AED ${fmt(k.cash_exposure)}</div></div>
         </div>

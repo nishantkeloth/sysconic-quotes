@@ -1770,7 +1770,7 @@ def _build_insights_payload(claims):
     if _has_feature(claims, 'project_performance'):
         pq = sb.table('projects').select(
             'name,customer,status,revenue_forecast,forecast_gp_pct,invoiced_value,'
-            'collected_value,net_cash_position,health_status,project_manager_id,salesperson_id'
+            'collected_value,net_cash_position,health_status,project_manager_id,salesperson_id,last_synced_at'
         ).eq('company_id', company_id)
         if not (claims.get('role') == 'admin' or claims.get('can_manage_project_performance')):
             uid = claims.get('user_id')
@@ -1780,6 +1780,7 @@ def _build_insights_payload(claims):
         total_value = sum(_numf(r.get('revenue_forecast')) for r in active)
         weighted_gp = (sum(_numf(r.get('forecast_gp_pct')) * _numf(r.get('revenue_forecast')) for r in active) / total_value) if total_value else 0.0
         at_risk = [r for r in rows if r.get('health_status') in ('at_risk', 'critical')]
+        financial_synced_ats = [r['last_synced_at'] for r in rows if r.get('last_synced_at')]
         out['financial'] = {
             'active_projects': len(active),
             'total_active_value': total_value,
@@ -1787,9 +1788,15 @@ def _build_insights_payload(claims):
             'projects_at_risk': len([r for r in rows if r.get('health_status') == 'at_risk']),
             'critical_projects': len([r for r in rows if r.get('health_status') == 'critical']),
             'unbilled_value': sum(_numf(r.get('revenue_forecast')) - _numf(r.get('invoiced_value')) for r in rows),
+            # Scoped to Project Performance's tracked projects only -- NOT the
+            # same universe as zoho_sales/Business Performance's "Outstanding"
+            # (which covers every Zoho invoice org-wide). Two genuinely
+            # different, correctly-scoped figures -- see index.html/insights-app.html
+            # labels for the "(tracked projects)" vs "(org-wide)" disambiguation.
             'outstanding_receivables': sum(_numf(r.get('invoiced_value')) - _numf(r.get('collected_value')) for r in rows),
             'cash_exposure': sum(min(0.0, _numf(r.get('net_cash_position'))) for r in rows),
             'at_risk_projects': [{'name': r.get('name'), 'customer': r.get('customer'), 'health_status': r.get('health_status')} for r in at_risk[:6]],
+            'last_synced_at': max(financial_synced_ats) if financial_synced_ats else None,
         }
 
     # ── AMC & Field Service ─────────────────────────────────────────────
