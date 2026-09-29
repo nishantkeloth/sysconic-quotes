@@ -2180,6 +2180,14 @@ def insights_public():
     }
     payload = _build_insights_payload(fake_claims)
     payload = _strip_finance_sections(payload, keep=('zoho_payables',))
+    # zoho_sales isn't in _FINANCE_SECTIONS (it's revenue-side, and a
+    # signed-in sales role is meant to see it -- see the comment above
+    # _FINANCE_SECTIONS). But it also carries the AR figures this public,
+    # unauthenticated link should never expose: outstanding/overdue invoice
+    # balances, plus every customer name and invoice amount in the org. Only
+    # this anonymous endpoint strips it; insights_summary()'s role-based
+    # gating for signed-in users is unchanged.
+    payload.pop('zoho_sales', None)
     payload['company_name'] = company.get('name')
     return jsonify(payload)
 
