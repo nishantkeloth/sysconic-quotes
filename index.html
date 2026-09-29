@@ -3204,8 +3204,6 @@ function draw(){
   setTimeout(initTA,30);
   if(A.page==='insights'&&!INSIGHTS.data&&!INSIGHTS.loading)setTimeout(loadInsightsPage,50);
   if(A.page==='insights'&&INSIGHTS.data)setTimeout(initInsightsCharts,60);
-  if(A.page==='insights'&&A.quotes==null)loadQuotes().then(draw); // Quote-to-Invoice panel needs full quote list (id/ref/customer), not the lightweight d.sales.quotes array
-  if(A.page==='insights'&&!BIZ_MATCHES.data&&!BIZ_MATCHES.loading)setTimeout(()=>loadBizMatches(false),50);
   if(A.page==='team'){setTimeout(loadTeam,50);}
   if(A.page==='integrations'){setTimeout(loadIntegrations,50);setTimeout(loadSyncConfig,50);}
   if(A.page==='platform'){setTimeout(loadPlatformCompanies,50);}
@@ -4734,8 +4732,6 @@ function insightsHTML(){
           </div>
           <div style="font-size:11px;color:var(--gray-500);margin-top:8px">As of ${asOf.as_of.toLocaleString()}</div>
         </div>
-
-        ${bizQuoteReconciliationHTML()}
       </div>`);
   }
 
