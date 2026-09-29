@@ -952,6 +952,7 @@ function zohoPayablesSectionHTML(P){
       </div>`).join('')}
     </div>`:''}
     ${P.last_synced_at?`<div style="font-size:11px;color:var(--gray-500);margin-top:8px">Last synced ${_insightsAgo(new Date(P.last_synced_at))}</div>`:''}
+    <div style="font-size:11px;color:var(--gray-500);margin-top:4px">Debug: total billed AED ${fmt(P.total_billed)} across ${P.bill_count} bill(s) · by status: ${Object.entries(P.status_counts||{}).map(([s,c])=>s+' '+c).join(', ')||'—'}</div>
   </div>`;
 }
 function drillZohoPayablesMobile(kind,vendorName){

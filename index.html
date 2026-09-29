@@ -4788,7 +4788,8 @@ function insightsHTML(){
           <div class="insights-list-title">By vendor — click a row for its bills</div>
           ${P.vendors.slice(0,15).map(v=>`<div class="insights-row" style="cursor:pointer;display:grid;grid-template-columns:1fr 130px 150px;gap:12px;align-items:center" onclick="showZohoVendorModal(${esc(JSON.stringify(v.vendor))})"><span>${esc(v.vendor)}</span><span style="color:var(--gray-500);text-align:right">${v.count} bill(s)</span><span style="font-weight:700;text-align:right;color:${v.outstanding>0?'var(--amber)':'var(--green)'}">AED ${fmt(v.outstanding)}</span></div>`).join('')}
         </div>
-        ${P.last_synced_at?`<div style="font-size:11px;color:var(--gray-500);margin-top:8px">Last synced ${_insightsAgo(new Date(P.last_synced_at))}</div>`:''}`
+        ${P.last_synced_at?`<div style="font-size:11px;color:var(--gray-500);margin-top:8px">Last synced ${_insightsAgo(new Date(P.last_synced_at))}</div>`:''}
+        <div style="font-size:11px;color:var(--gray-500);margin-top:4px">Debug: total billed AED ${fmt(P.total_billed)} across ${P.bill_count} bill(s) · by status: ${Object.entries(P.status_counts||{}).map(([s,c])=>s+' '+c).join(', ')||'—'}</div>`
         :`<div style="color:var(--gray-500);padding:16px 0">No bills synced yet — click Sync Now above.</div>`}
       </div>`);
   }
