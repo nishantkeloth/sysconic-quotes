@@ -101,9 +101,68 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .inv-row:first-child{border-top:none}
 .inv-row-top{display:flex;justify-content:space-between;font-weight:700}
 .inv-row-bottom{display:flex;justify-content:space-between;color:var(--gray-500);margin-top:2px}
+
+/* ── Mobile Insights redesign (Home/Sales/AR/AP/More) ─────────────────────
+   Visual language matches QTCal_Mobile_Insights_Interactive_Sample.html:
+   navy/ink primary text, teal (--green) for healthy/received, amber for due
+   soon, red for overdue/breached. Status is always a word + colour, never
+   colour alone. Icons: one inline SVG sprite (defined once in <body>, see
+   #nicon-* symbols), 20-24px, no emoji mixed in on this new nav/hero/list UI
+   (legacy sections reused inside More -- Projects/Service/Performance --
+   still use their pre-existing emoji headers to limit the size of this
+   change; they are not part of the AR/AP redesign's acceptance criteria). */
+.nicon{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none;display:block}
+.hero{background:var(--white);border:1px solid var(--gray-200);border-radius:16px;padding:16px;margin-bottom:14px}
+.hero.dark{background:var(--navy-dark);color:#fff;border-color:var(--navy-dark)}
+.hero.dark .card-label{color:#b9ccd1}
+.hero .card-val{font-size:28px;line-height:1.15;font-variant-numeric:tabular-nums}
+.hero-sub{font-size:12.5px;color:var(--gray-500);margin-top:4px;line-height:1.5}
+.hero.dark .hero-sub{color:#b9d4d5}
+.hero-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px}
+.notice{display:flex;align-items:flex-start;gap:9px;border-radius:12px;padding:11px 12px;background:#eaf3f1;color:#2f635d;font-size:12px;line-height:1.45;margin:10px 0}
+.notice .nicon{width:16px;height:16px;margin-top:1px;flex:none}
+.barrow{display:grid;grid-template-columns:64px 1fr 76px;gap:8px;align-items:center;margin:10px 0;font-size:11.5px}
+.barrow span:last-child{text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
+.track{height:9px;border-radius:99px;background:var(--gray-100);overflow:hidden}
+.fill{height:100%;background:var(--green);border-radius:99px}
+.fill.amber{background:var(--amber)}.fill.red{background:var(--red)}.fill.navy{background:var(--navy)}
+.pillrow{display:flex;gap:7px;overflow-x:auto;padding:2px 0 4px}
+.pill{min-height:38px;border-radius:999px;border:1.5px solid var(--gray-200);background:var(--white);color:var(--gray-500);white-space:nowrap;padding:0 12px;font-size:12px;font-weight:700;font-family:inherit}
+.pill.active{background:var(--navy);border-color:var(--navy);color:#fff}
+.xrows{background:var(--white);border-radius:14px;overflow:hidden;border:1px solid var(--gray-200)}
+.xrow{display:flex;align-items:center;gap:11px;width:100%;background:none;border:none;padding:12px;text-align:left;color:var(--gray-900);min-height:64px;font-family:inherit;border-top:1px solid var(--gray-100)}
+.xrow:first-child{border-top:none}
+.xrow .iconwrap{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:var(--gray-100);color:var(--gray-500);flex:none}
+.xrow .iconwrap.collect{background:#fcecea;color:var(--red)}
+.xrow .iconwrap.pay{background:#fff3da;color:var(--amber)}
+.xrow .mid{min-width:0;flex:1}
+.xrow strong{font-size:13px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.xrow small{font-size:11.5px;color:var(--gray-500);display:block;margin-top:2px}
+.xrow .right{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;font-weight:750;font-size:13px}
+.moregroup{background:var(--white);border:1px solid var(--gray-200);border-radius:14px;overflow:hidden}
+.moregroup .xrow{border-radius:0}
+.morehead{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.morehead button{background:var(--gray-100);border:none;width:40px;height:40px;border-radius:11px;display:grid;place-items:center;color:var(--gray-900)}
+.sectionhead2{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:18px 0 10px}
+.sectionhead2 h2{font-size:14px;margin:0;font-weight:800;color:var(--navy)}
+.finelink{border:0;background:none;color:var(--navy);font-size:12.5px;font-weight:700;min-height:36px;padding:0 2px;font-family:inherit}
 </style>
 </head>
 <body>
+<svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="nic-home" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M9 21v-7h6v7"/></symbol>
+  <symbol id="nic-sales" viewBox="0 0 24 24"><path d="M3 20h18M5 17l5-5 4 3 6-8"/><path d="M16 7h4v4"/></symbol>
+  <symbol id="nic-ar" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h5M15 15v4m0 0-2-2m2 2 2-2"/></symbol>
+  <symbol id="nic-ap" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h5M15 19v-4m0 0-2 2m2-2 2 2"/></symbol>
+  <symbol id="nic-more" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+  <symbol id="nic-chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="nic-back" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+  <symbol id="nic-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+  <symbol id="nic-brief" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="14" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 13h18"/></symbol>
+  <symbol id="nic-service" viewBox="0 0 24 24"><path d="M14 7a5 5 0 0 0-6 6l-5 5a2 2 0 0 0 3 3l5-5a5 5 0 0 0 6-6l-3 3-3-3z"/></symbol>
+  <symbol id="nic-report" viewBox="0 0 24 24"><path d="M5 3h10l4 4v14H5zM15 3v5h4M8 13h8M8 17h8"/></symbol>
+  <symbol id="nic-cash" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="3"/></symbol>
+</svg>
 <div id="app"></div>
 <script>
 // ── State ────────────────────────────────────────────────────────────────
@@ -129,11 +188,17 @@ const S={
   bizYear:localStorage.getItem('qtcal_mobile_bizYear')?parseInt(localStorage.getItem('qtcal_mobile_bizYear')):null,
   bankReconYear:localStorage.getItem('qtcal_mobile_bankReconYear')?parseInt(localStorage.getItem('qtcal_mobile_bankReconYear')):undefined,
   quotes:null,
-  // Bottom-nav tab: overview|sales|finance|projects|service. Remembered
-  // across app opens (same spirit as the token/user/company persistence
-  // above) so re-opening the PWA lands wherever the user last was, not
-  // always back at Overview.
-  tab:localStorage.getItem('qtcal_mobile_tab')||'overview',
+  // Bottom-nav tab: home|sales|ar|ap|more. Remembered across app opens (same
+  // spirit as the token/user/company persistence above) so re-opening the
+  // PWA lands wherever the user last was, not always back at Home. Maps
+  // legacy tab names (from before the Home/Sales/AR/AP/More redesign) onto
+  // their closest new destination so an existing installed PWA doesn't land
+  // on a tab that no longer exists.
+  tab:(()=>{ const t=localStorage.getItem('qtcal_mobile_tab'); return {overview:'home',finance:'ap',projects:'more',service:'more'}[t]||t||'home'; })(),
+  // "More" is a sub-list, not a bottom-nav destination of its own -- this
+  // tracks which sub-page (if any) is open within it: null|projects|service|
+  // performance|financeops.
+  morePage:null,
 };
 const esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 const fmt=n=>isNaN(n)?'0.00':(+n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -295,18 +360,20 @@ function closeSheet(){ S.sheet=null; render(); }
 // degrades gracefully with fewer cards when other modules are absent.
 function _tabsAvailable(d){
   return {
-    overview:true,
+    home:true,
     sales:true,
-    finance:!!(d.loans||d.payables||d.bank_recon||d.zoho_payables),
-    projects:!!d.financial,
-    service:!!d.fsm,
+    ar:!!d.zoho_sales,
+    ap:!!(d.zoho_payables&&d.zoho_payables.bill_count),
+    more:true, // More always shows -- it rebalances its own rows by availability instead of disappearing
   };
 }
 function goTab(t){
   S.tab=t; localStorage.setItem('qtcal_mobile_tab',t);
+  S.morePage=null;
   render();
   window.scrollTo(0,0);
 }
+function goMore(page){ S.morePage=page; render(); window.scrollTo(0,0); }
 
 // ── Filter persistence ──────────────────────────────────────────────────
 // Every period/range/year picker (Sales range, Zoho range, Business
@@ -352,6 +419,17 @@ const METRIC_CATALOGUE={
   zoho_payables_current:{label:'Current',def:'Unpaid bill balance not yet past its due date (or with no due date set).',source:'Zoho Books (Bills)',basis:'Live, AED'},
   zoho_payables_overdue:{label:'Overdue',def:'Unpaid bill balance past its due date, as of right now.',source:'Zoho Books (Bills)',basis:'Live, AED'},
   zoho_payables_due10:{label:'Due within 10 days',def:'Unpaid bills whose due date falls between today and 10 days from now -- QTcal\'s own addition to Zoho\'s stock Accounts Payable view, for planning what cash goes out soon.',source:'Zoho Books (Bills)',basis:'Live, AED'},
+  ar_open:{label:'Open receivables',def:'Sum of every unpaid customer invoice balance, computed live right now.',source:'Zoho Books (Invoices)',basis:'Live, AED'},
+  ar_overdue:{label:'Overdue',def:'Open receivables balance past the invoice due date, as of right now.',source:'Zoho Books (Invoices)',basis:'Live, AED'},
+  ar_due7:{label:'Due in 7 days',def:'Open receivables balance due within the next 7 days (not yet overdue). A subset of "Due in 30 days" -- the two are never added together.',source:'Zoho Books (Invoices)',basis:'Live, AED'},
+  ar_due30:{label:'Due in 30 days',def:'Open receivables balance due within the next 30 days (not yet overdue). Includes everything in "Due in 7 days".',source:'Zoho Books (Invoices)',basis:'Live, AED'},
+  ar_ageing:{label:'Receivables ageing',def:'Open invoice balances grouped by days past due (Not due, 1-30, 31-60, 61-90, 90+), based on invoice due date vs. today. Buckets are mutually exclusive and sum exactly to Open receivables.',source:'Zoho Books (Invoices)',basis:'Live, AED'},
+  ar_collected_proxy:{label:'Collected (proxy, all time)',def:'Invoiced amount minus each invoice\'s current outstanding balance, across every non-draft invoice ever synced. A proxy for cash collected (not a bank-reconciled, payment-date figure -- Zoho payment history isn\'t synced into Insights yet).',source:'Zoho Books (Invoices)',basis:'All time, incl. VAT, AED'},
+  ap_open:{label:'Open payables',def:'Sum of every unpaid vendor bill balance, computed live right now.',source:'Zoho Books (Bills)',basis:'Live, AED'},
+  ap_overdue:{label:'Overdue',def:'Open payables balance past the bill due date, as of right now.',source:'Zoho Books (Bills)',basis:'Live, AED'},
+  ap_due7:{label:'Due in 7 days',def:'Open payables balance due within the next 7 days (not yet overdue). A subset of "Due in 30 days".',source:'Zoho Books (Bills)',basis:'Live, AED'},
+  ap_due30:{label:'Due in 30 days',def:'Open payables balance due within the next 30 days (not yet overdue). Includes everything in "Due in 7 days".',source:'Zoho Books (Bills)',basis:'Live, AED'},
+  ap_timeline:{label:'Payment horizon',def:'Open bill balances grouped into Overdue, Today, Next 7 days, 8-30 days and Later, based on bill due date vs. today. Groups are mutually exclusive and sum exactly to Open payables.',source:'Zoho Books (Bills)',basis:'Live, AED'},
   bankrecon_reconciled:{label:'Reconciled',def:'Number of account-months where Zoho\'s own bank reconciliation record confirms the month is fully reconciled, out of every month in that account\'s history.',source:'Zoho Books reconciliation records',basis:'All history, per account'},
   bankrecon_uncategorized:{label:'Uncategorized',def:'Live count of bank-feed transactions in Zoho that haven\'t yet been categorized or matched to a book entry.',source:'Zoho Books bank feed',basis:'As of last sync'},
   active_projects:{label:'Active projects',def:'Count of Project Performance projects currently marked Active.',source:'QTcal Project Performance',basis:'Live'},
@@ -494,6 +572,87 @@ function _bizAsOfNow(){
   });
   return {outstanding,overdue,buckets,as_of:now};
 }
+// ── AR / AP computed views (Mobile Insights redesign) ───────────────────────
+// Both mirror the same shape: a hero "open" total, an "overdue" total, two
+// overlapping due-soon subsets (7d is always ⊆ 30d -- never summed together,
+// per the design requirement), a set of *non-overlapping* buckets that sum
+// exactly back to the open total (by construction: every unpaid record falls
+// into exactly one bucket), and a ranked "next" action list. AR sources from
+// zoho_sales (already synced org-wide, due_date included -- see api/quotes.py
+// _build_insights_payload); AP sources from zoho_payables (same org-wide
+// pattern, see migration-add-zoho-payables-sync.sql).
+function computeAR(d){
+  const z=d.zoho_sales; if(!z)return null;
+  const invoices=(z.invoices||[]).filter(i=>(i.status||'').toLowerCase()!=='draft');
+  const now=new Date(); const today=new Date(now); today.setHours(0,0,0,0);
+  let open=0, overdue=0, due7=0, due30=0;
+  const buckets={not_due:0,b1_30:0,b31_60:0,b61_90:0,b90_plus:0};
+  const open_invoices=[];
+  invoices.forEach(inv=>{
+    const bal=inv.balance||0; if(bal<=0)return;
+    open+=bal; open_invoices.push(inv);
+    if(!inv.due_date){ buckets.not_due+=bal; return; }
+    const due=new Date(inv.due_date); due.setHours(0,0,0,0);
+    const daysUntil=Math.round((due-today)/86400000);
+    if(daysUntil<0){
+      overdue+=bal;
+      const daysOver=-daysUntil;
+      if(daysOver<=30)buckets.b1_30+=bal;
+      else if(daysOver<=60)buckets.b31_60+=bal;
+      else if(daysOver<=90)buckets.b61_90+=bal;
+      else buckets.b90_plus+=bal;
+    }else{
+      buckets.not_due+=bal;
+      if(daysUntil<=7)due7+=bal;
+      if(daysUntil<=30)due30+=bal;
+    }
+  });
+  const collectNext=open_invoices.map(inv=>{
+    const due=inv.due_date?new Date(inv.due_date):null;
+    const daysUntil=due?Math.round((new Date(due.getFullYear(),due.getMonth(),due.getDate())-today)/86400000):null;
+    return {...inv, daysUntil};
+  }).sort((a,b)=>{
+    const ao=a.daysUntil!=null&&a.daysUntil<0, bo=b.daysUntil!=null&&b.daysUntil<0;
+    if(ao&&!bo)return -1; if(!ao&&bo)return 1;
+    if(ao&&bo)return a.daysUntil-b.daysUntil; // most overdue (most negative) first
+    return (a.daysUntil==null?9999:a.daysUntil)-(b.daysUntil==null?9999:b.daysUntil);
+  });
+  return {open, overdue, due7, due30, buckets, collectNext, count:open_invoices.length, asOf:now, collected_proxy:z.total_collected||0, last_synced_at:z.last_synced_at};
+}
+function computeAP(d){
+  const P=d.zoho_payables; if(!P||!P.bill_count)return null;
+  const bills=(P.bills||[]).filter(b=>(b.balance||0)>0);
+  const now=new Date(); const today=new Date(now); today.setHours(0,0,0,0);
+  let due7=0, due30=0;
+  const groups={overdue:0,today:0,next7:0,d8_30:0,later:0};
+  const open_bills=[];
+  bills.forEach(b=>{
+    open_bills.push(b);
+    if(!b.due_date){ groups.later+=b.balance; return; }
+    const due=new Date(b.due_date); due.setHours(0,0,0,0);
+    const daysUntil=Math.round((due-today)/86400000);
+    if(daysUntil<0){ groups.overdue+=b.balance; }
+    else{
+      if(daysUntil===0)groups.today+=b.balance;
+      else if(daysUntil<=7)groups.next7+=b.balance;
+      else if(daysUntil<=30)groups.d8_30+=b.balance;
+      else groups.later+=b.balance;
+      if(daysUntil<=7)due7+=b.balance;
+      if(daysUntil<=30)due30+=b.balance;
+    }
+  });
+  const payNext=open_bills.map(b=>{
+    const due=b.due_date?new Date(b.due_date):null;
+    const daysUntil=due?Math.round((new Date(due.getFullYear(),due.getMonth(),due.getDate())-today)/86400000):null;
+    return {...b, daysUntil};
+  }).sort((a,b)=>{
+    const ao=a.daysUntil!=null&&a.daysUntil<0, bo=b.daysUntil!=null&&b.daysUntil<0;
+    if(ao&&!bo)return -1; if(!ao&&bo)return 1;
+    if(ao&&bo)return a.daysUntil-b.daysUntil;
+    return (a.daysUntil==null?9999:a.daysUntil)-(b.daysUntil==null?9999:b.daysUntil);
+  });
+  return {open:P.total_unpaid, overdue:P.total_overdue, due7, due30, groups, payNext, count:open_bills.length, asOf:now, vendors:P.vendors||[], last_synced_at:P.last_synced_at};
+}
 function _bizMonthlySeries(y){
   const invoices=_bizAllInvoices().filter(_bizNonDraft);
   const months=[];
@@ -562,11 +721,12 @@ function downloadCsv(filename,rows){
 // exactly what's on screen, and works for any tab without a bespoke
 // per-tab data-gathering function.
 function _tabLabel(tab){
-  return {overview:'Overview',sales:'Sales & Pipeline',finance:'Finance',projects:'Projects',service:'Service'}[tab]||'Insights';
+  return {home:'Home',sales:'Sales & Pipeline',ar:'Accounts Receivable',ap:'Accounts Payable',more:'More'}[tab]||'Insights';
 }
 function _freshnessLines(d){
   const lines=[];
-  if(d.zoho_sales&&d.zoho_sales.last_synced_at)lines.push('Zoho Sales / Business Performance synced '+new Date(d.zoho_sales.last_synced_at).toLocaleString());
+  if(d.zoho_sales&&d.zoho_sales.last_synced_at)lines.push('Zoho Sales / AR synced '+new Date(d.zoho_sales.last_synced_at).toLocaleString());
+  if(d.zoho_payables&&d.zoho_payables.last_synced_at)lines.push('Zoho Payables / AP synced '+new Date(d.zoho_payables.last_synced_at).toLocaleString());
   if(d.financial&&d.financial.last_synced_at)lines.push('Financial Health synced '+new Date(d.financial.last_synced_at).toLocaleString());
   if(d.bank_recon&&d.bank_recon.last_synced_at)lines.push('Bank Reconciliation synced '+new Date(d.bank_recon.last_synced_at).toLocaleString());
   if(d.loans&&d.loans.last_synced_at)lines.push('Loans synced '+new Date(d.loans.last_synced_at).toLocaleString());
@@ -748,9 +908,15 @@ function rangeOptsLabel(range){
   return m[range]||'All time';
 }
 
+// Sales: QTCal quote/deal metrics only, above the fold -- per the design
+// requirement, invoiced sales, collections and AR belong on the AR tab and
+// under More -> Performance, not mixed in here. Draft is a workload signal,
+// not a pipeline forecast; awarded is a commercial event, not invoiced
+// revenue -- the notice below says so explicitly rather than implying it.
 function salesSectionHTML(sRaw,deals){
   const s=salesFiltered(sRaw);
   const rangeOpts=[['all','All time'],['this_month','This month'],['last_month','Last month'],['this_quarter','This quarter'],['last_quarter','Last quarter'],['this_year','This year'],['last_year','Last year']];
+  const stageMax=Math.max(s.draft_value,s.pending_value,s.awarded_value,1);
   return `<div class="sec">
     <div class="sec-title">
       <span>📈 Sales &amp; Pipeline</span>
@@ -758,17 +924,28 @@ function salesSectionHTML(sRaw,deals){
         ${rangeOpts.map(([v,l])=>`<option value="${v}" ${S.salesRange===v?'selected':''}>${l}</option>`).join('')}
       </select>
     </div>
+    <div class="hero">
+      <div class="card-label">Awarded quotes</div>
+      <div class="card-val" style="font-size:24px">AED ${fmt(s.awarded_value)}</div>
+      <div class="hero-sub">${s.awarded_count} award(s) · quotation value, not invoiced revenue</div>
+    </div>
     <div class="cards">
-      <div class="card" style="cursor:pointer" onclick="drillQuotes('')"><div class="card-label">${mLbl('total_quotes')}</div><div class="card-val navy">${s.total_quotes}</div><div class="card-sub">${s.awarded_count} awarded</div></div>
-      <div class="card"><div class="card-label">${mLbl('win_rate')}</div><div class="card-val amber">${s.win_rate_pct}%</div><div class="card-sub">of ${s.closed_count} closed</div></div>
-      <div class="card" style="cursor:pointer" onclick="drillQuotes('awarded')"><div class="card-label">${mLbl('awarded_value')}</div><div class="card-val green">AED ${fmt(s.awarded_value)}</div></div>
-      <div class="card" style="cursor:pointer" onclick="drillQuotes('sent')"><div class="card-label">${mLbl('pending_value')}</div><div class="card-val amber">AED ${fmt(s.pending_value)}</div></div>
-      <div class="card" style="cursor:pointer" onclick="drillQuotes('draft')"><div class="card-label">${mLbl('draft_value')}</div><div class="card-val navy">AED ${fmt(s.draft_value)}</div></div>
-      <div class="card"><div class="card-label">${mLbl('avg_margin')}</div><div class="card-val green">${s.avg_margin_pct}%</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillQuotes('')"><div class="card-label">${mLbl('total_quotes','Submitted')}</div><div class="card-val navy">${s.total_quotes}</div><div class="card-sub">Quotes this range</div></div>
+      <div class="card"><div class="card-label">${mLbl('win_rate')}</div><div class="card-val amber">${s.win_rate_pct}%</div><div class="card-sub">${s.awarded_count} of ${s.closed_count} closed</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillQuotes('sent')"><div class="card-label">${mLbl('pending_value')}</div><div class="card-val amber">AED ${fmt(s.pending_value)}</div><div class="card-sub">${s.pending_count} open quote(s)</div></div>
+      <div class="card" style="cursor:pointer" onclick="drillQuotes('draft')"><div class="card-label">${mLbl('draft_value','Draft workload')}</div><div class="card-val navy">AED ${fmt(s.draft_value)}</div><div class="card-sub">Not submitted</div></div>
       ${deals?`<div class="card"><div class="card-label">Open deals</div><div class="card-val navy">${deals.open_count}</div><div class="card-sub">AED ${fmt(deals.open_value)}</div></div>
       <div class="card"><div class="card-label">Deals won</div><div class="card-val green">${deals.won_count}</div></div>`:''}
     </div>
-    <div class="chart-card"><div class="card-label">Pipeline mix</div><div class="chart-box"><canvas id="mPipelineChart"></canvas></div></div>
+    <div class="sectionhead2"><h2>Quote stages</h2></div>
+    <div class="hero">
+      <div class="card-label" style="margin-bottom:2px">Value by current stage</div>
+      <div class="hero-sub" style="margin-bottom:6px">Draft is not included in committed pipeline</div>
+      <div class="barrow" style="cursor:pointer" onclick="drillQuotes('draft')"><span>Draft</span><div class="track"><div class="fill navy" style="width:${Math.round(s.draft_value/stageMax*100)}%"></div></div><span>AED ${fmt(s.draft_value)}</span></div>
+      <div class="barrow" style="cursor:pointer" onclick="drillQuotes('sent')"><span>Pending</span><div class="track"><div class="fill amber" style="width:${Math.round(s.pending_value/stageMax*100)}%"></div></div><span>AED ${fmt(s.pending_value)}</span></div>
+      <div class="barrow" style="cursor:pointer" onclick="drillQuotes('awarded')"><span>Awarded</span><div class="track"><div class="fill" style="width:${Math.round(s.awarded_value/stageMax*100)}%"></div></div><span>AED ${fmt(s.awarded_value)}</span></div>
+    </div>
+    <div class="notice"><svg class="nicon" aria-hidden="true"><use href="#nic-info"/></svg><span>Invoiced sales and customer receipts belong in AR and More → Performance. Quote awards do not equal booked revenue.</span></div>
   </div>`;
 }
 
@@ -802,6 +979,183 @@ function zohoSectionHTML(zRaw){
       </div>`).join('')}
     </div>`:`<div class="center-msg">${(zRaw.invoices||[]).length?'No invoices in this period.':'No invoices synced yet — tap Sync above.'}</div>`}
     ${z.last_synced_at?`<div style="font-size:11.5px;color:var(--gray-500);margin-top:8px;text-align:center">Last synced ${new Date(z.last_synced_at).toLocaleString()}</div>`:''}
+  </div>`;
+}
+
+// ── AR (Accounts Receivable) ────────────────────────────────────────────
+function arRow(i){
+  const overdue=i.daysUntil!=null&&i.daysUntil<0;
+  const dueTxt=i.daysUntil==null?'No due date':overdue?(-i.daysUntil)+' days overdue':i.daysUntil===0?'Due today':'Due in '+i.daysUntil+' day(s)';
+  return `<button class="xrow" type="button" onclick="openInvoiceSheet(${esc(JSON.stringify(i.customer_name||'Unknown customer'))})">
+    <span class="iconwrap ${overdue?'collect':''}"><svg class="nicon" style="width:18px;height:18px" aria-hidden="true"><use href="#nic-ar"/></svg></span>
+    <span class="mid"><strong>${esc(i.customer_name||'Unknown customer')}</strong><small>${esc(i.invoice_number||'')} · ${esc(dueTxt)}</small></span>
+    <span class="right">AED ${fmt(i.balance)}</span>
+  </button>`;
+}
+function arDrill(kind){
+  const AR=computeAR(S.data||{}); if(!AR)return;
+  if(kind==='overdue')return openRecordSheet('Overdue receivables',AR.collectNext.filter(i=>i.daysUntil!=null&&i.daysUntil<0),i=>`<div class="inv-row"><div class="inv-row-top"><span>${esc(i.customer_name||'')}</span><span>AED ${fmt(i.balance)}</span></div><div class="inv-row-bottom"><span>${esc(i.invoice_number||'')}</span><span>${(-i.daysUntil)} days overdue</span></div></div>`,'As of '+AR.asOf.toLocaleString());
+  if(kind==='due7')return openRecordSheet('Due in 7 days',AR.collectNext.filter(i=>i.daysUntil!=null&&i.daysUntil>=0&&i.daysUntil<=7),i=>`<div class="inv-row"><div class="inv-row-top"><span>${esc(i.customer_name||'')}</span><span>AED ${fmt(i.balance)}</span></div><div class="inv-row-bottom"><span>${esc(i.invoice_number||'')}</span><span>Due in ${i.daysUntil}d</span></div></div>`,'Included within due-in-30-days');
+  if(kind==='due30')return openRecordSheet('Due in 30 days',AR.collectNext.filter(i=>i.daysUntil!=null&&i.daysUntil>=0&&i.daysUntil<=30),i=>`<div class="inv-row"><div class="inv-row-top"><span>${esc(i.customer_name||'')}</span><span>AED ${fmt(i.balance)}</span></div><div class="inv-row-bottom"><span>${esc(i.invoice_number||'')}</span><span>Due in ${i.daysUntil}d</span></div></div>`,'Includes due-in-7-days');
+  if(kind==='all')return openRecordSheet('All open receivables',AR.collectNext,i=>`<div class="inv-row"><div class="inv-row-top"><span>${esc(i.customer_name||'')}</span><span>AED ${fmt(i.balance)}</span></div><div class="inv-row-bottom"><span>${esc(i.invoice_number||'')}</span><span>${i.daysUntil==null?'No due date':i.daysUntil<0?(-i.daysUntil)+'d overdue':'Due in '+i.daysUntil+'d'}</span></div></div>`,'As of '+AR.asOf.toLocaleString());
+  const labels={not_due:'Not yet due',b1_30:'1–30 days overdue',b31_60:'31–60 days overdue',b61_90:'61–90 days overdue',b90_plus:'90+ days overdue'};
+  const inBucket=i=>{
+    if(i.daysUntil==null||i.daysUntil>=0)return kind==='not_due';
+    const over=-i.daysUntil;
+    if(kind==='b1_30')return over<=30; if(kind==='b31_60')return over>30&&over<=60; if(kind==='b61_90')return over>60&&over<=90; if(kind==='b90_plus')return over>90;
+    return false;
+  };
+  openRecordSheet(labels[kind]||kind,AR.collectNext.filter(inBucket),i=>`<div class="inv-row"><div class="inv-row-top"><span>${esc(i.customer_name||'')}</span><span>AED ${fmt(i.balance)}</span></div><div class="inv-row-bottom"><span>${esc(i.invoice_number||'')}</span><span>${i.daysUntil==null?'—':i.daysUntil<0?(-i.daysUntil)+'d overdue':'Due in '+i.daysUntil+'d'}</span></div></div>`,'Current unpaid balance, aged by due date');
+}
+function arSectionHTML(d){
+  const AR=computeAR(d); if(!AR)return '<div class="center-msg">No AR data available yet.</div>';
+  const ageMax=Math.max(AR.buckets.not_due,AR.buckets.b1_30,AR.buckets.b31_60,AR.buckets.b61_90,AR.buckets.b90_plus,1);
+  const [filter,setF]=[S.arFilter||'overdue',v=>{S.arFilter=v;render();}];
+  const filtered=filter==='overdue'?AR.collectNext.filter(i=>i.daysUntil!=null&&i.daysUntil<0):filter==='due_soon'?AR.collectNext.filter(i=>i.daysUntil!=null&&i.daysUntil>=0&&i.daysUntil<=30):AR.collectNext;
+  return `<div class="sec">
+    <div class="hero dark">
+      <div class="card-label">${mLbl('ar_open','Open receivables')}</div>
+      <div class="card-val">AED ${fmt(AR.open)}</div>
+      <div class="hero-sub">Unpaid customer invoices · as of ${AR.asOf.toLocaleString()}</div>
+      <div class="hero-foot"><span class="attn-badge ${AR.overdue>0?'red':'green'}">${AR.overdue>0?'AED '+fmt(AR.overdue)+' overdue':'None overdue'}</span><button class="finelink" style="color:#9fd7cf" onclick="arDrill('all')">All invoices →</button></div>
+    </div>
+    <div class="cards">
+      <div class="card" style="cursor:pointer" onclick="arDrill('overdue')"><div class="card-label">${mLbl('ar_overdue','Overdue')}</div><div class="card-val ${AR.overdue>0?'amber':'green'}">AED ${fmt(AR.overdue)}</div><div class="card-sub">${AR.collectNext.filter(i=>i.daysUntil!=null&&i.daysUntil<0).length} invoice(s)</div></div>
+      <div class="card" style="cursor:pointer" onclick="arDrill('due7')"><div class="card-label">${mLbl('ar_due7','Due in 7 days')}</div><div class="card-val amber">AED ${fmt(AR.due7)}</div><div class="card-sub">${AR.collectNext.filter(i=>i.daysUntil!=null&&i.daysUntil>=0&&i.daysUntil<=7).length} invoice(s)</div></div>
+    </div>
+    <div class="notice"><svg class="nicon" aria-hidden="true"><use href="#nic-info"/></svg><span>Due in 7 days is included within due in 30 days (AED ${fmt(AR.due30)}). These are balances as of now, not period sales.</span></div>
+    <div class="sectionhead2"><h2>Receivables ageing</h2></div>
+    <div class="hero">
+      <div class="card-label" style="margin-bottom:2px">AED ${fmt(AR.open)} · ${AR.count} open invoice(s)</div>
+      <div class="hero-sub" style="margin-bottom:6px">Buckets add up to open AR</div>
+      ${[['not_due','Not due'],['b1_30','1–30d'],['b31_60','31–60d'],['b61_90','61–90d'],['b90_plus','90+d']].map(([k,l])=>`
+        <div class="barrow" style="cursor:pointer" onclick="arDrill('${k}')"><span>${l}</span><div class="track"><div class="fill ${k==='not_due'?'':'red'}" style="width:${Math.round(AR.buckets[k]/ageMax*100)}%"></div></div><span>${fmt(AR.buckets[k])}</span></div>
+      `).join('')}
+    </div>
+    <div class="sectionhead2"><h2>Collect next</h2><button class="finelink" onclick="arDrill('all')">All invoices</button></div>
+    <div class="pillrow">
+      <button class="pill ${filter==='overdue'?'active':''}" onclick="S.arFilter='overdue';render()">Overdue</button>
+      <button class="pill ${filter==='due_soon'?'active':''}" onclick="S.arFilter='due_soon';render()">Due soon</button>
+      <button class="pill ${filter==='all'?'active':''}" onclick="S.arFilter='all';render()">All</button>
+    </div>
+    ${filtered.length?`<div class="xrows" style="margin-top:8px">${filtered.slice(0,15).map(arRow).join('')}</div>`:'<div class="center-msg">No matching invoices.</div>'}
+    <div style="font-size:11px;color:var(--gray-500);margin-top:8px">${mLbl('ar_collected_proxy','Collected (proxy, all time)')}: AED ${fmt(AR.collected_proxy)}${AR.last_synced_at?' · Synced '+new Date(AR.last_synced_at).toLocaleString():''}</div>
+  </div>`;
+}
+
+// ── AP (Accounts Payable) ───────────────────────────────────────────────
+function apRow(b){
+  const overdue=b.daysUntil!=null&&b.daysUntil<0;
+  const dueTxt=b.daysUntil==null?'No due date':overdue?(-b.daysUntil)+' days overdue':b.daysUntil===0?'Due today':'Due in '+b.daysUntil+' day(s)';
+  return `<button class="xrow" type="button" onclick="drillZohoPayablesMobile('vendor',${esc(JSON.stringify(b.vendor_name||'Unknown vendor'))})">
+    <span class="iconwrap pay"><svg class="nicon" style="width:18px;height:18px" aria-hidden="true"><use href="#nic-ap"/></svg></span>
+    <span class="mid"><strong>${esc(b.vendor_name||'Unknown vendor')}</strong><small>${esc(b.bill_number||'')} · ${esc(dueTxt)}</small></span>
+    <span class="right">AED ${fmt(b.balance)}<br><span class="attn-badge ${overdue?'red':'amber'}">${overdue?'Overdue':'Due soon'}</span></span>
+  </button>`;
+}
+function apDrillGroup(group){
+  const AP=computeAP(S.data||{}); if(!AP)return;
+  const labels={overdue:'Overdue bills',today:'Due today',next7:'Due in next 7 days',d8_30:'Due in 8–30 days',later:'Due later'};
+  const inGroup=b=>{
+    if(b.daysUntil==null)return group==='later';
+    if(b.daysUntil<0)return group==='overdue';
+    if(b.daysUntil===0)return group==='today';
+    if(b.daysUntil<=7)return group==='next7';
+    if(b.daysUntil<=30)return group==='d8_30';
+    return group==='later';
+  };
+  openRecordSheet(labels[group]||group,AP.payNext.filter(inGroup),b=>`<div class="inv-row"><div class="inv-row-top"><span>${esc(b.vendor_name||'')}</span><span>AED ${fmt(b.balance)}</span></div><div class="inv-row-bottom"><span>${esc(b.bill_number||'')}</span><span>${b.daysUntil==null?'—':b.daysUntil<0?(-b.daysUntil)+'d overdue':'Due in '+b.daysUntil+'d'}</span></div></div>`,'As of '+AP.asOf.toLocaleString());
+}
+function apDrillDue(kind){
+  const AP=computeAP(S.data||{}); if(!AP)return;
+  const rows=kind==='due7'?AP.payNext.filter(b=>b.daysUntil!=null&&b.daysUntil>=0&&b.daysUntil<=7):AP.payNext.filter(b=>b.daysUntil!=null&&b.daysUntil>=0&&b.daysUntil<=30);
+  openRecordSheet(kind==='due7'?'Due in 7 days':'Due in 30 days',rows,b=>`<div class="inv-row"><div class="inv-row-top"><span>${esc(b.vendor_name||'')}</span><span>AED ${fmt(b.balance)}</span></div><div class="inv-row-bottom"><span>${esc(b.bill_number||'')}</span><span>Due in ${b.daysUntil}d</span></div></div>`,kind==='due7'?'Included within due-in-30-days':'Includes due-in-7-days');
+}
+function apSectionHTML(d){
+  const AP=computeAP(d); if(!AP)return '<div class="center-msg">No AP data available yet.</div>';
+  const groupMax=Math.max(AP.groups.overdue,AP.groups.today,AP.groups.next7,AP.groups.d8_30,AP.groups.later,1);
+  const filter=S.apFilter||'due_soon';
+  const filtered=filter==='overdue'?AP.payNext.filter(b=>b.daysUntil!=null&&b.daysUntil<0):filter==='due_soon'?AP.payNext.filter(b=>b.daysUntil!=null&&b.daysUntil>=0&&b.daysUntil<=30):AP.payNext;
+  return `<div class="sec">
+    <div class="sec-title" style="margin-bottom:0"><span></span><span style="font-size:12px;color:var(--gray-500);font-weight:500;cursor:pointer" onclick="syncZohoPayablesMobile()">${ZOHO_PAYABLES_SYNCING_M?'⏳ Syncing…':'🔄 Sync'}</span></div>
+    <div class="hero dark">
+      <div class="card-label">${mLbl('ap_open','Open payables')}</div>
+      <div class="card-val">AED ${fmt(AP.open)}</div>
+      <div class="hero-sub">Unpaid vendor bills · as of ${AP.asOf.toLocaleString()}</div>
+      <div class="hero-foot"><span class="attn-badge amber">AED ${fmt(AP.due7)} due in 7d</span></div>
+    </div>
+    <div class="cards">
+      <div class="card" style="cursor:pointer" onclick="apDrillGroup('overdue')"><div class="card-label">${mLbl('ap_overdue','Overdue')}</div><div class="card-val ${AP.overdue>0?'amber':'green'}">AED ${fmt(AP.overdue)}</div><div class="card-sub">${AP.payNext.filter(b=>b.daysUntil!=null&&b.daysUntil<0).length} bill(s)</div></div>
+      <div class="card" style="cursor:pointer" onclick="apDrillDue('due30')"><div class="card-label">${mLbl('ap_due30','Due in 30 days')}</div><div class="card-val amber">AED ${fmt(AP.due30)}</div><div class="card-sub">Includes due in 7d</div></div>
+    </div>
+    <div class="sectionhead2"><h2>Payment horizon</h2></div>
+    <div class="hero">
+      <div class="card-label" style="margin-bottom:2px">AED ${fmt(AP.open)} · ${AP.count} open bill(s)</div>
+      <div class="hero-sub" style="margin-bottom:6px">Non-overlapping groups add up to open AP</div>
+      ${[['overdue','Overdue','red'],['today','Today','amber'],['next7','Next 7d','amber'],['d8_30','8–30d',''],['later','Later','navy']].map(([k,l,c])=>`
+        <div class="barrow" style="cursor:pointer" onclick="apDrillGroup('${k}')"><span>${l}</span><div class="track"><div class="fill ${c}" style="width:${Math.round(AP.groups[k]/groupMax*100)}%"></div></div><span>${fmt(AP.groups[k])}</span></div>
+      `).join('')}
+    </div>
+    <div class="sectionhead2"><h2>Pay next</h2></div>
+    <div class="pillrow">
+      <button class="pill ${filter==='overdue'?'active':''}" onclick="S.apFilter='overdue';render()">Overdue</button>
+      <button class="pill ${filter==='due_soon'?'active':''}" onclick="S.apFilter='due_soon';render()">Due soon</button>
+      <button class="pill ${filter==='all'?'active':''}" onclick="S.apFilter='all';render()">All</button>
+    </div>
+    ${filtered.length?`<div class="xrows" style="margin-top:8px">${filtered.slice(0,15).map(apRow).join('')}</div>`:'<div class="center-msg">No matching bills.</div>'}
+    ${AP.vendors.length?`<div class="sectionhead2"><h2>By vendor</h2></div><div class="list">
+      ${AP.vendors.slice(0,10).map(v=>`<div class="list-row" onclick="drillZohoPayablesMobile('vendor',${esc(JSON.stringify(v.vendor))})">
+        <span class="list-row-name">${esc(v.vendor)}</span>
+        <span class="list-row-val" style="color:${v.outstanding>0?'var(--amber)':'var(--green)'}">AED ${fmt(v.outstanding)}</span>
+      </div>`).join('')}
+    </div>`:''}
+    <div class="notice"><svg class="nicon" aria-hidden="true"><use href="#nic-info"/></svg><span>Open purchase orders are commitments, not unpaid bills, and are not included in AED ${fmt(AP.open)}. QTcal does not yet sync PO commitments into Insights.</span></div>
+    ${AP.last_synced_at?`<div style="font-size:11px;color:var(--gray-500);margin-top:4px">Last synced ${new Date(AP.last_synced_at).toLocaleString()}</div>`:''}
+  </div>`;
+}
+
+// ── More ─────────────────────────────────────────────────────────────────
+function moreSectionHTML(d){
+  if(S.morePage)return moreSubPageHTML(S.morePage,d);
+  const rows=[
+    ['projects','nic-brief','Projects','Delivery, billing and margin risk',!!d.financial],
+    ['service','nic-service','Service & AMC','Tickets, PM visits and renewals',!!d.fsm],
+    ['performance','nic-sales','Business performance','Invoiced sales, trends and reconciliation',!!d.zoho_sales],
+    ['financeops','nic-cash','Finance operations','Loans, bank reconciliation and manual payables',!!(d.loans||d.bank_recon||(d.payables&&d.payables.items&&d.payables.items.length))],
+    ['reports','nic-report','Reports & exports','CSV/PDF export with definitions',true],
+  ].filter(r=>r[4]);
+  return `<div class="sec">
+    <div class="sectionhead2"><h2>Explore more</h2></div>
+    <div class="moregroup">
+      ${rows.map(([key,icon,title,sub])=>`<button class="xrow" type="button" onclick="goMore('${key}')">
+        <span class="iconwrap"><svg class="nicon" style="width:18px;height:18px" aria-hidden="true"><use href="#${icon}"/></svg></span>
+        <span class="mid"><strong>${esc(title)}</strong><small>${esc(sub)}</small></span>
+        <svg class="nicon" style="width:16px;height:16px;color:var(--gray-500)" aria-hidden="true"><use href="#nic-chev"/></svg>
+      </button>`).join('')}
+    </div>
+    ${S.shareToken?'':'<div class="moregroup" style="margin-top:12px"><button class="xrow" type="button" onclick="doLogout()"><span class="iconwrap"><svg class="nicon" style="width:18px;height:18px" aria-hidden="true"><use href="#nic-info"/></svg></span><span class="mid"><strong>Sign out</strong></span></button></div>'}
+  </div>`;
+}
+const MORE_TITLES={projects:'Projects',service:'Service & AMC',performance:'Business performance',financeops:'Finance operations',reports:'Reports & exports'};
+function moreSubPageHTML(page,d){
+  let body='';
+  if(page==='projects')body=d.financial?financialSectionHTML(d.financial):'<div class="center-msg">No project data available yet.</div>';
+  else if(page==='service')body=d.fsm?fsmSectionHTML(d.fsm):'<div class="center-msg">No field-service data available yet.</div>';
+  else if(page==='performance'){
+    // Quote-to-Invoice Reconciliation was deliberately removed from Insights
+    // (see commit 12037ff/a85e710) -- not reintroduced here.
+    body=(d.zoho_sales?zohoSectionHTML(d.zoho_sales):'<div class="center-msg">No Zoho Sales data available yet.</div>')+(d.zoho_sales?bizSectionHTML():'');
+  }else if(page==='financeops'){
+    body=(d.loans&&d.loans.accounts&&d.loans.accounts.length?loansSectionHTML(d.loans):'')+
+         (d.payables&&d.payables.items&&d.payables.items.length?payablesSectionHTML(d.payables):'')+
+         (d.bank_recon&&d.bank_recon.accounts&&d.bank_recon.accounts.length?bankReconSectionHTML(d.bank_recon):'');
+    if(!body)body='<div class="center-msg">No finance-operations data available yet.</div>';
+  }else if(page==='reports'){
+    body=`<div class="hero"><div class="card-label">Export</div><div class="hero-sub" style="margin-bottom:12px">Every export includes the exact date scope, currency, source and generation time alongside the figures.</div><button class="btn" onclick="openExportSheet()">⬇ Export current tab</button></div>`;
+  }
+  return `<div class="sec">
+    <div class="morehead"><button onclick="goMore(null)" aria-label="Back to More"><svg class="nicon" aria-hidden="true"><use href="#nic-back"/></svg></button><h2 style="font-size:16px;margin:0">${esc(MORE_TITLES[page]||'More')}</h2></div>
+    ${body}
   </div>`;
 }
 
@@ -1210,104 +1564,101 @@ function invoiceSheetHTML(){
 // that already tracks one (overdue payables, at-risk projects, overdue
 // invoices, SLA breaches, expiring contracts) so a manager can see what
 // needs action without visiting every tab.
-function overviewSectionHTML(d){
+// ── Home ─────────────────────────────────────────────────────────────────
+// Spec: "What needs my attention?" -- a headline, two clearly separate money
+// positions (AR to collect vs. AP to pay -- never merged into one number),
+// then a ranked action list where every row says Collect or Pay explicitly
+// so a customer invoice is never confused with a supplier bill.
+function homeSectionHTML(d){
+  const AR=computeAR(d), AP=computeAP(d);
   const sAll=d.sales?salesFiltered(d.sales,'all'):null;
-  const asOf=d.zoho_sales?_bizAsOfNow():null;
-  const k=d.financial, P=(d.payables&&d.payables.items&&d.payables.items.length)?d.payables:null, f=d.fsm;
-  const ZP=(d.zoho_payables&&d.zoho_payables.bill_count)?d.zoho_payables:null;
+  const k=d.financial, f=d.fsm;
+  const now=new Date();
 
-  const kpis=[];
-  if(sAll)kpis.push(['Awarded value','AED '+fmt(sAll.awarded_value),'navy',"goTab('sales')",'awarded_value']);
-  if(sAll)kpis.push(['Win rate',sAll.win_rate_pct+'%','amber',"goTab('sales')",'win_rate']);
-  if(asOf)kpis.push(['Outstanding (all invoices)','AED '+fmt(asOf.outstanding),'amber','bizDrillOutstanding()','biz_outstanding_all']);
-  if(ZP)kpis.push(['Payables due in 10 days','AED '+fmt(ZP.due_within_10d_total),ZP.due_within_10d_count?'amber':'green',"goTab('finance')",'zoho_payables_due10']);
-  if(P)kpis.push(['Payables outstanding','AED '+fmt(P.total_outstanding),'amber',"goTab('finance')",'payables_outstanding']);
-  if(k)kpis.push(['Projects at risk / critical',k.projects_at_risk+' / '+k.critical_projects,k.critical_projects>0?'amber':'navy',"drillProjects('risk')",'at_risk_critical']);
-  if(f)kpis.push(['SLA breaches',f.sla_breaches,f.sla_breaches>0?'amber':'green',f.sla_breaches?'drillSlaBreaches()':"goTab('service')",'sla_breaches']);
-
-  const today=new Date();today.setHours(0,0,0,0);
   const attn=[];
-  if(ZP){
-    (ZP.due_within_10d||[]).slice(0,4).forEach(b=>{
-      attn.push({label:b.vendor_name,sub:(b.bill_number||'')+' · due '+(b.due_date?new Date(b.due_date).toLocaleDateString():'—'),val:'AED '+fmt(b.balance),badge:'Due soon',cls:'amber',onclick:"goTab('finance')"});
+  if(AR){
+    AR.collectNext.filter(i=>i.daysUntil!=null&&i.daysUntil<0).slice(0,3).forEach(i=>{
+      attn.push({kind:'Collect',label:i.customer_name||'Unknown customer',sub:(i.invoice_number||'')+' · '+(-i.daysUntil)+' days overdue',val:'AED '+fmt(i.balance),badge:'Overdue',cls:'red',onclick:"goTab('ar')"});
     });
   }
-  if(P){
-    P.items.filter(it=>it.status!=='paid'&&it.date&&new Date(it.date)<today).slice(0,4).forEach(it=>{
-      attn.push({label:it.vendor,sub:(it.quote_title||'')+' · due '+new Date(it.date).toLocaleDateString(),val:'AED '+fmt(it.amount),badge:'Overdue',cls:'red',onclick:"goTab('finance')"});
+  if(AP){
+    AP.payNext.filter(b=>b.daysUntil!=null&&b.daysUntil>=0&&b.daysUntil<=7).slice(0,3).forEach(b=>{
+      attn.push({kind:'Pay',label:b.vendor_name||'Unknown vendor',sub:(b.bill_number||'')+' · due '+(b.daysUntil===0?'today':'in '+b.daysUntil+' day(s)'),val:'AED '+fmt(b.balance),badge:'Due soon',cls:'amber',onclick:"goTab('ap')"});
+    });
+    AP.payNext.filter(b=>b.daysUntil!=null&&b.daysUntil<0).slice(0,2).forEach(b=>{
+      attn.push({kind:'Pay',label:b.vendor_name||'Unknown vendor',sub:(b.bill_number||'')+' · '+(-b.daysUntil)+' days overdue',val:'AED '+fmt(b.balance),badge:'Overdue',cls:'red',onclick:"goTab('ap')"});
     });
   }
   if(k&&k.at_risk_projects&&k.at_risk_projects.length){
-    k.at_risk_projects.slice(0,4).forEach(p=>{
-      attn.push({label:p.name||'',sub:p.customer||'',val:'',badge:p.health_status==='critical'?'Critical':'At risk',cls:p.health_status==='critical'?'red':'amber',onclick:"drillProjects('risk')"});
+    k.at_risk_projects.slice(0,2).forEach(p=>{
+      attn.push({kind:'Review',label:p.name||'',sub:p.customer||'',val:'',badge:p.health_status==='critical'?'Critical':'At risk',cls:p.health_status==='critical'?'red':'amber',onclick:"goMore('projects')"});
     });
   }
-  if(asOf&&asOf.overdue>0){
-    attn.push({label:'Overdue invoices',sub:'Across all customers, all time',val:'AED '+fmt(asOf.overdue),badge:'Overdue',cls:'red',onclick:'bizDrillOverdue()'});
-  }
   if(f&&f.sla_breaches>0){
-    attn.push({label:'SLA breaches',sub:'Open field-service tickets',val:String(f.sla_breaches),badge:'Action needed',cls:'red',onclick:'drillSlaBreaches()'});
+    attn.push({kind:'Review',label:'SLA breaches',sub:'Open field-service tickets',val:String(f.sla_breaches),badge:'Action needed',cls:'red',onclick:"goMore('service')"});
   }
-  if(f&&f.contracts_expiring_90d>0){
-    attn.push({label:'Contracts expiring',sub:'Within 90 days',val:String(f.contracts_expiring_90d),badge:'Upcoming',cls:'amber',onclick:'drillContracts()'});
-  }
+  // Overdue-first, then due-soonest, same ranking rule as the AR/AP "next"
+  // lists themselves -- Home is a preview of those, not a separate ranking.
+  attn.sort((a,b)=>(a.badge==='Overdue'?0:1)-(b.badge==='Overdue'?0:1));
+
+  const actionCount=(AR?AR.collectNext.filter(i=>i.daysUntil!=null&&i.daysUntil<0).length:0)+(AP?AP.payNext.filter(b=>b.daysUntil!=null&&b.daysUntil<=7).length:0);
 
   return `<div class="sec">
-    <div class="sec-title"><span>👋 Overview</span></div>
-    ${kpis.length?`<div class="cards">
-      ${kpis.map(([label,val,cls,onclick,metricKey])=>`<div class="card" style="cursor:pointer" onclick="${onclick}"><div class="card-label">${metricKey?mLbl(metricKey,label):esc(label)}</div><div class="card-val ${cls}">${esc(String(val))}</div></div>`).join('')}
-    </div>`:'<div class="center-msg">No data available yet.</div>'}
-    ${attn.length?`<div class="card-label" style="margin:16px 2px 8px">Needs attention</div>
-    <div class="list">
-      ${attn.map(a=>`<div class="attn-item" onclick="${a.onclick}">
-        <div style="min-width:0"><div class="list-row-name">${esc(a.label)}</div>${a.sub?`<div style="font-size:13px;color:var(--gray-500)">${esc(a.sub)}</div>`:''}</div>
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">
-          ${a.val?`<span class="list-row-val">${esc(a.val)}</span>`:''}
-          <span class="attn-badge ${a.cls}">${esc(a.badge)}</span>
-        </div>
-      </div>`).join('')}
-    </div>`:kpis.length?'<div class="center-msg" style="padding:20px">Nothing needs attention right now.</div>':''}
+    <div class="hero dark">
+      <div class="card-label">Today's focus</div>
+      <div class="card-val">${actionCount} action${actionCount===1?'':'s'}</div>
+      <div class="hero-sub">${AR&&AR.overdue>0?'Collections overdue':'Collections on track'}${AP?' · '+AP.payNext.filter(b=>b.daysUntil!=null&&b.daysUntil<=7).length+' supplier bill(s) due soon':''}</div>
+      <div class="hero-foot"><span class="hero-sub">As of ${now.toLocaleString()}</span></div>
+    </div>
+    <div class="sectionhead2"><h2>Money position</h2><span style="font-size:11px;color:var(--gray-500)">As of now</span></div>
+    <div class="cards">
+      ${AR?`<div class="card" style="cursor:pointer;border-left:3px solid ${AR.overdue>0?'var(--red)':'var(--gray-200)'}" onclick="goTab('ar')"><div class="card-label">${mLbl('ar_open','AR · to collect')}</div><div class="card-val ${AR.overdue>0?'amber':'navy'}">AED ${fmt(AR.open)}</div><div class="card-sub">${AR.overdue>0?'AED '+fmt(AR.overdue)+' overdue':'None overdue'}</div></div>`:''}
+      ${AP?`<div class="card" style="cursor:pointer;border-left:3px solid ${AP.overdue>0?'var(--red)':'var(--gray-200)'}" onclick="goTab('ap')"><div class="card-label">${mLbl('ap_open','AP · to pay')}</div><div class="card-val amber">AED ${fmt(AP.open)}</div><div class="card-sub">AED ${fmt(AP.due7)} due in 7d</div></div>`:''}
+    </div>
+    ${!AR&&!AP?'<div class="center-msg">No AR/AP data available yet.</div>':''}
+    <div class="sectionhead2"><h2>Needs attention</h2></div>
+    ${attn.length?`<div class="xrows">
+      ${attn.map(a=>`<button class="xrow" type="button" onclick="${a.onclick}">
+        <span class="iconwrap ${a.kind==='Collect'?'collect':a.kind==='Pay'?'pay':''}"><svg class="nicon" style="width:18px;height:18px" aria-hidden="true"><use href="#${a.kind==='Collect'?'nic-ar':a.kind==='Pay'?'nic-ap':'nic-info'}"/></svg></span>
+        <span class="mid"><strong>${esc(a.kind)} · ${esc(a.label)}</strong><small>${esc(a.sub)}</small></span>
+        <span class="right">${a.val?esc(a.val)+'<br>':''}<span class="attn-badge ${a.cls}">${esc(a.badge)}</span></span>
+      </button>`).join('')}
+    </div>`:'<div class="center-msg" style="padding:20px">Nothing needs attention right now.</div>'}
+    ${sAll?`<div class="sectionhead2"><h2>Commercial pulse</h2><button class="finelink" onclick="goTab('sales')">Open Sales</button></div>
+    <div class="hero" style="padding:14px 16px">
+      <div class="card-label" style="margin-bottom:2px">${sAll.awarded_count} award(s) · AED ${fmt(sAll.awarded_value)}</div>
+      <div class="hero-sub" style="margin-bottom:8px">All time · quote award date · estimated margin ${sAll.avg_margin_pct}%</div>
+      <div class="track"><div class="fill" style="width:${sAll.total_quotes?Math.round(sAll.awarded_count/sAll.total_quotes*100):0}%"></div></div>
+      <div class="hero-sub" style="margin-top:8px">Awards are commercial wins, not invoices or cash. See Sales for quote stages.</div>
+    </div>`:''}
   </div>`;
 }
 
 function tabBodyHTML(tab,d){
-  if(tab==='overview')return overviewSectionHTML(d);
+  if(tab==='home')return homeSectionHTML(d);
   if(tab==='sales'){
-    let b='';
-    if(d.sales)b+=salesSectionHTML(d.sales,d.deals);
-    if(d.zoho_sales)b+=zohoSectionHTML(d.zoho_sales);
-    if(d.zoho_sales)b+=bizSectionHTML();
-    if(!b)b='<div class="center-msg">No sales data available yet.</div>';
-    return b;
+    return d.sales?salesSectionHTML(d.sales,d.deals):'<div class="center-msg">No sales data available yet.</div>';
   }
-  if(tab==='finance'){
-    let b='';
-    if(d.zoho_payables&&d.zoho_payables.bill_count)b+=zohoPayablesSectionHTML(d.zoho_payables);
-    if(d.payables&&d.payables.items&&d.payables.items.length)b+=payablesSectionHTML(d.payables);
-    if(d.loans&&d.loans.accounts&&d.loans.accounts.length)b+=loansSectionHTML(d.loans);
-    if(d.bank_recon&&d.bank_recon.accounts&&d.bank_recon.accounts.length)b+=bankReconSectionHTML(d.bank_recon);
-    if(!b)b='<div class="center-msg">No finance data available yet.</div>';
-    return b;
-  }
-  if(tab==='projects')return d.financial?financialSectionHTML(d.financial):'<div class="center-msg">No project data available yet.</div>';
-  if(tab==='service')return d.fsm?fsmSectionHTML(d.fsm):'<div class="center-msg">No field-service data available yet.</div>';
+  if(tab==='ar')return arSectionHTML(d);
+  if(tab==='ap')return apSectionHTML(d);
+  if(tab==='more')return moreSectionHTML(d);
   return '';
 }
 
 function bottomNavHTML(d){
   const avail=_tabsAvailable(d);
   const items=[
-    ['overview','🏠','Overview'],
-    ['sales','📈','Sales'],
-    ['finance','💳','Finance'],
-    ['projects','📁','Projects'],
-    ['service','🔧','Service'],
+    ['home','nic-home','Home'],
+    ['sales','nic-sales','Sales'],
+    ['ar','nic-ar','AR'],
+    ['ap','nic-ap','AP'],
+    ['more','nic-more','More'],
   ].filter(([k])=>avail[k]);
-  return `<div class="bottom-nav">
-    ${items.map(([k,icon,label])=>`<button class="bottom-nav-item ${S.tab===k?'active':''}" onclick="goTab('${k}')">
-      <span class="nav-icon">${icon}</span><span class="nav-label">${label}</span>
+  return `<nav class="bottom-nav" aria-label="Primary navigation">
+    ${items.map(([k,icon,label])=>`<button class="bottom-nav-item ${S.tab===k?'active':''}" onclick="goTab('${k}')" aria-label="${label}" ${S.tab===k?'aria-current="page"':''}>
+      <svg class="nicon" style="width:22px;height:22px" aria-hidden="true"><use href="#${icon}"/></svg><span class="nav-label">${label}</span>
     </button>`).join('')}
-  </div>`;
+  </nav>`;
 }
 
 function dashboardHTML(){
@@ -1318,7 +1669,7 @@ function dashboardHTML(){
   }else{
     if(S.error)body+=`<div class="err-msg">${esc(S.error)}</div>`;
     const avail=_tabsAvailable(d);
-    const tab=avail[S.tab]?S.tab:'overview';
+    const tab=avail[S.tab]?S.tab:'home';
     if(S.tab!==tab){S.tab=tab;}
     if(!d.sales&&!d.zoho_sales&&!d.financial&&!d.fsm&&!S.error){
       body='<div class="center-msg">No data available yet.</div>';
@@ -1331,12 +1682,12 @@ function dashboardHTML(){
     <div class="topbar">
       <div>
         <div class="topbar-title">Insights</div>
-        <div class="topbar-sub">${esc(companyName)}${S.shareToken?' · Shared view (read-only'+(d.finance_hidden?', finance hidden':'')+')':d.finance_hidden?' · Finance hidden for your role':''}</div>
+        <div class="topbar-sub">${esc(companyName)}${S.shareToken?' · Shared view (read-only'+(d.finance_hidden?', finance hidden':'')+')':d.finance_hidden?' · Finance hidden for your role':''}${(S.tab==='ar'||S.tab==='ap')?' · As of now':''}</div>
       </div>
       <div class="topbar-actions">
-        ${S.data?`<button class="icon-btn" title="Export" onclick="openExportSheet()">⬇</button>`:''}
-        <button class="icon-btn" title="Refresh" onclick="${S.shareToken?'loadInsightsPublic(true)':'loadInsights(true)'}">${S.loading?'⏳':'🔄'}</button>
-        ${S.shareToken?'':'<button class="icon-btn" title="Sign out" onclick="doLogout()">⎋</button>'}
+        ${S.data?`<button class="icon-btn" title="Export report" aria-label="Export report" onclick="openExportSheet()">⬇</button>`:''}
+        <button class="icon-btn" title="Refresh data" aria-label="Refresh data" onclick="${S.shareToken?'loadInsightsPublic(true)':'loadInsights(true)'}">${S.loading?'⏳':'🔄'}</button>
+        ${S.shareToken?'':'<button class="icon-btn" title="Sign out" aria-label="Sign out" onclick="doLogout()">⎋</button>'}
       </div>
     </div>
     <div class="content">${body}</div>
