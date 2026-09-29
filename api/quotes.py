@@ -2138,9 +2138,16 @@ def revoke_insights_share_link():
 # sensitive in the same way and are never stripped by this helper.
 _FINANCE_SECTIONS = ('loans', 'bank_recon', 'payables', 'zoho_payables', 'financial')
 
-def _strip_finance_sections(payload):
+def _strip_finance_sections(payload, keep=()):
+    # `keep` lets a caller deliberately exempt specific sections from the
+    # blanket strip -- used by insights_public() below to expose the org-wide
+    # Zoho Payables widget on the public share link (per explicit product
+    # decision) while still hiding Loans, Bank Reconciliation, the manual
+    # per-quote Payables tracker, and the Financial Health section there.
     hidden_any = False
     for key in _FINANCE_SECTIONS:
+        if key in keep:
+            continue
         if payload.pop(key, None) is not None:
             hidden_any = True
     payload['finance_hidden'] = hidden_any
@@ -2172,7 +2179,7 @@ def insights_public():
         'features': company.get('features') or {}, 'role_permissions': None,
     }
     payload = _build_insights_payload(fake_claims)
-    payload = _strip_finance_sections(payload)
+    payload = _strip_finance_sections(payload, keep=('zoho_payables',))
     payload['company_name'] = company.get('name')
     return jsonify(payload)
 
