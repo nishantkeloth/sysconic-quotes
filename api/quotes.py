@@ -1748,9 +1748,17 @@ def _build_insights_payload(claims):
     # that's the actual planning question ("what clears in the next 10
     # days") that Zoho's stock widget doesn't answer directly.
     if zc and zc[0].get('status') == 'connected':
+        # project_id IS NULL scopes this to rows written by our own org-wide
+        # sync (sync_payables() above). zoho_bills also carries per-project
+        # rows from the older Financial Health sync (fetch_bills()) -- since
+        # migration-bill-split-projects.sql widened the table's unique
+        # constraint to (company_id, zoho_bill_id, project_id), a single
+        # real-world bill can have BOTH a project-scoped row (that project's
+        # attributed share) and our org-wide row (the full bill) at the same
+        # time. Not filtering here would double-count every such bill.
         bill_rows = sb.table('zoho_bills').select(
             'id,bill_number,bill_date,due_date,status,total,balance,vendor_name,synced_at'
-        ).eq('company_id', company_id).order('due_date').execute().data or []
+        ).eq('company_id', company_id).is_('project_id', 'null').order('due_date').execute().data or []
         now = datetime.utcnow()
         today = now.replace(hour=0, minute=0, second=0, microsecond=0)
         in10 = today + timedelta(days=10)
@@ -1786,6 +1794,7 @@ def _build_insights_payload(claims):
             'due_within_10d_count': len(due_soon),
             'due_within_10d': [_bill_row(b) for b in due_soon],
             'bill_count': len(bill_rows),
+            'total_billed': sum(_numf(b.get('total')) for b in bill_rows),
             'vendors': vendors,
             'bills': [_bill_row(b) for b in bill_rows],
             'last_synced_at': max(synced_ats) if synced_ats else None,

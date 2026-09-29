@@ -1074,7 +1074,30 @@ def sync_payables():
 
     if bills:
         try:
-            sb.table('zoho_bills').upsert(bills, on_conflict='company_id,zoho_bill_id').execute()
+            # Plain upsert with on_conflict='company_id,zoho_bill_id' doesn't
+            # work against this table: migration-bill-split-projects.sql
+            # widened zoho_bills' unique constraint to (company_id,
+            # zoho_bill_id, project_id) so a bill split across multiple
+            # projects can keep one row per project. That breaks a 2-column
+            # ON CONFLICT target outright (Postgres error 42P10 -- "no
+            # unique or exclusion constraint matching the ON CONFLICT
+            # specification"), which is what was silently failing every
+            # org-wide payables sync up to now. It also can't be fixed by
+            # just widening our on_conflict to match: our rows always have
+            # project_id = NULL (never set, see above), and standard SQL
+            # treats every NULL as distinct from every other NULL for
+            # uniqueness purposes, so ON CONFLICT would never actually
+            # detect a "conflict" against a prior NULL-project row anyway --
+            # it would just INSERT a fresh duplicate every single sync.
+            # Delete-then-insert sidesteps both problems: this is already a
+            # full org-wide pull every time (not incremental), so wiping our
+            # own NULL-project rows for this company and reinserting is
+            # exactly equivalent to an upsert, doesn't touch any other
+            # project's scoped rows for the same bill_id (those keep their
+            # own project_id, untouched), and also correctly drops rows for
+            # any bill that's since been deleted/voided in Zoho.
+            sb.table('zoho_bills').delete().eq('company_id', company_id).is_('project_id', 'null').execute()
+            sb.table('zoho_bills').insert(bills).execute()
         except Exception as e:
             return jsonify({'error': f'Could not save synced bills: {str(e)[:300]}'}), 502
 

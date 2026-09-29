@@ -180,7 +180,7 @@ async function doLogin(email,password){
   if(r.error){ S.loginError=r.error; render(); return; }
   saveAuth(r); render();
   loadInsights();
-  loadMobileQuotes(); loadBizMatches();
+  loadBizMatches(); // feeds the "Awarded, uninvoiced" KPI, not just the (now removed) reconciliation panel
 }
 async function doLogout(){
   await api('POST','/api/auth/logout');
@@ -859,7 +859,6 @@ function bizSectionHTML(){
     </div>
     <div style="font-size:11.5px;color:var(--gray-500);margin-top:6px;text-align:center">As of ${asOf.as_of.toLocaleString()}</div>
 
-    ${S.shareToken?'':bizReconciliationSectionHTML()}
   </div>`;
 }
 
@@ -1424,7 +1423,7 @@ function initCharts(){
 // ── Boot ─────────────────────────────────────────────────────────────────
 render();
 if(S.shareToken)loadInsightsPublic();
-else if(S.token){ loadInsights(); loadMobileQuotes(); loadBizMatches(); }
+else if(S.token){ loadInsights(); loadBizMatches(); }
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>navigator.serviceWorker.register('/insights-sw.js').catch(()=>{}));
 }
