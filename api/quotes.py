@@ -1748,9 +1748,17 @@ def _build_insights_payload(claims):
     # that's the actual planning question ("what clears in the next 10
     # days") that Zoho's stock widget doesn't answer directly.
     if zc and zc[0].get('status') == 'connected':
+        # project_id IS NULL scopes this to rows written by our own org-wide
+        # sync (sync_payables() above). zoho_bills also carries per-project
+        # rows from the older Financial Health sync (fetch_bills()) -- since
+        # migration-bill-split-projects.sql widened the table's unique
+        # constraint to (company_id, zoho_bill_id, project_id), a single
+        # real-world bill can have BOTH a project-scoped row (that project's
+        # attributed share) and our org-wide row (the full bill) at the same
+        # time. Not filtering here would double-count every such bill.
         bill_rows = sb.table('zoho_bills').select(
             'id,bill_number,bill_date,due_date,status,total,balance,vendor_name,synced_at'
-        ).eq('company_id', company_id).order('due_date').execute().data or []
+        ).eq('company_id', company_id).is_('project_id', 'null').order('due_date').execute().data or []
         now = datetime.utcnow()
         today = now.replace(hour=0, minute=0, second=0, microsecond=0)
         in10 = today + timedelta(days=10)
@@ -1778,17 +1786,6 @@ def _build_insights_payload(claims):
                 'balance': _numf(b.get('balance')),
                 'vendor_name': (b.get('vendor_name') or '').strip() or 'Unknown vendor',
             }
-        # Temporary diagnostic (remove once the total_unpaid=0 investigation is
-        # closed): total_billed and status_counts let us tell, without a DB
-        # console, whether the sync is capturing real bill totals at all (if
-        # total_billed is also 0, the fetch/store path is broken) versus
-        # balance specifically reading 0 while totals look right (points at
-        # Zoho's own 'balance' field for this org/these bills, e.g. bills
-        # closed by journal entry rather than a Payment record).
-        status_counts = {}
-        for b in bill_rows:
-            s = (b.get('status') or 'unknown').lower()
-            status_counts[s] = status_counts.get(s, 0) + 1
         out['zoho_payables'] = {
             'total_unpaid': sum(_numf(b.get('balance')) for b in unpaid),
             'total_current': sum(_numf(b.get('balance')) for b in current),
@@ -1798,7 +1795,6 @@ def _build_insights_payload(claims):
             'due_within_10d': [_bill_row(b) for b in due_soon],
             'bill_count': len(bill_rows),
             'total_billed': sum(_numf(b.get('total')) for b in bill_rows),
-            'status_counts': status_counts,
             'vendors': vendors,
             'bills': [_bill_row(b) for b in bill_rows],
             'last_synced_at': max(synced_ats) if synced_ats else None,
