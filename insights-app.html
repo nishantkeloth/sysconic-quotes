@@ -298,6 +298,7 @@ function salesFiltered(sRaw,rangeOverride){
   if(!sRaw)return null;
   const bounds=rangeBounds(rangeOverride!==undefined?rangeOverride:S.salesRange);
   const quotes=(sRaw.quotes||[]).filter(q=>{
+    if(q.status==='cancelled')return false; // cancelled quotes never count toward any figure
     if(!bounds)return true;
     if(!q.created_at)return false;
     const d=new Date(q.created_at);

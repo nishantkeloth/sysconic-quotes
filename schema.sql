@@ -114,7 +114,7 @@ create table if not exists quotes (
   created_by uuid references users(id),
   title text not null,
   customer text,
-  status text default 'draft' check (status in ('draft','sent','awarded','lost')),
+  status text default 'draft' check (status in ('draft','sent','awarded','lost','cancelled')),
   currency text default 'AED',
   exchange_rate numeric default 1,
   quote_data jsonb default '[]',

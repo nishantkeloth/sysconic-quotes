@@ -22,7 +22,8 @@ CRON_SECRET = os.environ.get('CRON_SECRET')
 
 sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-STATUS_LABELS_PY = {'draft': 'Draft', 'sent': 'Sent', 'awarded': 'Awarded', 'lost': 'Lost'}
+STATUS_LABELS_PY = {'draft': 'Draft', 'sent': 'Sent', 'awarded': 'Awarded', 'lost': 'Lost', 'cancelled': 'Cancelled'}
+VALID_QUOTE_STATUSES = ('draft', 'sent', 'awarded', 'lost', 'cancelled')
 
 # ── Proposal Builder concept images ──────────────────────────────────────────
 # Per-section "concept view" images for the Professional Proposal template
@@ -549,6 +550,8 @@ def update_quote(qid):
     d = request.json or {}
     allowed = ['title','customer','status','currency','exchange_rate','pricing_type','quote_data','vendor_data','terms_data','proposal_data','total_sell','total_gp','margin']
     update = {k: d[k] for k in allowed if k in d}
+    if 'status' in update and update['status'] not in VALID_QUOTE_STATUSES:
+        return jsonify({'error': 'Invalid status.'}), 400
 
     old_status = existing.data[0].get('status')
     new_status = update.get('status', old_status)
@@ -1379,7 +1382,7 @@ def email_quote(qid):
     }).execute()
 
     quote_update = {'customer_version': next_customer_version}
-    if quote.get('status') not in ('awarded', 'lost'):
+    if quote.get('status') not in ('awarded', 'lost', 'cancelled'):
         quote_update['status'] = 'sent'
     sb.table('quotes').update(quote_update).eq('id', qid).execute()
 
@@ -1631,7 +1634,9 @@ def _build_insights_payload(claims):
     # "Awarded value") can drill down to the actual quotes behind it. The
     # top-level aggregates below remain the all-time totals, used for the
     # very first render before any range filter is applied.
-    qq = sb.table('quotes').select('title,customer,status,total_sell,total_gp,created_at').eq('company_id', company_id)
+    # Cancelled quotes are excluded entirely -- their value must not count
+    # toward any total, count, pipeline figure or win rate.
+    qq = sb.table('quotes').select('title,customer,status,total_sell,total_gp,created_at').eq('company_id', company_id).neq('status', 'cancelled')
     if not _can_view_all_quotes(claims):
         qq = qq.eq('created_by', claims['user_id'])
     quotes = qq.execute().data or []

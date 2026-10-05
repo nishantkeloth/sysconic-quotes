@@ -192,6 +192,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .s-sent{background:var(--navy-light);color:var(--navy)}
 .s-awarded{background:var(--green-light);color:var(--green)}
 .s-lost{background:var(--red-light);color:var(--red)}
+.s-cancelled{background:var(--gray-100);color:var(--gray-500);text-decoration:line-through}
 .s-healthy{background:var(--green-light);color:var(--green)}
 .s-at_risk{background:var(--amber-light);color:var(--amber)}
 .s-critical{background:var(--red-light);color:var(--red)}
@@ -505,7 +506,8 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 <script>
 // ── Config ──────────────────────────────────────────────────────────────────
 const API='';
-const STATUS_LABELS={draft:'Draft',sent:'Sent',awarded:'Awarded',lost:'Lost'};
+const STATUS_LABELS={draft:'Draft',sent:'Sent',awarded:'Awarded',lost:'Lost',cancelled:'Cancelled'};
+const QUOTE_STATUSES=['draft','sent','awarded','lost','cancelled'];
 const RATES={AED:1,USD:3.6725,EUR:4.02,GBP:4.65,SAR:0.981,QAR:1.011};
 const DEFAULT_TERMS=[
   'The items and quantities are as per the clients requirement',
@@ -2908,7 +2910,7 @@ async function sendQuoteEmail(){
     if(r.error){errEl.textContent=r.error;errEl.style.display='block';return;}
     if(A.user)A.user.ms365_email=from_email; // remember it for next time without a re-login
     if(A.activeQuote){
-      if(!['awarded','lost'].includes(A.activeQuote.status))A.activeQuote.status='sent';
+      if(!['awarded','lost','cancelled'].includes(A.activeQuote.status))A.activeQuote.status='sent';
       A.activeQuote.customer_version=r.customer_version;
     }
     closeEmailQuoteModal();
@@ -3896,7 +3898,7 @@ function buildCstrip(){
     ${A.activeQuote?`<span style="color:var(--gray-300)">|</span>
     <span class="cstrip-label">Status</span>
     <select onchange="changeQuoteStatus(this.value)">
-      ${['draft','sent','awarded','lost'].map(s=>`<option value="${s}" ${A.activeQuote.status===s?'selected':''}>${STATUS_LABELS[s]}</option>`).join('')}
+      ${QUOTE_STATUSES.map(s=>`<option value="${s}" ${A.activeQuote.status===s?'selected':''}>${STATUS_LABELS[s]}</option>`).join('')}
     </select>
     ${hasFeature('project_performance')&&A.activeQuote.status==='awarded'?ppCreateProjectBtnHTML():''}
     <span style="color:var(--gray-300)">|</span>
@@ -3963,6 +3965,7 @@ function _salesFiltered(sRaw){
   if(!sRaw)return null;
   const bounds=_zohoSalesRangeBounds(A.salesRange||'all');
   const quotes=(sRaw.quotes||[]).filter(q=>{
+    if(q.status==='cancelled')return false; // cancelled quotes never count toward any figure
     if(!bounds)return true;
     if(!q.created_at)return false;
     const d=new Date(q.created_at);
@@ -4916,11 +4919,14 @@ function insightsHTML(){
 }
 
 function dashHTML(){
-  const qs=A.quotes;
+  const allQs=A.quotes;
+  // Cancelled quotes stay visible in the list (and filterable) but are left
+  // out of every figure in the metric strip below.
+  const qs=allQs.filter(q=>q.status!=='cancelled');
   const awarded=qs.filter(q=>q.status==='awarded').length;
   const totalVal=qs.reduce((s,q)=>s+(q.total_sell||0),0);
   const totalGp=qs.reduce((s,q)=>s+(q.total_gp||0),0);
-  const filtered=qs.filter(q=>{
+  const filtered=allQs.filter(q=>{
     const ms=!A.searchQ||q.title.toLowerCase().includes(A.searchQ.toLowerCase())||(q.customer||'').toLowerCase().includes(A.searchQ.toLowerCase());
     const mf=A.filterStatus==='all'||q.status===A.filterStatus;
     return ms&&mf;
@@ -4935,7 +4941,7 @@ function dashHTML(){
     <input id="quoteSearchInp" class="search-inp" placeholder="🔍 Search quotes..." value="${esc(A.searchQ)}" oninput="A.searchQ=this.value;draw()">
     <select class="filter-sel" onchange="A.filterStatus=this.value;draw()">
       <option value="all">All status</option>
-      ${['draft','sent','awarded','lost'].map(s=>`<option value="${s}" ${A.filterStatus===s?'selected':''}>${STATUS_LABELS[s]}</option>`).join('')}
+      ${QUOTE_STATUSES.map(s=>`<option value="${s}" ${A.filterStatus===s?'selected':''}>${STATUS_LABELS[s]}</option>`).join('')}
     </select>
     <div class="view-toggle">
       <button class="${(A.dashView||'grid')==='grid'?'active':''}" title="Grid view" onclick="A.dashView='grid';draw()">▦</button>
