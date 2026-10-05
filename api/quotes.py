@@ -632,19 +632,17 @@ def create_project_from_quote(qid):
     refreshed = sb.table('quotes').select('*').eq('id', qid).eq('company_id', claims['company_id']).execute()
     return jsonify({'ok': True, 'project_performance': pp_activation, 'quote': refreshed.data[0] if refreshed.data else None})
 
-# ── Delete quote ───────────────────────────────────────────────────────────────
+# ── Delete quote (disabled by policy) ─────────────────────────────────────────
+# Once a quote is created it must never be deleted -- quote numbers are an
+# audit trail and are referenced by projects, invoices and vouchers. Kept as
+# an explicit 403 (rather than just removing the route) so a stale cached
+# client gets a clear message instead of a bare 405, and so no role --
+# admin included -- can delete through the API.
 @app.route('/api/quotes/<qid>', methods=['DELETE'])
 def delete_quote(qid):
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
-
-    existing = sb.table('quotes').select('id,created_by').eq('id', qid).eq('company_id', claims['company_id']).execute()
-    if not existing.data: return jsonify({'error': 'Not found'}), 404
-    if claims['role'] != 'admin' and existing.data[0]['created_by'] != claims['user_id']:
-        return jsonify({'error': 'Forbidden'}), 403
-
-    sb.table('quotes').delete().eq('id', qid).execute()
-    return jsonify({'ok': True})
+    return jsonify({'error': 'Quotes cannot be deleted once created.'}), 403
 
 # ── Duplicate quote ────────────────────────────────────────────────────────────
 @app.route('/api/quotes/<qid>/duplicate', methods=['POST'])

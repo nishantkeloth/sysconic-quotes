@@ -2186,7 +2186,6 @@ async function unlockForEditing(){
 function setStatus(s){A.saveStatus=s;const el=document.getElementById('saveStatus');if(!el)return;
   const m={saving:'<span class="save-pill save-ing">⏳ Saving…</span>',saved:'<span class="save-pill save-ok">✓ Saved</span>',error:'<span class="save-pill save-err">⚠ Failed</span>'};
   el.innerHTML=m[s]||'';}
-async function deleteQuote(id,e){e.stopPropagation();if(!confirm('Delete this quote?'))return;await api('DELETE','/api/quotes/'+id);A.quotes=A.quotes.filter(q=>q.id!==id);draw();}
 async function duplicateQuote(id,e){e.stopPropagation();const r=await api('POST','/api/quotes/'+id+'/duplicate');if(r.quote){A.quotes.unshift(r.quote);draw();}}
 // Same duplicate endpoint as the dashboard's ⧉ Copy, but used from inside an
 // open quote: jumps straight into the new copy instead of staying on the
@@ -4961,7 +4960,6 @@ function dashHTML(){
         <div class="qlist-actions" onclick="event.stopPropagation()">
           <button class="btn btn-sm" onclick="openQuote({id:'${q.id}'})">✏️</button>
           <button class="btn btn-sm" onclick="duplicateQuote('${q.id}',event)">⧉</button>
-          ${A.user?.role==='admin'?`<button class="btn btn-sm btn-red" onclick="deleteQuote('${q.id}',event)">🗑</button>`:''}
         </div>
       </div>`;
     });
@@ -4982,7 +4980,6 @@ function dashHTML(){
         <div class="qcard-actions" onclick="event.stopPropagation()">
           <button class="btn btn-sm" onclick="openQuote({id:'${q.id}'})">✏️ Edit</button>
           <button class="btn btn-sm" onclick="duplicateQuote('${q.id}',event)">⧉ Copy</button>
-          ${A.user?.role==='admin'?`<button class="btn btn-sm btn-red" onclick="deleteQuote('${q.id}',event)">🗑 Delete</button>`:''}
         </div>
       </div>`;
     });
