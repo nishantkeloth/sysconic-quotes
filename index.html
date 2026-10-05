@@ -179,6 +179,7 @@ body{font-family:'Segoe UI',system-ui,sans-serif;background:#e8edf5;color:var(--
 .qcard{background:var(--white);border:2px solid var(--gray-200);border-radius:12px;padding:20px;cursor:pointer;transition:all .15s;box-shadow:var(--shadow-sm)}
 .qcard:hover{border-color:var(--navy);box-shadow:var(--shadow);transform:translateY(-2px)}
 .qcard-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px}
+.qcard-ref{font-size:12px;font-weight:700;color:var(--navy);letter-spacing:.03em;margin-bottom:4px}
 .qcard-title{font-size:16px;font-weight:700;color:var(--gray-900)}
 .qcard-customer{font-size:14px;color:var(--gray-500);margin-bottom:10px}
 .qcard-meta{display:flex;gap:12px;font-size:13px;color:var(--gray-500);margin-bottom:14px}
@@ -4970,6 +4971,7 @@ function dashHTML(){
     filtered.forEach(q=>{
       const date=new Date(q.updated_at).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
       html+=`<div class="qcard" onclick="openQuote({id:'${q.id}'})">
+        ${q.quote_ref?`<div class="qcard-ref">${esc(q.quote_ref)}</div>`:''}
         <div class="qcard-header"><div class="qcard-title">${esc(q.title)}</div><span class="sbadge s-${q.status}">${STATUS_LABELS[q.status]}</span></div>
         <div class="qcard-customer">${esc(q.customer||'No customer')}</div>
         <div class="qcard-meta"><span>📅 ${date}</span><span>💱 ${q.currency||'AED'}</span></div>

@@ -162,7 +162,7 @@ def list_quotes():
     except: offset = 0
 
     q = sb.table('quotes')\
-        .select('id,title,customer,status,currency,total_sell,total_gp,margin,created_at,updated_at,created_by', count='exact')\
+        .select('id,quote_ref,title,customer,status,currency,total_sell,total_gp,margin,created_at,updated_at,created_by', count='exact')\
         .eq('company_id', claims['company_id'])
     if not _can_view_all_quotes(claims):
         q = q.eq('created_by', claims['user_id'])
