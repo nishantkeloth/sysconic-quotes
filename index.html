@@ -5117,7 +5117,6 @@ function editorHTML(){
           <div class="sec-badge">${s.items.length} item${s.items.length!==1?'s':''}</div>
         </div>
         <div style="display:flex;gap:8px">
-          ${proposalOn?`<button class="btn btn-sm" onclick="toggleSectionProposal('${s.id}')" title="Concept image & description for the Professional Proposal">🖼 Proposal content${(s.image||s.blurb)?' ✓':''}</button>`:''}
           <button class="btn btn-sm" onclick="addItem(${si})">+ Add item</button>
           ${A.itemClipboard?`<button class="btn btn-sm" onclick="pasteItem(${si})" title="Paste copied line into this section">📋 Paste</button>`:''}<button class="btn btn-sm btn-red" onclick="delSec(${si})">Remove</button>
         </div>
