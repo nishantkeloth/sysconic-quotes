@@ -1855,7 +1855,6 @@ def create_customer_linked():
     force = bool(d.get('force'))
     if not name: return jsonify({'error': 'Customer name is required.'}), 400
     if not email: return jsonify({'error': 'Email is required.'}), 400
-    if not trn: return jsonify({'error': 'VAT / TRN number is required.'}), 400
     cid_co = claims['company_id']
 
     # Local exact-name duplicate -> reuse (and push it if not yet linked)

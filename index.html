@@ -7893,7 +7893,7 @@ function dealCustAddForm(extra){
     <div class="fld2" style="margin-bottom:8px"><label>Customer name *</label><input id="dcName" value="${esc(nm)}"></div>
     <div class="fld2" style="margin-bottom:8px"><label>Email *</label><input id="dcEmail" type="email"></div>
     <div class="field-grid g2" style="margin-bottom:8px">
-      <div class="fld2"><label>VAT / TRN number *</label><input id="dcTrn"></div>
+      <div class="fld2"><label>VAT / TRN number</label><input id="dcTrn"></div>
       <div class="fld2"><label>Phone</label><input id="dcPhone"></div>
     </div>
     <div id="dcMsg" style="font-size:12px;margin-bottom:8px"></div>
@@ -7907,7 +7907,7 @@ async function dealCustCreate(opts){
   if(opts.link)body.link_contact_id=opts.link;
   if(opts.force)body.force=true;
   const msg=document.getElementById('dcMsg'),btn=document.getElementById('dcSave');
-  if(!body.name||!body.email||!body.trn){if(msg)msg.innerHTML='<span style="color:var(--red)">Name, email and VAT/TRN are required.</span>';return;}
+  if(!body.name||!body.email){if(msg)msg.innerHTML='<span style="color:var(--red)">Name and email are required.</span>';return;}
   if(btn){btn.disabled=true;btn.textContent='Creating…';}
   const r=await api('POST','/api/integrations/create-customer',body);
   if(btn){btn.disabled=false;btn.innerHTML='Create in Zoho &amp; attach';}
