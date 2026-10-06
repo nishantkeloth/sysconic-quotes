@@ -8505,7 +8505,7 @@ function zohoReconciliationHTML(){
 </div>
 <div class="card" style="max-width:640px;margin-top:16px">
   <div class="card-title">Salary Accounts</div>
-  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Pick the Zoho expense account(s) where payroll is booked. Mobile Insights then shows salary paid per month, per employee (employee = the entry's payee, else its description). Visible on the public share link.</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Pick where payroll is booked: an expense account (e.g. "Employee salary", employee = payee/description) and/or the per-employee "&lt;Name&gt; - Salary Payable" accounts (employee = account name, amount = payments made). Mobile Insights then shows salary paid per month, per employee (employee = the entry's payee, else its description). Visible on the public share link.</div>
   <div id="salaryBox"><div style="color:var(--gray-500)">Loading…</div></div>
 </div>
 <div class="card" style="max-width:640px;margin-top:16px">
@@ -9224,7 +9224,7 @@ async function loadSalaryBox(){
 function renderSalaryBox(){
   const el=document.getElementById('salaryBox');if(!el)return;
   if(SAL_PICKER){
-    el.innerHTML=SAL_PICKER.map((a,i)=>`<label style="display:flex;gap:10px;padding:7px 0;border-bottom:1px solid var(--gray-100);font-size:13px;cursor:pointer"><input type="checkbox" ${a.checked?'checked':''} onchange="SAL_PICKER[${i}].checked=this.checked"><span>${esc(a.account_name)}</span></label>`).join('')
+    el.innerHTML=SAL_PICKER.map((a,i)=>`<label style="display:flex;gap:10px;padding:7px 0;border-bottom:1px solid var(--gray-100);font-size:13px;cursor:pointer"><input type="checkbox" ${a.checked?'checked':''} onchange="SAL_PICKER[${i}].checked=this.checked"><span>${esc(a.account_name)} <span style="color:var(--gray-500)">· ${esc((a.account_type||'').replace(/_/g,' '))}</span></span></label>`).join('')
      +`<div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-navy btn-sm" onclick="saveSalaryPicker()">Save &amp; sync</button><button class="btn btn-sm" onclick="SAL_PICKER=null;renderSalaryBox()">Cancel</button></div>`;
     return;
   }

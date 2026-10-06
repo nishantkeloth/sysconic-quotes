@@ -721,6 +721,10 @@ class ZohoAdapter:
         Salary account picker."""
         rows = self._fetch_paginated(creds, '/chartofaccounts', {'filter_by': 'AccountType.Expense'},
                                      'chartofaccounts', max_pages=5)
+        # Payroll is often booked per employee on liability accounts
+        # ("<Name> - Salary Payable"), so those are offered too.
+        rows += self._fetch_paginated(creds, '/chartofaccounts', {'filter_by': 'AccountType.Liability'},
+                                      'chartofaccounts', max_pages=5)
         return [{
             'zoho_account_id': a.get('account_id'),
             'account_name': a.get('account_name') or '',
@@ -1318,6 +1322,8 @@ def list_zoho_expense_accounts():
     tracked = {r['zoho_account_id'] for r in (sb.table('salary_accounts').select('zoho_account_id')
                .eq('company_id', cid).eq('is_tracked', True).execute().data or [])}
     for a in accounts: a['is_tracked'] = a['zoho_account_id'] in tracked
+    def _sal_like(a): return any(k in (a['account_name'] or '').lower() for k in ('salary', 'payroll', 'wage'))
+    accounts.sort(key=lambda a: (not _sal_like(a), a['account_name'].lower()))
     return jsonify({'accounts': accounts})
 
 @app.route('/api/integrations/salary-accounts', methods=['GET', 'POST'])
@@ -1351,7 +1357,13 @@ def sync_salaries():
     if not creds or not adapter or not adapter.is_configured(creds):
         return jsonify({'error': 'Zoho Books is not connected.'}), 400
     now_iso = datetime.utcnow().isoformat(); total = 0
+    try:
+        _types = {a['zoho_account_id']: a['account_type'] for a in adapter.fetch_expense_accounts(creds)}
+    except Exception as e:
+        return jsonify({'error': f'Zoho sync failed: {str(e)[:250]}'}), 502
+    import re as _re
     for acc in tracked:
+        is_liab = 'liability' in (_types.get(acc['zoho_account_id']) or '')
         try:
             txns = adapter.fetch_account_transactions(creds, acc['zoho_account_id'])
         except Exception as e:
@@ -1359,9 +1371,15 @@ def sync_salaries():
         rows = {}
         for i, t in enumerate(txns):
             date = (t.get('transaction_date') or '')[:10] or None
-            amt = float(t.get('debit_amount') or 0) - float(t.get('credit_amount') or 0)
+            if is_liab:
+                # per-employee "<Name> - Salary Payable" account: a DEBIT is a
+                # payment to that employee (credits are accruals, not paid).
+                amt = float(t.get('debit_amount') or 0)
+                emp = _re.sub(r'(?i)[\s\-–]*(salary|salaries|payable|payroll|wages?)\b[\s\-–]*', ' ', acc.get('account_name') or '').strip(' -–') or (acc.get('account_name') or 'Unspecified')
+            else:
+                amt = float(t.get('debit_amount') or 0) - float(t.get('credit_amount') or 0)
+                emp = (t.get('payee') or '').strip() or (t.get('description') or '').strip()[:80] or 'Unspecified'
             if not date or amt == 0: continue
-            emp = (t.get('payee') or '').strip() or (t.get('description') or '').strip()[:80] or 'Unspecified'
             key = f"{acc['zoho_account_id']}:{t.get('transaction_id') or t.get('entry_number') or i}:{date}:{i}"
             rows[key] = {'company_id': cid, 'zoho_account_id': acc['zoho_account_id'], 'txn_key': key,
                          'pay_date': date, 'month': date[:7], 'employee': emp, 'amount': amt,
