@@ -1433,16 +1433,21 @@ def sync_salaries():
 
 # ── CFO summary (mobile Insights "CFO" page) ───────────────────────────────────
 def _cfo_period(pl):
-    g = lambda k: (pl.get(k) or {}).get('total', 0.0)
-    revenue = g('operating income')
-    cogs = g('cost of goods sold')
-    gross = pl['gross profit']['total'] if 'gross profit' in pl else revenue - cogs
-    opex = g('operating expense')
-    op_profit = pl['operating profit']['total'] if 'operating profit' in pl else gross - opex
-    net = None
-    for k in pl:
-        if k.startswith('net profit'): net = pl[k]['total']
-    if net is None: net = op_profit + g('non operating income') - g('non operating expense')
+    def tot(pred):
+        return sum(v['total'] for k, v in pl.items() if pred(k))
+    def has(k, *words): return any(w in k for w in words)
+    gross = next((v['total'] for k, v in pl.items() if k.startswith('gross profit') or k.startswith('gross margin')), None)
+    op_profit = next((v['total'] for k, v in pl.items() if k.startswith('operating profit') or k.startswith('operating income') and has(k, 'profit')), None)
+    net = next((v['total'] for k, v in pl.items() if k.startswith('net profit') or k.startswith('net loss')), None)
+    cogs = tot(lambda k: has(k, 'cost of goods', 'cost of sales', 'cogs', 'direct cost') and not has(k, 'profit'))
+    revenue = tot(lambda k: has(k, 'income', 'revenue', 'sales') and not has(k, 'non operating', 'non-operating', 'other income', 'profit', 'net', 'gross', 'total expense'))
+    if not revenue and gross is not None:
+        revenue = gross + cogs
+    opex = tot(lambda k: has(k, 'operating expense') and not has(k, 'non operating', 'non-operating', 'profit'))
+    if gross is None: gross = revenue - cogs
+    if op_profit is None: op_profit = gross - opex
+    if not opex: opex = gross - op_profit
+    if net is None: net = op_profit
     return {'revenue': revenue, 'cogs': cogs, 'gross': gross, 'opex': opex, 'op_profit': op_profit, 'net': net}
 
 @app.route('/api/integrations/sync-cfo', methods=['POST'])
@@ -1477,7 +1482,7 @@ def sync_cfo():
     # are re-fetched on later syncs).
     import time as _t
     prev_snap = (sb.table('cfo_snapshots').select('payload').eq('company_id', cid).execute().data or [{}])[0].get('payload') or {}
-    cached_months = {m_['month']: m_ for m_ in (prev_snap.get('months') or [])}
+    cached_months = {m_['month']: m_ for m_ in (prev_snap.get('months') or [])} if prev_snap.get('v') == 2 else {}
     last_two = {f'{yy}-{mm:02d}' for yy, mm in months[-2:]}
     results = {}
     try:
@@ -1507,6 +1512,7 @@ def sync_cfo():
         return jsonify({'error': 'Zoho returned an empty Profit & Loss report. Raw response: ' + getattr(adapter, '_last_pl_raw', '(none)')}), 502
     exp_lines = sorted(((n, a) for n, a in (cur.get('operating expense') or {}).get('lines', []) if a), key=lambda x: -abs(x[1]))
     payload = {
+        'v': 2, 'sections': sorted(cur.keys()),
         'as_of': today.isoformat(),
         'ytd': {**_cfo_period(cur), 'expense_lines': [{'name': n, 'amount': a} for n, a in exp_lines[:8]]},
         'prev_ytd': _cfo_period(results[('ytd', 'prev')]),
