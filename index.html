@@ -9253,6 +9253,7 @@ async function syncSalaries(){
   SAL_SYNCING=false;
   if(r.error){alert('Salary sync failed: '+r.error);renderSalaryBox();return;}
   await loadSalaryBox();
+  if(!r.synced)alert('Synced 0 salary entries.\n\n'+JSON.stringify(r.detail||r.message||r,null,1));
 }
 async function openLoanPicker(){
   const el=document.getElementById('loanAcctBox');if(!el)return;

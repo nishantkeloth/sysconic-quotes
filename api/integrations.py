@@ -1362,6 +1362,7 @@ def sync_salaries():
     except Exception as e:
         return jsonify({'error': f'Zoho sync failed: {str(e)[:250]}'}), 502
     import re as _re
+    detail = []
     for acc in tracked:
         is_liab = 'liability' in (_types.get(acc['zoho_account_id']) or '')
         try:
@@ -1390,8 +1391,10 @@ def sync_salaries():
         for j in range(0, len(batch), 500):
             sb.table('salary_payments').insert(batch[j:j+500]).execute()
         total += len(batch)
+        detail.append({'account': acc.get('account_name'), 'type': _types.get(acc['zoho_account_id']) or 'unknown (not in expense/liability list)',
+                       'fetched': len(txns), 'kept': len(batch), 'sample_keys': sorted(list(txns[0].keys()))[:25] if txns else []})
         sb.table('salary_accounts').update({'last_synced_at': now_iso}).eq('id', acc['id']).execute()
-    return jsonify({'synced': total})
+    return jsonify({'synced': total, 'detail': detail})
 
 # ── Loan transaction anomaly review ─────────────────────────────────────────
 # What the admin actually worries about: "is loan money accidentally showing
