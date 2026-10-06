@@ -1476,6 +1476,19 @@ def sync_cfo():
     try: prev_end = today.replace(year=today.year - 1)
     except ValueError: prev_end = today.replace(year=today.year - 1, day=28)
     jobs[('ytd', 'prev')] = (date(today.year - 1, 1, 1), prev_end)
+    # Earliest year with data -> one full-year P&L per year, plus one all-time call
+    first_year = today.year - 4
+    try:
+        ds = []
+        for tbl, col in (('zoho_invoices', 'invoice_date'), ('zoho_bills', 'bill_date')):
+            r_ = sb.table(tbl).select(col).eq('company_id', cid).not_.is_(col, 'null').order(col).limit(1).execute().data
+            if r_: ds.append(int(str(r_[0][col])[:4]))
+        if ds: first_year = max(min(ds), today.year - 9)
+    except Exception:
+        pass
+    for yy in range(first_year, today.year):
+        jobs[('y', str(yy))] = (date(yy, 1, 1), date(yy, 12, 31))
+    jobs[('all', 'all')] = (date(first_year, 1, 1), today)
     # Zoho rate-limits per minute (HTTP 429), so: sequential calls with a small
     # gap, one retry after a pause, and closed past months are reused from the
     # previous snapshot (only YTD, prior-year YTD and the current + last month
@@ -1484,12 +1497,15 @@ def sync_cfo():
     prev_snap = (sb.table('cfo_snapshots').select('payload').eq('company_id', cid).execute().data or [{}])[0].get('payload') or {}
     cached_months = {m_['month']: m_ for m_ in (prev_snap.get('months') or [])} if prev_snap.get('v') == 2 else {}
     last_two = {f'{yy}-{mm:02d}' for yy, mm in months[-2:]}
+    cached_years = (prev_snap.get('years') or {}) if prev_snap.get('v') == 2 else {}
     results = {}
     try:
         order = [('ytd', 'cur')] + [k for k in jobs if k != ('ytd', 'cur')]
         for key in order:
             a, b = jobs[key]
             if key[0] == 'm' and key[1] in cached_months and key[1] not in last_two:
+                continue
+            if key[0] == 'y' and key[1] in cached_years:
                 continue
             for attempt in (0, 1):
                 try:
@@ -1516,6 +1532,8 @@ def sync_cfo():
         'as_of': today.isoformat(),
         'ytd': {**_cfo_period(cur), 'expense_lines': [{'name': n, 'amount': a} for n, a in exp_lines[:8]]},
         'prev_ytd': _cfo_period(results[('ytd', 'prev')]),
+        'years': {**{yk: (cached_years[yk] if (('y', yk) not in results) else _cfo_period(results[('y', yk)])) for (kt, yk) in sorted(jobs) if kt == 'y'}, str(today.year): _cfo_period(cur)},
+        'all_time': _cfo_period(results[('all', 'all')]) if ('all', 'all') in results else None,
         'months': [(cached_months[k[1]] if (k[0] == 'm' and k not in results) else {'month': k[1], **_cfo_period(results[k])}) for k in sorted(jobs) if k[0] == 'm'],
     }
     # Cash: bank + cash accounts' balances from Zoho Banking

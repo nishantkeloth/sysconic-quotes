@@ -1170,25 +1170,29 @@ function cfoHTML(C){
   const per=S.cfoPeriod||'ytd';
   const months=C.months||[];
   const cur=months[months.length-1]||{}, prev=months[months.length-2]||null;
-  const P=per==='ytd'?C.ytd:per==='month'?cur:(prev||{});
-  const base=per==='ytd'?C.prev_ytd:per==='month'?prev:null;
+  const yrs=Object.keys(C.years||{}).sort().reverse();
+  const isYear=/^\d{4}$/.test(per);
+  const P=per==='ytd'?C.ytd:per==='month'?cur:per==='all'?(C.all_time||{}):isYear?((C.years||{})[per]||{}):(prev||{});
+  const base=per==='ytd'?C.prev_ytd:per==='month'?prev:isYear?((C.years||{})[String(+per-1)]||null):null;
+  const yearMode=per==='all'||isYear;
+  const series=yearMode?yrs.slice().reverse().map(y=>({month:y,...C.years[y]})):months;
   const lbl=m=>{if(!m)return '';const [y,mo]=m.split('-');return new Date(+y,+mo-1,1).toLocaleDateString(undefined,{month:'short'});};
-  const chg=(a,b)=>{if(b==null||!b)return '';const p=(a-b)/Math.abs(b)*100;return `<div style="font-size:11px;color:${p>=0?'var(--green)':'var(--red)'}">${p>=0?'+':''}${p.toFixed(1)}% ${per==='ytd'?'vs last year':'vs prior month'}</div>`;};
+  const chg=(a,b)=>{if(b==null||!b)return '';const p=(a-b)/Math.abs(b)*100;return `<div style="font-size:11px;color:${p>=0?'var(--green)':'var(--red)'}">${p>=0?'+':''}${p.toFixed(1)}% ${per==='ytd'||isYear?'vs last year':'vs prior month'}</div>`;};
   const pct=(a,r)=>r?(a/r*100).toFixed(1)+'%':'-';
   const card=(t,v,sub)=>`<div class="card" style="padding:12px"><div class="card-label">${t}</div><div class="card-val" style="font-size:20px">${v}</div>${sub||''}</div>`;
-  const max=Math.max(1,...months.map(m=>Math.max(m.revenue||0,Math.abs((m.revenue||0)-(m.net||0)))));
-  const bw=36, W=months.length*(bw*2+14)+10;
-  const bars=months.map((m,i)=>{const x=10+i*(bw*2+14);const exp=Math.max(0,(m.revenue||0)-(m.net||0));const h1=Math.round((m.revenue||0)/max*90),h2=Math.round(exp/max*90);
-    return `<rect x="${x}" y="${100-h1}" width="${bw-4}" height="${h1}" rx="2" fill="#378ADD"/><rect x="${x+bw-2}" y="${100-h2}" width="${bw-4}" height="${h2}" rx="2" fill="#AFA9EC"/><text x="${x+bw-2}" y="116" font-size="11" text-anchor="middle" fill="#888">${esc(lbl(m.month))}</text>`;}).join('');
+  const max=Math.max(1,...series.map(m=>Math.max(m.revenue||0,Math.abs((m.revenue||0)-(m.net||0)))));
+  const bw=36, W=series.length*(bw*2+14)+10;
+  const bars=series.map((m,i)=>{const x=10+i*(bw*2+14);const exp=Math.max(0,(m.revenue||0)-(m.net||0));const h1=Math.round((m.revenue||0)/max*90),h2=Math.round(exp/max*90);
+    return `<rect x="${x}" y="${100-h1}" width="${bw-4}" height="${h1}" rx="2" fill="#378ADD"/><rect x="${x+bw-2}" y="${100-h2}" width="${bw-4}" height="${h2}" rx="2" fill="#AFA9EC"/><text x="${x+bw-2}" y="116" font-size="11" text-anchor="middle" fill="#888">${esc(yearMode?m.month:lbl(m.month))}</text>`;}).join('');
   const row=(n,v,b)=>`<tr style="border-top:1px solid var(--gray-100);${b?'font-weight:700':''}"><td style="padding:6px 0">${n}</td><td style="text-align:right">${fmt(v)}</td><td style="text-align:right;color:var(--gray-500)">${pct(v,P.revenue)}</td></tr>`;
-  return `<div class="pillrow">${[['ytd','YTD'],['month','This month'],['last','Last month']].map(([k,l])=>`<button class="pill ${per===k?'active':''}" onclick="S.cfoPeriod='${k}';render()">${l}</button>`).join('')}</div>
+  return `<div class="pillrow" style="overflow-x:auto;white-space:nowrap">${[['ytd','YTD'],['month','This month'],['last','Last month'],...yrs.map(y=>[y,y]),...(C.all_time?[['all','All time']]:[])].map(([k,l])=>`<button class="pill ${per===k?'active':''}" onclick="S.cfoPeriod='${k}';render()">${l}</button>`).join('')}</div>
   <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:8px">
     ${card('Revenue','AED '+fmt(P.revenue||0),chg(P.revenue||0,base&&base.revenue))}
     ${card('Gross profit','AED '+fmt(P.gross||0),`<div style="font-size:11px;color:var(--gray-500)">${pct(P.gross||0,P.revenue)} margin</div>`)}
     ${card('Net profit','AED '+fmt(P.net||0),chg(P.net||0,base&&base.net))}
     ${card('Cash balance',C.cash_balance==null?'-':'AED '+fmt(C.cash_balance),'<div style="font-size:11px;color:var(--gray-500)">Bank + cash accounts</div>')}
   </div>
-  <div class="sectionhead2"><h2>Revenue vs expenses</h2></div>
+  <div class="sectionhead2"><h2>Revenue vs expenses${yearMode?' by year':''}</h2></div>
   <svg viewBox="0 0 ${W} 122" width="100%" role="img" aria-label="Monthly revenue and expenses">${bars}</svg>
   <div style="display:flex;gap:14px;font-size:11px;color:var(--gray-500)"><span><span style="display:inline-block;width:8px;height:8px;background:#378ADD;border-radius:2px;margin-right:4px"></span>Revenue</span><span><span style="display:inline-block;width:8px;height:8px;background:#AFA9EC;border-radius:2px;margin-right:4px"></span>Expenses (revenue - net profit)</span></div>
   <div class="sectionhead2"><h2>P&amp;L summary</h2></div>
