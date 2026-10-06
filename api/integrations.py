@@ -1510,7 +1510,7 @@ def sync_cfo():
     cur = results[('ytd', 'cur')]
     if not cur:
         return jsonify({'error': 'Zoho returned an empty Profit & Loss report. Raw response: ' + getattr(adapter, '_last_pl_raw', '(none)')}), 502
-    exp_lines = sorted(((n, a) for n, a in (cur.get('operating expense') or {}).get('lines', []) if a), key=lambda x: -abs(x[1]))
+    exp_lines = sorted(((n, a) for k_, v_ in cur.items() if ('expense' in k_ and 'non' not in k_ and 'profit' not in k_) for n, a in v_.get('lines', []) if a), key=lambda x: -abs(x[1]))
     payload = {
         'v': 2, 'sections': sorted(cur.keys()),
         'as_of': today.isoformat(),
