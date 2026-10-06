@@ -1451,7 +1451,7 @@ def sync_cfo():
         return date(y, m, 1), date(y, m, calendar.monthrange(y, m)[1])
     months = []
     y, m = today.year, today.month
-    for _ in range(6):
+    for _ in range(4):
         months.append((y, m)); m -= 1
         if m == 0: y, m = y - 1, 12
     months.reverse()
@@ -1460,14 +1460,33 @@ def sync_cfo():
     try: prev_end = today.replace(year=today.year - 1)
     except ValueError: prev_end = today.replace(year=today.year - 1, day=28)
     jobs[('ytd', 'prev')] = (date(today.year - 1, 1, 1), prev_end)
-    def run(item):
-        key, (a, b) = item
-        return key, adapter.fetch_profit_and_loss(creds, a.isoformat(), b.isoformat())
+    # Zoho rate-limits per minute (HTTP 429), so: sequential calls with a small
+    # gap, one retry after a pause, and closed past months are reused from the
+    # previous snapshot (only YTD, prior-year YTD and the current + last month
+    # are re-fetched on later syncs).
+    import time as _t
+    prev_snap = (sb.table('cfo_snapshots').select('payload').eq('company_id', cid).execute().data or [{}])[0].get('payload') or {}
+    cached_months = {m_['month']: m_ for m_ in (prev_snap.get('months') or [])}
+    last_two = {f'{yy}-{mm:02d}' for yy, mm in months[-2:]}
+    results = {}
     try:
-        with ThreadPoolExecutor(max_workers=8) as ex:
-            results = dict(ex.map(run, jobs.items()))
+        for key, (a, b) in jobs.items():
+            if key[0] == 'm' and key[1] in cached_months and key[1] not in last_two:
+                continue
+            for attempt in (0, 1):
+                try:
+                    results[key] = adapter.fetch_profit_and_loss(creds, a.isoformat(), b.isoformat())
+                    break
+                except RuntimeError as e:
+                    if '429' in str(e) and attempt == 0:
+                        _t.sleep(8); continue
+                    raise
+            _t.sleep(1.2)
     except Exception as e:
-        return jsonify({'error': f'Zoho P&L fetch failed: {str(e)[:300]}'}), 502
+        msg = str(e)[:300]
+        if '429' in msg:
+            msg = 'Zoho is rate-limiting requests (too many per minute). Wait 5 minutes and click Sync again - progress is not lost.'
+        return jsonify({'error': f'Zoho P&L fetch failed: {msg}'}), 502
     cur = results[('ytd', 'cur')]
     if not cur:
         return jsonify({'error': 'Zoho returned an empty Profit & Loss report.'}), 502
@@ -1476,7 +1495,7 @@ def sync_cfo():
         'as_of': today.isoformat(),
         'ytd': {**_cfo_period(cur), 'expense_lines': [{'name': n, 'amount': a} for n, a in exp_lines[:8]]},
         'prev_ytd': _cfo_period(results[('ytd', 'prev')]),
-        'months': [{'month': k[1], **_cfo_period(v)} for k, v in sorted(results.items()) if k[0] == 'm'],
+        'months': [(cached_months[k[1]] if (k[0] == 'm' and k not in results) else {'month': k[1], **_cfo_period(results[k])}) for k in sorted(jobs) if k[0] == 'm'],
     }
     # Cash: bank + cash accounts' balances from Zoho Banking
     try:

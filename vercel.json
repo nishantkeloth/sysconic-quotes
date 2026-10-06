@@ -9,7 +9,7 @@
     { "src": "api/bom.py", "use": "@vercel/python" },
     { "src": "api/customers.py", "use": "@vercel/python" },
     { "src": "api/vendors.py", "use": "@vercel/python" },
-    { "src": "api/integrations.py", "use": "@vercel/python" },
+    { "src": "api/integrations.py", "use": "@vercel/python", "config": { "maxDuration": 60 } },
     { "src": "api/platform.py", "use": "@vercel/python" },
     { "src": "api/proposal.py", "use": "@vercel/python", "config": { "maxDuration": 60 } },
     { "src": "api/projects.py", "use": "@vercel/python" },
