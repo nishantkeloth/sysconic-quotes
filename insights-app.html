@@ -1123,6 +1123,7 @@ function moreSectionHTML(d){
     ['service','nic-service','Service & AMC','Tickets, PM visits and renewals',!!d.fsm],
     ['performance','nic-sales','Business performance','Invoiced sales, trends and reconciliation',!!d.zoho_sales],
     ['financeops','nic-cash','Finance operations','Loans, bank reconciliation and manual payables',!!(d.loans||d.bank_recon||(d.payables&&d.payables.items&&d.payables.items.length))],
+    ['salaries','nic-cash','Salaries','Monthly salary paid, per employee',!!(d.salaries&&d.salaries.months&&d.salaries.months.length)],
     ['reports','nic-report','Reports & exports','CSV/PDF export with definitions',true],
   ].filter(r=>r[4]);
   return `<div class="sec">
@@ -1137,7 +1138,7 @@ function moreSectionHTML(d){
     ${S.shareToken?'':'<div class="moregroup" style="margin-top:12px"><button class="xrow" type="button" onclick="doLogout()"><span class="iconwrap"><svg class="nicon" style="width:18px;height:18px" aria-hidden="true"><use href="#nic-info"/></svg></span><span class="mid"><strong>Sign out</strong></span></button></div>'}
   </div>`;
 }
-const MORE_TITLES={projects:'Projects',service:'Service & AMC',performance:'Business performance',financeops:'Finance operations',reports:'Reports & exports'};
+const MORE_TITLES={projects:'Projects',service:'Service & AMC',performance:'Business performance',financeops:'Finance operations',salaries:'Salaries',reports:'Reports & exports'};
 function moreSubPageHTML(page,d){
   let body='';
   if(page==='projects')body=d.financial?financialSectionHTML(d.financial):'<div class="center-msg">No project data available yet.</div>';
@@ -1151,6 +1152,8 @@ function moreSubPageHTML(page,d){
          (d.payables&&d.payables.items&&d.payables.items.length?payablesSectionHTML(d.payables):'')+
          (d.bank_recon&&d.bank_recon.accounts&&d.bank_recon.accounts.length?bankReconSectionHTML(d.bank_recon):'');
     if(!body)body='<div class="center-msg">No finance-operations data available yet.</div>';
+  }else if(page==='salaries'){
+    body=d.salaries&&d.salaries.months&&d.salaries.months.length?salariesHTML(d.salaries):'<div class="center-msg">No salary data synced yet.</div>';
   }else if(page==='reports'){
     body=`<div class="hero"><div class="card-label">Export</div><div class="hero-sub" style="margin-bottom:12px">Every export includes the exact date scope, currency, source and generation time alongside the figures.</div><button class="btn" onclick="openExportSheet()">⬇ Export current tab</button></div>`;
   }
@@ -1158,6 +1161,17 @@ function moreSubPageHTML(page,d){
     <div class="morehead"><button onclick="goMore(null)" aria-label="Back to More"><svg class="nicon" aria-hidden="true"><use href="#nic-back"/></svg></button><h2 style="font-size:16px;margin:0">${esc(MORE_TITLES[page]||'More')}</h2></div>
     ${body}
   </div>`;
+}
+
+function salariesHTML(SA){
+  const months=SA.months||[];
+  const sel=months.find(m=>m.month===S.salMonth)||months[0];
+  const label=m=>{const [y,mo]=m.split('-');return new Date(+y,+mo-1,1).toLocaleDateString(undefined,{month:'short',year:'numeric'});};
+  return `<div class="hero dark"><div class="card-label">Salary paid · ${esc(label(sel.month))}</div><div class="card-val">AED ${fmt(sel.total)}</div><div class="hero-sub">${sel.employees.length} employee${sel.employees.length===1?'':'s'}</div></div>
+  <div class="pillrow" style="overflow-x:auto;white-space:nowrap">${months.map(m=>`<button class="pill ${m.month===sel.month?'active':''}" onclick="S.salMonth='${m.month}';render()">${esc(label(m.month))}</button>`).join('')}</div>
+  <div class="sectionhead2"><h2>By employee</h2></div>
+  <div class="list">${sel.employees.map(e=>`<div class="list-row"><span class="list-row-name">${esc(e.name)}</span><span class="list-row-val">AED ${fmt(e.amount)}</span></div>`).join('')}</div>
+  ${SA.last_synced_at?`<div style="font-size:11px;color:var(--gray-500);margin-top:8px">Last synced ${new Date(SA.last_synced_at).toLocaleString()}</div>`:''}`;
 }
 
 function bizSectionHTML(){

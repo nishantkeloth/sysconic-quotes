@@ -716,6 +716,17 @@ class ZohoAdapter:
             'is_involved_in_transaction': a.get('is_involved_in_transaction', False),
         } for a in rows if a.get('account_id')]
 
+    def fetch_expense_accounts(self, creds):
+        """Expense-type Chart-of-Accounts entries -- data source for the
+        Salary account picker."""
+        rows = self._fetch_paginated(creds, '/chartofaccounts', {'filter_by': 'AccountType.Expense'},
+                                     'chartofaccounts', max_pages=5)
+        return [{
+            'zoho_account_id': a.get('account_id'),
+            'account_name': a.get('account_name') or '',
+            'account_type': a.get('account_type') or '',
+        } for a in rows if a.get('account_id')]
+
     # ── Bank Reconciliation tracker ─────────────────────────────────────────
     def fetch_bank_accounts(self, creds):
         """Every bank/credit-card account, via Zoho's dedicated Banking
@@ -1286,6 +1297,83 @@ def get_loan_account_transactions(id):
         'current_balance': account.get('current_balance'),
         'transactions': out,
     })
+
+# ── Salaries (Insights "Salaries" page: per month, per employee) ───────────────
+# Admin picks the Zoho expense account(s) that carry payroll; sync stores each
+# ledger entry (debit = cost, credit = reversal) as a salary_payments row.
+@app.route('/api/integrations/zoho-expense-accounts', methods=['GET'])
+def list_zoho_expense_accounts():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not has_page_access(claims, 'zohoReconciliation'):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
+    cid = claims['company_id']
+    creds = _get_creds_for(cid, 'zoho'); adapter = ADAPTERS.get('zoho')
+    if not creds or not adapter or not adapter.is_configured(creds):
+        return jsonify({'error': 'Zoho Books is not connected.'}), 400
+    try:
+        accounts = adapter.fetch_expense_accounts(creds)
+    except Exception as e:
+        return jsonify({'error': f'Could not fetch Zoho accounts: {str(e)[:300]}'}), 502
+    tracked = {r['zoho_account_id'] for r in (sb.table('salary_accounts').select('zoho_account_id')
+               .eq('company_id', cid).eq('is_tracked', True).execute().data or [])}
+    for a in accounts: a['is_tracked'] = a['zoho_account_id'] in tracked
+    return jsonify({'accounts': accounts})
+
+@app.route('/api/integrations/salary-accounts', methods=['GET', 'POST'])
+def salary_accounts_route():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not has_page_access(claims, 'zohoReconciliation'):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
+    cid = claims['company_id']
+    if request.method == 'GET':
+        rows = sb.table('salary_accounts').select('*').eq('company_id', cid).eq('is_tracked', True).order('account_name').execute().data or []
+        return jsonify({'accounts': rows})
+    picked = (request.json or {}).get('accounts') or []
+    sb.table('salary_accounts').update({'is_tracked': False}).eq('company_id', cid).execute()
+    for a in picked:
+        if not a.get('zoho_account_id'): continue
+        sb.table('salary_accounts').upsert({'company_id': cid, 'zoho_account_id': a['zoho_account_id'],
+            'account_name': a.get('account_name') or '', 'is_tracked': True}, on_conflict='company_id,zoho_account_id').execute()
+    return jsonify({'ok': True, 'tracked': len(picked)})
+
+@app.route('/api/integrations/sync-salaries', methods=['POST'])
+def sync_salaries():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not has_page_access(claims, 'zohoReconciliation'):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
+    cid = claims['company_id']
+    tracked = sb.table('salary_accounts').select('*').eq('company_id', cid).eq('is_tracked', True).execute().data or []
+    if not tracked: return jsonify({'synced': 0, 'message': 'No salary accounts selected yet.'})
+    creds = _get_creds_for(cid, 'zoho'); adapter = ADAPTERS.get('zoho')
+    if not creds or not adapter or not adapter.is_configured(creds):
+        return jsonify({'error': 'Zoho Books is not connected.'}), 400
+    now_iso = datetime.utcnow().isoformat(); total = 0
+    for acc in tracked:
+        try:
+            txns = adapter.fetch_account_transactions(creds, acc['zoho_account_id'])
+        except Exception as e:
+            return jsonify({'error': f"Zoho sync failed for {acc.get('account_name')}: {str(e)[:250]}"}), 502
+        rows = {}
+        for i, t in enumerate(txns):
+            date = (t.get('transaction_date') or '')[:10] or None
+            amt = float(t.get('debit_amount') or 0) - float(t.get('credit_amount') or 0)
+            if not date or amt == 0: continue
+            emp = (t.get('payee') or '').strip() or (t.get('description') or '').strip()[:80] or 'Unspecified'
+            key = f"{acc['zoho_account_id']}:{t.get('transaction_id') or t.get('entry_number') or i}:{date}:{i}"
+            rows[key] = {'company_id': cid, 'zoho_account_id': acc['zoho_account_id'], 'txn_key': key,
+                         'pay_date': date, 'month': date[:7], 'employee': emp, 'amount': amt,
+                         'description': (t.get('description') or '')[:300]}
+        # replace this account's rows so deleted/edited Zoho entries don't linger
+        sb.table('salary_payments').delete().eq('company_id', cid).eq('zoho_account_id', acc['zoho_account_id']).execute()
+        batch = list(rows.values())
+        for j in range(0, len(batch), 500):
+            sb.table('salary_payments').insert(batch[j:j+500]).execute()
+        total += len(batch)
+        sb.table('salary_accounts').update({'last_synced_at': now_iso}).eq('id', acc['id']).execute()
+    return jsonify({'synced': total})
 
 # ── Loan transaction anomaly review ─────────────────────────────────────────
 # What the admin actually worries about: "is loan money accidentally showing

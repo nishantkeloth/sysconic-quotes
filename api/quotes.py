@@ -1823,6 +1823,22 @@ def _build_insights_payload(claims):
             'last_synced_at': max(synced_ats) if synced_ats else None,
         }
 
+    # ── Salaries (admin-picked Zoho expense accounts; per month, per employee) ─
+    sal_acc = sb.table('salary_accounts').select('last_synced_at').eq('company_id', company_id).eq('is_tracked', True).execute().data or []
+    if sal_acc:
+        sal_rows = sb.table('salary_payments').select('month,employee,amount').eq('company_id', company_id).execute().data or []
+        by_month = {}
+        for r in sal_rows:
+            mth = r.get('month')
+            if not mth: continue
+            m_ = by_month.setdefault(mth, {})
+            m_[r.get('employee') or 'Unspecified'] = m_.get(r.get('employee') or 'Unspecified', 0) + _numf(r.get('amount'))
+        months = [{'month': k, 'total': sum(v.values()),
+                   'employees': sorted(({'name': n, 'amount': a} for n, a in v.items()), key=lambda e: -e['amount'])}
+                  for k, v in sorted(by_month.items(), reverse=True)]
+        synced = [r['last_synced_at'] for r in sal_acc if r.get('last_synced_at')]
+        out['salaries'] = {'months': months, 'last_synced_at': max(synced) if synced else None}
+
     # ── Payables (Vendor payment tracker, aggregated across awarded quotes) ─
     # The per-quote "Vendor payment tracker" (Quote editor -> Vendors tab)
     # lets a user record what's owed to each supplier on that PO -- vendor
@@ -2139,7 +2155,7 @@ def revoke_insights_share_link():
 # Revenue-side sections (Sales & Pipeline, Zoho Sales, Business Performance)
 # and operational sections (AMC & Field Service) are not considered
 # sensitive in the same way and are never stripped by this helper.
-_FINANCE_SECTIONS = ('loans', 'bank_recon', 'payables', 'zoho_payables', 'financial')
+_FINANCE_SECTIONS = ('loans', 'bank_recon', 'payables', 'zoho_payables', 'financial', 'salaries')
 
 def _strip_finance_sections(payload, keep=()):
     # `keep` lets a caller deliberately exempt specific sections from the
@@ -2182,7 +2198,7 @@ def insights_public():
         'features': company.get('features') or {}, 'role_permissions': None,
     }
     payload = _build_insights_payload(fake_claims)
-    payload = _strip_finance_sections(payload, keep=('zoho_payables',))
+    payload = _strip_finance_sections(payload, keep=('zoho_payables', 'salaries'))
     # zoho_sales isn't in _FINANCE_SECTIONS (it's revenue-side, and a
     # signed-in sales role is meant to see it -- see the comment above
     # _FINANCE_SECTIONS). But it also carries the AR figures this public,
