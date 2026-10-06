@@ -732,7 +732,18 @@ class ZohoAdapter:
                     lines(ch, acc)
                 elif nm:
                     acc.append((nm, num(ch.get('total'))))
-        for sec in (data.get('profitandloss') or []):
+        self._last_pl_raw = json.dumps(data)[:700]
+        # find the list of sections wherever Zoho put it
+        secs = data.get('profitandloss') or data.get('profit_and_loss') or data.get('profitandlossreport') or []
+        if not secs:
+            for v in data.values():
+                if isinstance(v, list) and v and isinstance(v[0], dict) and 'name' in v[0]:
+                    secs = v; break
+                if isinstance(v, dict):
+                    for v2 in v.values():
+                        if isinstance(v2, list) and v2 and isinstance(v2[0], dict) and 'name' in v2[0]:
+                            secs = v2; break
+        for sec in secs:
             nm = (sec.get('name') or '').strip().lower()
             if not nm: continue
             acc = []
@@ -1470,7 +1481,9 @@ def sync_cfo():
     last_two = {f'{yy}-{mm:02d}' for yy, mm in months[-2:]}
     results = {}
     try:
-        for key, (a, b) in jobs.items():
+        order = [('ytd', 'cur')] + [k for k in jobs if k != ('ytd', 'cur')]
+        for key in order:
+            a, b = jobs[key]
             if key[0] == 'm' and key[1] in cached_months and key[1] not in last_two:
                 continue
             for attempt in (0, 1):
@@ -1481,6 +1494,8 @@ def sync_cfo():
                     if '429' in str(e) and attempt == 0:
                         _t.sleep(8); continue
                     raise
+            if key == ('ytd', 'cur') and not results[key]:
+                break
             _t.sleep(1.2)
     except Exception as e:
         msg = str(e)[:300]
@@ -1489,7 +1504,7 @@ def sync_cfo():
         return jsonify({'error': f'Zoho P&L fetch failed: {msg}'}), 502
     cur = results[('ytd', 'cur')]
     if not cur:
-        return jsonify({'error': 'Zoho returned an empty Profit & Loss report.'}), 502
+        return jsonify({'error': 'Zoho returned an empty Profit & Loss report. Raw response: ' + getattr(adapter, '_last_pl_raw', '(none)')}), 502
     exp_lines = sorted(((n, a) for n, a in (cur.get('operating expense') or {}).get('lines', []) if a), key=lambda x: -abs(x[1]))
     payload = {
         'as_of': today.isoformat(),
