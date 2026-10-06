@@ -716,6 +716,30 @@ class ZohoAdapter:
             'is_involved_in_transaction': a.get('is_involved_in_transaction', False),
         } for a in rows if a.get('account_id')]
 
+    def fetch_profit_and_loss(self, creds, from_date, to_date):
+        """Zoho Books Profit & Loss report for a date range, flattened to
+        {section_name_lower: {'total': x, 'lines': [(name, total), ...]}}.
+        Parsed defensively: sections are matched by (lower-cased) name."""
+        data = self._get(creds, '/reports/profitandloss', {'from_date': from_date, 'to_date': to_date, 'cash_based': 'false'})
+        out = {}
+        def num(v):
+            try: return float(v)
+            except Exception: return 0.0
+        def lines(node, acc):
+            for ch in (node.get('account_transactions') or []):
+                nm = (ch.get('name') or '').strip()
+                if ch.get('account_transactions'):
+                    lines(ch, acc)
+                elif nm:
+                    acc.append((nm, num(ch.get('total'))))
+        for sec in (data.get('profitandloss') or []):
+            nm = (sec.get('name') or '').strip().lower()
+            if not nm: continue
+            acc = []
+            lines(sec, acc)
+            out[nm] = {'total': num(sec.get('total')), 'lines': acc}
+        return out
+
     def fetch_expense_accounts(self, creds):
         """Expense-type Chart-of-Accounts entries -- data source for the
         Salary account picker."""
@@ -1395,6 +1419,86 @@ def sync_salaries():
                        'fetched': len(txns), 'kept': len(batch), 'sample_keys': sorted(list(txns[0].keys()))[:25] if txns else []})
         sb.table('salary_accounts').update({'last_synced_at': now_iso}).eq('id', acc['id']).execute()
     return jsonify({'synced': total, 'detail': detail})
+
+# ── CFO summary (mobile Insights "CFO" page) ───────────────────────────────────
+def _cfo_period(pl):
+    g = lambda k: (pl.get(k) or {}).get('total', 0.0)
+    revenue = g('operating income')
+    cogs = g('cost of goods sold')
+    gross = pl['gross profit']['total'] if 'gross profit' in pl else revenue - cogs
+    opex = g('operating expense')
+    op_profit = pl['operating profit']['total'] if 'operating profit' in pl else gross - opex
+    net = None
+    for k in pl:
+        if k.startswith('net profit'): net = pl[k]['total']
+    if net is None: net = op_profit + g('non operating income') - g('non operating expense')
+    return {'revenue': revenue, 'cogs': cogs, 'gross': gross, 'opex': opex, 'op_profit': op_profit, 'net': net}
+
+@app.route('/api/integrations/sync-cfo', methods=['POST'])
+def sync_cfo():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    if not has_page_access(claims, 'zohoReconciliation'):
+        return jsonify({'error': 'You do not have access to this feature.'}), 403
+    cid = claims['company_id']
+    creds = _get_creds_for(cid, 'zoho'); adapter = ADAPTERS.get('zoho')
+    if not creds or not adapter or not adapter.is_configured(creds):
+        return jsonify({'error': 'Zoho Books is not connected.'}), 400
+    from concurrent.futures import ThreadPoolExecutor
+    import calendar
+    today = date.today()
+    def month_range(y, m):
+        return date(y, m, 1), date(y, m, calendar.monthrange(y, m)[1])
+    months = []
+    y, m = today.year, today.month
+    for _ in range(6):
+        months.append((y, m)); m -= 1
+        if m == 0: y, m = y - 1, 12
+    months.reverse()
+    jobs = {('m', f'{yy}-{mm:02d}'): month_range(yy, mm) for yy, mm in months}
+    jobs[('ytd', 'cur')] = (date(today.year, 1, 1), today)
+    try: prev_end = today.replace(year=today.year - 1)
+    except ValueError: prev_end = today.replace(year=today.year - 1, day=28)
+    jobs[('ytd', 'prev')] = (date(today.year - 1, 1, 1), prev_end)
+    def run(item):
+        key, (a, b) = item
+        return key, adapter.fetch_profit_and_loss(creds, a.isoformat(), b.isoformat())
+    try:
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            results = dict(ex.map(run, jobs.items()))
+    except Exception as e:
+        return jsonify({'error': f'Zoho P&L fetch failed: {str(e)[:300]}'}), 502
+    cur = results[('ytd', 'cur')]
+    if not cur:
+        return jsonify({'error': 'Zoho returned an empty Profit & Loss report.'}), 502
+    exp_lines = sorted(((n, a) for n, a in (cur.get('operating expense') or {}).get('lines', []) if a), key=lambda x: -abs(x[1]))
+    payload = {
+        'as_of': today.isoformat(),
+        'ytd': {**_cfo_period(cur), 'expense_lines': [{'name': n, 'amount': a} for n, a in exp_lines[:8]]},
+        'prev_ytd': _cfo_period(results[('ytd', 'prev')]),
+        'months': [{'month': k[1], **_cfo_period(v)} for k, v in sorted(results.items()) if k[0] == 'm'],
+    }
+    # Cash: bank + cash accounts' balances from Zoho Banking
+    try:
+        banks = adapter.fetch_bank_accounts(creds)
+        payload['cash_balance'] = sum(float(b.get('balance') or 0) for b in banks
+                                      if (b.get('account_type') or '') in ('bank', 'cash') and b.get('is_active', True))
+    except Exception:
+        payload['cash_balance'] = None
+    # AR / AP from already-synced invoices and bills (non-draft, open balance)
+    try:
+        inv = sb.table('zoho_invoices').select('balance,status').eq('company_id', cid).execute().data or []
+        payload['receivables'] = sum(float(r.get('balance') or 0) for r in inv if (r.get('status') or '').lower() != 'draft' and float(r.get('balance') or 0) > 0)
+        bills = sb.table('zoho_bills').select('balance').eq('company_id', cid).execute().data or []
+        payload['payables'] = sum(float(r.get('balance') or 0) for r in bills if float(r.get('balance') or 0) > 0)
+    except Exception:
+        payload['receivables'] = payload['payables'] = None
+    days = max(1, (today - date(today.year, 1, 1)).days + 1)
+    rev, cg = payload['ytd']['revenue'], payload['ytd']['cogs']
+    payload['dso'] = round(payload['receivables'] / rev * days) if rev and payload.get('receivables') is not None else None
+    payload['dpo'] = round(payload['payables'] / cg * days) if cg and payload.get('payables') is not None else None
+    sb.table('cfo_snapshots').upsert({'company_id': cid, 'payload': payload, 'synced_at': datetime.utcnow().isoformat()}, on_conflict='company_id').execute()
+    return jsonify({'ok': True, 'sections_found': sorted(cur.keys()), 'ytd': payload['ytd']})
 
 # ── Loan transaction anomaly review ─────────────────────────────────────────
 # What the admin actually worries about: "is loan money accidentally showing

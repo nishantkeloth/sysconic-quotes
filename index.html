@@ -8504,6 +8504,12 @@ function zohoReconciliationHTML(){
   <div id="loanReviewBox" style="margin-top:14px"></div>
 </div>
 <div class="card" style="max-width:640px;margin-top:16px">
+  <div class="card-title">CFO Summary</div>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:12px">Pulls Profit &amp; Loss (YTD, prior-year YTD and the last 6 months), cash balance, receivables and payables from Zoho Books for the mobile Insights "CFO summary" page. Visible on the public share link. Click Sync to refresh.</div>
+  <button class="btn btn-navy btn-sm" id="cfoSyncBtn" onclick="syncCfo()">🔄 Sync CFO data</button>
+  <div id="cfoSyncMsg" style="font-size:12px;margin-top:8px;color:var(--gray-500)"></div>
+</div>
+<div class="card" style="max-width:640px;margin-top:16px">
   <div class="card-title">Salary Accounts</div>
   <div style="font-size:13px;color:var(--gray-500);margin-bottom:16px">Pick where payroll is booked: an expense account (e.g. "Employee salary", employee = payee/description) and/or the per-employee "&lt;Name&gt; - Salary Payable" accounts (employee = account name, amount = payments made). Mobile Insights then shows salary paid per month, per employee (employee = the entry's payee, else its description). Visible on the public share link.</div>
   <div id="salaryBox"><div style="color:var(--gray-500)">Loading…</div></div>
@@ -9232,6 +9238,13 @@ function renderSalaryBox(){
   el.innerHTML=(rows.length?`<div style="margin-bottom:10px;font-size:13px">${rows.map(a=>`<div style="padding:6px 0;border-bottom:1px solid var(--gray-100)">${esc(a.account_name)}${a.last_synced_at?` <span style="color:var(--gray-500)">· synced ${new Date(a.last_synced_at).toLocaleString()}</span>`:' <span style="color:var(--amber)">· not synced yet</span>'}</div>`).join('')}</div>`:'<div style="color:var(--gray-500);font-size:13px;margin-bottom:10px">No salary accounts selected yet.</div>')
    +`<button class="btn btn-navy btn-sm" onclick="openSalaryPicker()">${rows.length?'Manage accounts':'+ Choose salary accounts from Zoho'}</button>`
    +(rows.length?` <button class="btn btn-sm" onclick="syncSalaries()" ${SAL_SYNCING?'disabled':''}>${SAL_SYNCING?'⏳ Syncing…':'🔄 Sync Now'}</button>`:'');
+}
+async function syncCfo(){
+  const b=document.getElementById('cfoSyncBtn'),m=document.getElementById('cfoSyncMsg');
+  if(b){b.disabled=true;b.textContent='⏳ Syncing…';}
+  const r=await api('POST','/api/integrations/sync-cfo',{});
+  if(b){b.disabled=false;b.textContent='🔄 Sync CFO data';}
+  if(m)m.innerHTML=r.error?`<span style="color:var(--red)">${esc(r.error)}</span>`:`Synced. YTD revenue ${fmt(r.ytd.revenue)}, net profit ${fmt(r.ytd.net)}. P&amp;L sections found: ${esc((r.sections_found||[]).join(', '))}`;
 }
 async function openSalaryPicker(){
   const el=document.getElementById('salaryBox');if(el)el.innerHTML='<div style="color:var(--gray-500)">Loading Zoho accounts…</div>';

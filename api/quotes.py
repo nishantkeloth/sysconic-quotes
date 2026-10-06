@@ -1823,6 +1823,11 @@ def _build_insights_payload(claims):
             'last_synced_at': max(synced_ats) if synced_ats else None,
         }
 
+    # ── CFO summary snapshot (built by /api/integrations/sync-cfo) ─────────
+    cfo_row = sb.table('cfo_snapshots').select('payload,synced_at').eq('company_id', company_id).execute().data
+    if cfo_row:
+        out['cfo'] = {**(cfo_row[0].get('payload') or {}), 'last_synced_at': cfo_row[0].get('synced_at')}
+
     # ── Salaries (admin-picked Zoho expense accounts; per month, per employee) ─
     sal_acc = sb.table('salary_accounts').select('last_synced_at').eq('company_id', company_id).eq('is_tracked', True).execute().data or []
     if sal_acc:
@@ -2155,7 +2160,7 @@ def revoke_insights_share_link():
 # Revenue-side sections (Sales & Pipeline, Zoho Sales, Business Performance)
 # and operational sections (AMC & Field Service) are not considered
 # sensitive in the same way and are never stripped by this helper.
-_FINANCE_SECTIONS = ('loans', 'bank_recon', 'payables', 'zoho_payables', 'financial', 'salaries')
+_FINANCE_SECTIONS = ('loans', 'bank_recon', 'payables', 'zoho_payables', 'financial', 'salaries', 'cfo')
 
 def _strip_finance_sections(payload, keep=()):
     # `keep` lets a caller deliberately exempt specific sections from the
@@ -2198,7 +2203,7 @@ def insights_public():
         'features': company.get('features') or {}, 'role_permissions': None,
     }
     payload = _build_insights_payload(fake_claims)
-    payload = _strip_finance_sections(payload, keep=('zoho_payables', 'salaries'))
+    payload = _strip_finance_sections(payload, keep=('zoho_payables', 'salaries', 'cfo'))
     # zoho_sales isn't in _FINANCE_SECTIONS (it's revenue-side, and a
     # signed-in sales role is meant to see it -- see the comment above
     # _FINANCE_SECTIONS). But it also carries the AR figures this public,
