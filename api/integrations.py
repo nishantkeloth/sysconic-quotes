@@ -94,7 +94,20 @@ class ZohoAdapter:
         contacts = self.fetch_customers(creds)
         return {'ok': True, 'sample_count': len(contacts)}
 
-    def create_customer(self, creds, name, company_name=None, email=None, phone=None):
+    def find_customers(self, creds, name):
+        """Live search of Zoho customers by name (contains). Used before
+        creating so we link to an existing contact instead of duplicating."""
+        data = self._get(creds, '/contacts', {'contact_type': 'customer', 'contact_name_contains': str(name)[:100],
+                                               'per_page': 25})
+        return [{
+            'id':      ct.get('contact_id'),
+            'name':    ct.get('contact_name') or ct.get('company_name') or '',
+            'company': ct.get('company_name') or '',
+            'email':   ct.get('email') or '',
+            'phone':   ct.get('phone') or ct.get('mobile') or '',
+        } for ct in data.get('contacts', []) if ct.get('contact_id')]
+
+    def create_customer(self, creds, name, company_name=None, email=None, phone=None, trn=None):
         """Pushes a brand-new customer to Zoho Books as a Contact (contact_type
         'customer'), used when a Deal is created with a customer name that
         doesn't already exist in the synced Customer Master (see
@@ -116,7 +129,18 @@ class ZohoAdapter:
         }
         if email: body['email'] = str(email)[:200]
         if phone: body['phone'] = str(phone)[:50]
-        r = self._post(creds, '/contacts', body)
+        if trn:
+            body['tax_reg_no'] = str(trn)[:50]
+        try:
+            r = self._post(creds, '/contacts', body)
+        except RuntimeError as e:
+            # Non-GCC / VAT-less Zoho orgs reject tax_reg_no; retry without it
+            # rather than blocking customer creation.
+            if trn and 'tax_reg_no' in str(e):
+                body.pop('tax_reg_no', None)
+                r = self._post(creds, '/contacts', body)
+            else:
+                raise
         contact = r.get('contact') or {}
         if not contact.get('contact_id'):
             raise RuntimeError('Zoho did not return a contact id: ' + json.dumps(r)[:200])
@@ -1812,6 +1836,86 @@ def push_customer_to_zoho():
     }).eq('id', cid).eq('company_id', claims['company_id']).execute()
     return jsonify({'ok': True, 'external_contact_id': contact['contact_id']})
 
+# ── Create customer, replicated to the accounting system FIRST ─────────────────
+# Used by the deal / quote customer picker. Order: (1) search the connected
+# system live -> link if it already exists, (2) otherwise create it there,
+# (3) only then write the local Customer Master row. If the external system
+# fails, nothing is saved locally and the real error is returned so the user
+# can retry. If no system is connected, a local-only customer is created.
+@app.route('/api/integrations/create-customer', methods=['POST'])
+def create_customer_linked():
+    claims = verify_token(request)
+    if not claims: return jsonify({'error': 'Unauthorized'}), 401
+    d = request.json or {}
+    name = str(d.get('name') or '').strip()[:200]
+    email = str(d.get('email') or '').strip()[:200]
+    phone = str(d.get('phone') or '').strip()[:50]
+    trn = str(d.get('trn') or '').strip()[:50]
+    link_id = str(d.get('link_contact_id') or '').strip()
+    force = bool(d.get('force'))
+    if not name: return jsonify({'error': 'Customer name is required.'}), 400
+    if not email: return jsonify({'error': 'Email is required.'}), 400
+    if not trn: return jsonify({'error': 'VAT / TRN number is required.'}), 400
+    cid_co = claims['company_id']
+
+    # Local exact-name duplicate -> reuse (and push it if not yet linked)
+    local = sb.table('customers').select('*').eq('company_id', cid_co).ilike('name', name.replace('%', '').replace('_', r'\_')).execute()
+    local_row = next((r for r in (local.data or []) if (r.get('name') or '').strip().lower() == name.lower()), None)
+    if local_row and local_row.get('external_contact_id'):
+        return jsonify({'customer': local_row, 'existing': True})
+
+    provider = None
+    pref = _company_provider(cid_co, 'customer_sync_provider')
+    connected = _connected_providers(cid_co)
+    for p in ([pref] if pref else []) + connected:
+        if p in connected and hasattr(ADAPTERS.get(p), 'create_customer'):
+            provider = p; break
+
+    ext_id, ext_name = None, None
+    if provider:
+        adapter = ADAPTERS[provider]
+        creds = _get_creds_for(cid_co, provider)
+        label = PROVIDER_LABELS.get(provider, provider)
+        try:
+            if link_id:
+                ext_id = link_id
+            else:
+                found = adapter.find_customers(creds, name) if hasattr(adapter, 'find_customers') else []
+                exact = next((f for f in found if f['name'].strip().lower() == name.lower()
+                              or f['company'].strip().lower() == name.lower()), None)
+                if exact:
+                    ext_id, ext_name = exact['id'], exact['name']
+                elif found and not force:
+                    return jsonify({'needs_confirm': True, 'provider': provider,
+                                    'message': f'Similar customers already exist in {label}.',
+                                    'matches': found[:8]}), 409
+                else:
+                    contact = adapter.create_customer(creds, name, company_name=name, email=email,
+                                                      phone=phone, trn=trn)
+                    ext_id = contact['contact_id']
+        except Exception as e:
+            return jsonify({'error': f'{label} customer creation failed: {str(e)[:300]}. Nothing was saved — please retry.'}), 502
+
+    fields = {'name': name, 'company_name': name, 'email': email, 'phone': phone, 'trn': trn}
+    if ext_id:
+        fields.update({'external_contact_id': ext_id, 'source': provider})
+    try:
+        if local_row:
+            row = sb.table('customers').update(fields).eq('id', local_row['id']).execute()
+        else:
+            # A previous sync may already have inserted this contact id
+            dup = sb.table('customers').select('id').eq('company_id', cid_co).eq('external_contact_id', ext_id).execute() if ext_id else None
+            if dup and dup.data:
+                row = sb.table('customers').update(fields).eq('id', dup.data[0]['id']).execute()
+            else:
+                fields.update({'company_id': cid_co, 'created_by': claims['user_id']})
+                if not ext_id: fields['source'] = 'manual'
+                row = sb.table('customers').insert(fields).execute()
+    except Exception as e:
+        return jsonify({'error': f'Created in Zoho but could not save locally: {str(e)[:250]}. Run Sync Customers.'}), 500
+    return jsonify({'customer': row.data[0], 'linked_existing': bool(ext_id and ext_name),
+                    'synced': bool(ext_id), 'provider': provider}), 201
+
 # ── Generic sync: vendors ───────────────────────────────────────────────────────
 @app.route('/api/integrations/sync-vendors', methods=['POST'])
 def sync_vendors():
@@ -1947,10 +2051,15 @@ def zoho_create_project():
     customer_name = (proj.get('customer') or '').strip()
     if not customer_name:
         return jsonify({'error': 'Project has no customer set. Add a customer first.'}), 400
-    match = sb.table('customers').select('external_contact_id,name').eq('company_id', claims['company_id']).ilike('name', customer_name).execute()
-    if not match.data or not match.data[0].get('external_contact_id'):
-        return jsonify({'error': f'Customer "{customer_name}" not found in the synced Zoho customer list. Sync customers or check the exact name.'}), 400
-    zoho_customer_id = match.data[0]['external_contact_id']
+    _cn = customer_name.replace('%', '').replace('_', r'\_')
+    match = sb.table('customers').select('external_contact_id,name').eq('company_id', claims['company_id']).ilike('name', _cn).execute()
+    _linked = [m for m in (match.data or []) if m.get('external_contact_id')]
+    if not _linked:  # looser fallback: contains-match, still requiring a Zoho link
+        loose = sb.table('customers').select('external_contact_id,name').eq('company_id', claims['company_id']).ilike('name', f'%{_cn}%').execute()
+        _linked = [m for m in (loose.data or []) if m.get('external_contact_id')]
+    if not _linked:
+        return jsonify({'error': f'Customer "{customer_name}" is not linked to Zoho. Re-select it via the Deal/Quote customer picker (+ Add new customer) or run Sync Customers.'}), 400
+    zoho_customer_id = _linked[0]['external_contact_id']
 
     zoho_project_id = proj.get('zoho_project_id')
     zoho_project_no = proj.get('zoho_project_no')

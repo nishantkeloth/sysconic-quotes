@@ -7784,12 +7784,15 @@ async function loadDealDetail(dealId){
 function renderDealModal(d,activity){
   const box=document.getElementById('dealModalBox');if(!box)return;
   const isNew=!d;
+  DCUST={id:d?.customer_id||null,name:d?.customer_name||'',orig:d?.customer_name||'',t:null};
   const stageOpts=DEALS.stages.map(s=>`<option value="${s.id}" ${d&&d.stage_id===s.id?'selected':''}>${esc(s.name)}</option>`).join('');
   box.innerHTML=`
     <div class="modal-title">${isNew?'New Deal':esc(d.title)}</div>
     <div class="fld2" style="margin-bottom:10px"><label>Title</label><input id="dfTitle" value="${esc(d?.title||'')}" placeholder="e.g. Video conferencing rollout — Acme HQ"></div>
     <div class="field-grid g2" style="margin-bottom:10px">
-      <div class="fld2"><label>Customer</label><input id="dfCustomer" value="${esc(d?.customer_name||'')}" placeholder="Customer or company name"></div>
+      <div class="fld2" style="position:relative"><label>Customer</label><input id="dfCustomer" autocomplete="off" value="${esc(d?.customer_name||'')}" placeholder="Search existing customers…" oninput="dealCustSearch(this.value)" onfocus="dealCustSearch(this.value)">
+        <div id="dfCustList" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:50;background:#fff;border:1.5px solid var(--gray-200);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.12);max-height:220px;overflow-y:auto"></div>
+        <div id="dfCustTag" style="font-size:11px;margin-top:3px;color:var(--gray-500)"></div></div>
       <div class="fld2"><label>Estimated value</label><input id="dfValue" type="number" value="${d?.value??''}" placeholder="0"></div>
     </div>
     <div class="field-grid g2" style="margin-bottom:10px">
@@ -7821,12 +7824,16 @@ function renderDealModal(d,activity){
 async function saveDealModal(dealId){
   const body={
     title:(document.getElementById('dfTitle')?.value||'').trim(),
-    customer_name:document.getElementById('dfCustomer')?.value||'',
+    customer_name:(DCUST&&DCUST.name)||'',
     value:Number(document.getElementById('dfValue')?.value)||0,
     expected_close_date:document.getElementById('dfClose')?.value||null,
     notes:document.getElementById('dfNotes')?.value||'',
   };
   if(!body.title){alert('Deal title is required.');return;}
+  const typed=(document.getElementById('dfCustomer')?.value||'').trim();
+  if(typed&&!(DCUST&&DCUST.id)&&typed!==(DCUST&&DCUST.orig||'')){alert('Please pick an existing customer from the list, or choose "+ Add new customer".');return;}
+  if(DCUST&&DCUST.id)body.customer_id=DCUST.id;
+  if(!typed){body.customer_name='';body.customer_id=null;}
   if(dealId){
     const stageSel=document.getElementById('dfStage');
     if(stageSel)body.stage_id=stageSel.value;
@@ -7839,11 +7846,81 @@ async function saveDealModal(dealId){
     // Customer Master (and from there, into Zoho Books if connected) the
     // moment the deal is created — never lets a Zoho hiccup stop the deal
     // itself from being created.
-    if(body.customer_name && body.customer_name.trim()){
-      try{ await syncDealCustomerToZoho(body.customer_name.trim(), r.deal.id); }catch(e){}
-    }
   }
   closeDealModal();loadDealsPage();
+}
+
+// ── Deal customer picker: existing customers + add-new (replicated to Zoho first) ──
+var DCUST={id:null,name:'',orig:'',t:null};
+function dealCustSearch(v){
+  if(!DCUST)DCUST={id:null,name:'',orig:'',t:null};
+  const typed=(v||'').trim();
+  if(DCUST.id&&typed!==DCUST.name){DCUST.id=null;}  // edited after selecting -> unselect
+  DCUST.name=typed===DCUST.orig&&!DCUST.id?DCUST.orig:(DCUST.id?DCUST.name:'');
+  const tag=document.getElementById('dfCustTag');if(tag&&!DCUST.id)tag.textContent='';
+  clearTimeout(DCUST.t);
+  DCUST.t=setTimeout(async()=>{
+    const list=document.getElementById('dfCustList');if(!list)return;
+    const r=await api('GET','/api/customers?limit=8&search='+encodeURIComponent(typed));
+    const rows=r.customers||[];
+    list.innerHTML=rows.map(c=>`<div style="padding:7px 10px;cursor:pointer;border-bottom:1px solid var(--gray-100);font-size:13px;display:flex;justify-content:space-between;gap:8px" onmousedown="dealCustPick('${c.id}')"><span>${esc(c.name)}</span><span style="font-size:10px;font-weight:700;color:${c.external_contact_id?'var(--green)':'var(--amber)'}">${c.external_contact_id?'In Zoho':'Not in Zoho'}</span></div>`).join('')
+      +`<div style="padding:8px 10px;cursor:pointer;font-size:13px;font-weight:700;color:var(--navy,#1a2b4a)" onmousedown="dealCustAddForm()">＋ Add new customer${typed?' “'+esc(typed)+'”':''}</div>`;
+    list.dataset.rows=JSON.stringify(rows.map(c=>({id:c.id,name:c.name,z:!!c.external_contact_id})));
+    list.style.display='block';
+  },200);
+}
+function dealCustPick(id){
+  const list=document.getElementById('dfCustList');
+  let rows=[];try{rows=JSON.parse(list?.dataset.rows||'[]')}catch(e){}
+  const c=rows.find(x=>x.id===id);if(!c)return;
+  dealCustSet(c);
+}
+function dealCustSet(c){
+  DCUST.id=c.id;DCUST.name=c.name;
+  const inp=document.getElementById('dfCustomer');if(inp)inp.value=c.name;
+  const list=document.getElementById('dfCustList');if(list)list.style.display='none';
+  const tag=document.getElementById('dfCustTag');
+  if(tag){const z=c.z!==undefined?c.z:!!c.external_contact_id;tag.innerHTML=z?'<span style="color:var(--green)">✓ Linked to Zoho</span>':'<span style="color:var(--amber)">Not in Zoho yet</span>';}
+}
+document.addEventListener('mousedown',e=>{const l=document.getElementById('dfCustList');if(l&&!l.contains(e.target)&&e.target.id!=='dfCustomer')l.style.display='none';});
+function dealCustAddForm(extra){
+  const list=document.getElementById('dfCustList');if(list)list.style.display='none';
+  const nm=(document.getElementById('dfCustomer')?.value||'').trim();
+  const old=document.getElementById('dcAddOverlay');if(old)old.remove();
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="dcAddOverlay" style="z-index:10001"><div class="modal" style="max-width:440px">
+    <div class="modal-title">Add new customer</div>
+    <div style="font-size:12px;color:var(--gray-500);margin-bottom:10px">Created in your accounting system (Zoho) first, then attached to the deal.</div>
+    <div class="fld2" style="margin-bottom:8px"><label>Customer name *</label><input id="dcName" value="${esc(nm)}"></div>
+    <div class="fld2" style="margin-bottom:8px"><label>Email *</label><input id="dcEmail" type="email"></div>
+    <div class="field-grid g2" style="margin-bottom:8px">
+      <div class="fld2"><label>VAT / TRN number *</label><input id="dcTrn"></div>
+      <div class="fld2"><label>Phone</label><input id="dcPhone"></div>
+    </div>
+    <div id="dcMsg" style="font-size:12px;margin-bottom:8px"></div>
+    <div class="modal-actions"><button class="btn" onclick="document.getElementById('dcAddOverlay').remove()">Cancel</button>
+    <button class="btn btn-navy" id="dcSave" onclick="dealCustCreate()">Create in Zoho &amp; attach</button></div></div></div>`);
+}
+async function dealCustCreate(opts){
+  opts=opts||{};
+  const g=id=>(document.getElementById(id)?.value||'').trim();
+  const body={name:g('dcName'),email:g('dcEmail'),trn:g('dcTrn'),phone:g('dcPhone')};
+  if(opts.link)body.link_contact_id=opts.link;
+  if(opts.force)body.force=true;
+  const msg=document.getElementById('dcMsg'),btn=document.getElementById('dcSave');
+  if(!body.name||!body.email||!body.trn){if(msg)msg.innerHTML='<span style="color:var(--red)">Name, email and VAT/TRN are required.</span>';return;}
+  if(btn){btn.disabled=true;btn.textContent='Creating…';}
+  const r=await api('POST','/api/integrations/create-customer',body);
+  if(btn){btn.disabled=false;btn.innerHTML='Create in Zoho &amp; attach';}
+  if(r.needs_confirm){
+    window._dcMatches=r.matches||[];
+    if(msg)msg.innerHTML=`<div style="color:var(--amber);font-weight:700;margin-bottom:4px">${esc(r.message)}</div>`
+      +window._dcMatches.map((m,i)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--gray-100)"><span>${esc(m.name)}${m.email?` <span style="color:var(--gray-500)">· ${esc(m.email)}</span>`:''}</span><button class="btn btn-sm" onclick="dealCustCreate({link:window._dcMatches[${i}].id})">Use this</button></div>`).join('')
+      +`<div style="margin-top:6px"><button class="btn btn-sm" onclick="dealCustCreate({force:true})">None of these — create new</button></div>`;
+    return;
+  }
+  if(r.error){if(msg)msg.innerHTML=`<span style="color:var(--red)">${esc(r.error)}</span>`;return;}
+  document.getElementById('dcAddOverlay')?.remove();
+  dealCustSet({id:r.customer.id,name:r.customer.name,z:!!r.customer.external_contact_id});
 }
 
 // Finds or creates a Customer Master row matching this deal's typed customer
