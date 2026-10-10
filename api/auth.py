@@ -1162,7 +1162,7 @@ def upload_voucher_seal():
 # Health (see _strip_finance_sections() in api/quotes.py). Same fail-open
 # default as every other key here: a role with no custom permissions object
 # at all sees everything, same as an admin.
-RBAC_PAGE_KEYS = ['insights','insightsFinance','quotes','deals','products','customers','vendors','projects','projectPerformance','reviewQueue','testimonials','team','integrations','companyProfile','fsm','myJobs','deliveryChallans','vouchers','receiptVouchers','workflowSettings','zohoReconciliation','zohoReport']
+RBAC_PAGE_KEYS = ['insights','insightsFinance','quotes','deals','products','customers','vendors','projects','projectPerformance','reviewQueue','testimonials','team','integrations','companyProfile','fsm','myJobs','deliveryChallans','vouchers','receiptVouchers','workflowSettings','zohoReconciliation','zohoReport','proposals','proposalAi']
 
 def _clean_permissions(d):
     out = {}

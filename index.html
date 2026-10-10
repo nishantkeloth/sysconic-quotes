@@ -3211,6 +3211,9 @@ function draw(){
   if(A.page==='integrations'){setTimeout(loadIntegrations,50);setTimeout(loadSyncConfig,50);}
   if(A.page==='platform'){setTimeout(loadPlatformCompanies,50);}
   if(A.page==='companyProfile'){setTimeout(loadCompanyProfile,50);setTimeout(loadQuoteNumbering,50);if(hasFeature('delivery_challans'))setTimeout(loadDcNumbering,50);if(hasFeature('vouchers'))setTimeout(loadRvNumbering,50);setTimeout(loadSelfServeAddons,50);setTimeout(loadInsightsShareLink,50);}
+  if(A.page==='proposals'&&PRP.list==null)setTimeout(loadProposals,50);
+  if(A.page==='proposalDetail'&&PRP.detail==null)setTimeout(loadProposalDetail,50);
+  if(A.page==='proposalAi')setTimeout(loadProposalAi,50);
   if(A.page==='zohoReconciliation'){setTimeout(loadLoanAccountsBox,50);setTimeout(loadBankReconBox,50);setTimeout(loadSalaryBox,60);}
   if(A.page==='zohoReport'){setTimeout(loadZrPage,50);}
   if(A.page==='rolesPermissions'){setTimeout(loadRolesPermissions,50);}
@@ -3714,6 +3717,8 @@ function appHTML(){
       ])}
       ${sbGroupHTML('proposals','Proposals',[
         hasPageAccess('quotes')?`<div class="sb-item ${A.page==='dashboard'?'active':''}" onclick="${nav('dashboard')}"><span class="sb-icon">🏠</span>Quotes</div>`:'',
+        hasFeature('proposals')&&hasPageAccess('proposals')?`<div class="sb-item ${(A.page==='proposals'||A.page==='proposalDetail')?'active':''}" onclick="${nav('proposals','PRP.list=null;')}"><span class="sb-icon">📑</span>Proposals</div>`:'',
+        hasFeature('proposals')&&A.user?.role==='admin'&&hasPageAccess('proposalAi')?`<div class="sb-item ${A.page==='proposalAi'?'active':''}" onclick="${nav('proposalAi')}"><span class="sb-icon">🤖</span>Proposal AI</div>`:'',
         hasPageAccess('reviewQueue')?`<div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>`:''
       ])}
       ${sbGroupHTML('masterdata','Master Data',[
@@ -3802,6 +3807,9 @@ function appHTML(){
   else if(A.page==='testimonials')pageContent=testimonialsHTML();
   else if(A.page==='zohoReconciliation')pageContent=zohoReconciliationHTML();
   else if(A.page==='zohoReport')pageContent=zohoReportHTML();
+  else if(A.page==='proposals')pageContent=proposalsHTML();
+  else if(A.page==='proposalDetail')pageContent=proposalDetailHTML();
+  else if(A.page==='proposalAi')pageContent=proposalAiHTML();
 
   if(['editor','terms','vendor'].includes(A.page)&&isQuoteLocked()&&!A.reviewMode){
     pageContent=`<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
@@ -8355,7 +8363,7 @@ function importVendorsMaster(event){
 }
 
 // ── Team ──────────────────────────────────────────────────────────────────────
-const RBAC_PAGE_LABELS = {insights:'Insights',insightsFinance:'Insights — Finance & Loans',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service',myJobs:'My Jobs (Engineer)',deliveryChallans:'Delivery Challans',vouchers:'Payment Vouchers',receiptVouchers:'Receipt Vouchers',workflowSettings:'Workflow Settings',zohoReconciliation:'Zoho — Reconciliation',zohoReport:'Zoho — Report'};
+const RBAC_PAGE_LABELS = {insights:'Insights',insightsFinance:'Insights — Finance & Loans',quotes:'Quotes',deals:'Deals',products:'Products',customers:'Customers',vendors:'Vendors',projects:'Projects',projectPerformance:'Project Performance',reviewQueue:'Review Queue',testimonials:'Testimonials',team:'Team',integrations:'Integrations',companyProfile:'Company Profile',fsm:'Field Service',myJobs:'My Jobs (Engineer)',deliveryChallans:'Delivery Challans',vouchers:'Payment Vouchers',receiptVouchers:'Receipt Vouchers',workflowSettings:'Workflow Settings',zohoReconciliation:'Zoho — Reconciliation',zohoReport:'Zoho — Report',proposals:'Proposals',proposalAi:'Settings — Proposal AI'};
 // 'insightsFinance' is a sub-permission of 'insights' (see RBAC_PAGE_KEYS in
 // api/auth.py) -- it only means anything once 'insights' itself is checked,
 // so it's indented under it in the Roles & Permissions list rather than
@@ -9314,6 +9322,190 @@ async function syncLoanAccounts(){
   await loadLoanAccountsBox();
 }
 
+// ── Proposals module (M1: register, create from quotation, Proposal AI settings) ──
+// Preview/document generation arrives in later milestones; nothing here calls a
+// generative model. See api/proposals.py.
+let PRP={list:null,total:0,search:'',archived:false,detail:null,detailId:null,quotes:[],ai:null};
+
+function proposalsHTML(){
+  return `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+    <div><h2 style="margin:0">Proposals</h2><div style="font-size:13px;color:var(--gray-500)">Build customer proposals from a quotation.</div></div>
+    <button class="btn btn-navy" onclick="openNewProposal()">+ New Proposal</button>
+  </div>
+  <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+    <input id="propSearch" placeholder="Search reference, title, customer, quote…" value="${esc(PRP.search)}" style="flex:1;min-width:220px" oninput="propSearchInput(this.value)">
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" ${PRP.archived?'checked':''} onchange="PRP.archived=this.checked;loadProposals()"> Archived</label>
+  </div>
+  <div class="card" id="propListBox">${proposalsListInner()}</div>`;
+}
+function proposalsListInner(){
+  if(PRP.list==null)return '<div style="color:var(--gray-500)">Loading…</div>';
+  if(!PRP.list.length)return `<div style="text-align:center;padding:28px 10px"><div style="font-size:15px;font-weight:700;margin-bottom:6px">${PRP.archived?'No archived proposals':'Create your first proposal'}</div>${PRP.archived?'':'<div style="color:var(--gray-500);font-size:13px;margin-bottom:12px">Pick a quotation and QTCal prepares the proposal from it.</div><button class="btn btn-navy" onclick="openNewProposal()">+ New Proposal</button>'}</div>`;
+  return `<div style="overflow-x:auto"><table style="width:100%;font-size:13px;border-collapse:collapse">
+    <tr style="color:var(--gray-500);text-align:left"><th style="padding:6px">Reference</th><th>Title</th><th>Customer</th><th>Source</th><th>Stage</th><th>Updated</th><th></th></tr>
+    ${PRP.list.map(p=>`<tr style="border-top:1px solid var(--gray-100);cursor:pointer" onclick="openProposal('${p.id}')">
+      <td style="padding:8px 6px;font-weight:700">${esc(p.reference)}</td><td>${esc(p.title||'—')}</td><td>${esc(p.customer_name||'General proposal')}</td>
+      <td>${esc(p.quote_ref||'—')}</td><td>${esc(propStageLabel(p))}</td><td>${p.updated_at?new Date(p.updated_at).toLocaleDateString():''}</td>
+      <td onclick="event.stopPropagation()">${p.lifecycle==='archived'?`<button class="btn btn-sm" onclick="propArchive('${p.id}',false)">Restore</button>`:`<button class="btn btn-sm" onclick="propArchive('${p.id}',true)">Archive</button>`}</td></tr>`).join('')}
+  </table></div><div style="font-size:12px;color:var(--gray-500);margin-top:8px">${PRP.total} proposal${PRP.total===1?'':'s'}</div>`;
+}
+function propStageLabel(p){
+  if(p.lifecycle==='archived')return 'Archived';
+  return ({draft:'Draft'})[p.stage]||p.stage||'Draft';
+}
+let _propSearchT=null;
+function propSearchInput(v){PRP.search=v;clearTimeout(_propSearchT);_propSearchT=setTimeout(loadProposals,250);}
+async function loadProposals(){
+  const r=await api('GET','/api/proposals?limit=25&archived='+(PRP.archived?1:0)+'&search='+encodeURIComponent(PRP.search||''));
+  if(r.error){const b=document.getElementById('propListBox');if(b)b.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  PRP.list=r.proposals||[];PRP.total=r.total||0;
+  const b=document.getElementById('propListBox');if(b)b.innerHTML=proposalsListInner();
+}
+async function propArchive(id,archive){
+  const r=await api('POST','/api/proposals/'+id+(archive?'/archive':'/restore'),{});
+  if(r.error){alert(r.error);return;}
+  loadProposals();
+}
+async function openProposal(id){PRP.detailId=id;PRP.detail=null;A.page='proposalDetail';draw();}
+async function loadProposalDetail(){
+  const r=await api('GET','/api/proposals/'+PRP.detailId);
+  if(r.error){PRP.detail={error:r.error};}else PRP.detail=r;
+  const el=document.getElementById('propDetailBox');if(el)el.innerHTML=proposalDetailInner();
+}
+function proposalDetailHTML(){
+  return `<button class="btn" style="margin-bottom:12px" onclick="A.page='proposals';PRP.list=null;draw()">← Back to Proposals</button><div id="propDetailBox">${proposalDetailInner()}</div>`;
+}
+function proposalDetailInner(){
+  const d=PRP.detail;
+  if(!d)return '<div style="color:var(--gray-500)">Loading…</div>';
+  if(d.error)return `<div class="auth-err">${esc(d.error)}</div>`;
+  const p=d.proposal,s=d.source&&d.source.safe_source,lines=(s&&s.lines)||[],c=s&&s.commercials;
+  return `<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+      <div><h2 style="margin:0">${esc(p.title||p.reference)}</h2><div style="font-size:13px;color:var(--gray-500)">${esc(p.reference)} · ${esc(p.customer_name||'General proposal')} · Source ${esc(p.quote_ref||'—')} · ${esc(propStageLabel(p))}</div></div>
+    </div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-title">Next step</div>
+      <div style="font-size:13px;color:var(--gray-500)">Source captured. Image and write-up preview generation is the next release of this module — nothing is generated yet, and nothing has been sent to any AI service.</div>
+    </div>
+    <div class="card"><div class="card-title">Source summary (${esc(s?s.visibility:'')})</div>
+      <div style="font-size:12px;color:var(--gray-500);margin-bottom:8px">Customer-safe view: cost, margin and supplier discounts are not stored or shown here.</div>
+      <div style="overflow-x:auto"><table style="width:100%;font-size:13px;border-collapse:collapse">
+        <tr style="color:var(--gray-500);text-align:left"><th style="padding:5px">Section</th><th>Brand / model</th><th>Description</th><th style="text-align:right">Qty</th>${c?'<th style="text-align:right">Unit price</th><th style="text-align:right">Total</th>':''}</tr>
+        ${lines.map(l=>`<tr style="border-top:1px solid var(--gray-100)"><td style="padding:6px 5px">${esc(l.section)}</td><td>${esc((l.manufacturer+' '+l.model).trim())}</td><td>${esc(l.description)}</td><td style="text-align:right">${esc(l.quantity)} ${esc(l.unit||'')}</td>${c?`<td style="text-align:right">${fmt(l.unit_selling_price||0)}</td><td style="text-align:right">${fmt(l.line_total||0)}</td>`:''}</tr>`).join('')}
+      </table></div>
+      ${c?`<div style="text-align:right;font-size:13px;margin-top:8px">Subtotal ${esc(c.currency)} ${fmt(c.subtotal)} · VAT ${c.vat_rate}% ${fmt(c.vat)} · <strong>Total ${fmt(c.total)}</strong></div>`:'<div style="font-size:12px;color:var(--gray-500);margin-top:8px">Technical view — prices are not included.</div>'}
+    </div>`;
+}
+
+async function openNewProposal(){
+  PRP.quotes=[];
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="propNewOverlay"><div class="modal" style="max-width:560px">
+    <div class="modal-title">New Proposal</div>
+    <div class="fld2" style="margin-bottom:10px"><label>From quotation</label><input id="pnSearch" placeholder="Search quote ref, customer or title…" autocomplete="off" oninput="pnSearchQuotes(this.value)"></div>
+    <div id="pnList" style="max-height:200px;overflow-y:auto;border:1px solid var(--gray-100);border-radius:8px;margin-bottom:10px"></div>
+    <div id="pnPicked" style="font-size:13px;margin-bottom:10px;color:var(--gray-500)">No quotation selected.</div>
+    <div class="fld2" style="margin-bottom:10px"><label>Optional instruction</label><input id="pnInstr" placeholder="e.g. Explain this for a non-technical client"></div>
+    <div id="pnMsg" style="font-size:12px;color:var(--red);margin-bottom:8px"></div>
+    <div class="modal-actions"><button class="btn" onclick="document.getElementById('propNewOverlay').remove()">Cancel</button><button class="btn btn-navy" id="pnCreate" onclick="pnCreate()">Create proposal</button></div>
+  </div></div>`);
+  PRP.pickedQuote=null;pnSearchQuotes('');
+}
+let _pnT=null;
+function pnSearchQuotes(v){
+  clearTimeout(_pnT);
+  _pnT=setTimeout(async()=>{
+    const r=await api('GET','/api/proposals/quotes?search='+encodeURIComponent(v||''));
+    const el=document.getElementById('pnList');if(!el)return;
+    if(r.error){el.innerHTML=`<div class="auth-err" style="padding:8px">${esc(r.error)}</div>`;return;}
+    PRP.quotes=r.quotes||[];
+    el.innerHTML=PRP.quotes.length?PRP.quotes.map((q,i)=>`<div style="padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--gray-100);font-size:13px" onclick="pnPick(${i})"><strong>${esc(q.quote_ref||'—')}</strong> · ${esc(q.customer||'')} <span style="color:var(--gray-500)">${esc(q.title||'')}</span></div>`).join(''):'<div style="padding:10px;color:var(--gray-500);font-size:13px">No matching quotations.</div>';
+  },200);
+}
+function pnPick(i){
+  PRP.pickedQuote=PRP.quotes[i];
+  const q=PRP.pickedQuote,el=document.getElementById('pnPicked');
+  if(el)el.innerHTML=`Selected: <strong>${esc(q.quote_ref||'')}</strong> · ${esc(q.customer||'')}`;
+}
+async function pnCreate(){
+  const msg=document.getElementById('pnMsg');
+  if(!PRP.pickedQuote){if(msg)msg.textContent='Choose a quotation first.';return;}
+  const b=document.getElementById('pnCreate');if(b){b.disabled=true;b.textContent='Creating…';}
+  const r=await api('POST','/api/proposals',{source:{kind:'quotation',id:PRP.pickedQuote.id},instruction:document.getElementById('pnInstr')?.value||''});
+  if(b){b.disabled=false;b.textContent='Create proposal';}
+  if(r.error){if(msg)msg.textContent=r.error;return;}
+  document.getElementById('propNewOverlay')?.remove();
+  openProposal(r.proposal.id);
+}
+
+// ── Settings → Proposal AI ────────────────────────────────────────────────────
+function proposalAiHTML(){
+  return `<h2 style="margin-bottom:6px">Proposal AI</h2>
+  <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px;max-width:680px">Dedicated text and image models for Proposals only. These are independent of QTCal's general AI settings — Proposals never falls back to them. API keys are held as server environment variables; this page only names which one to use.</div>
+  <div id="propAiBox" style="max-width:680px"><div style="color:var(--gray-500)">Loading…</div></div>`;
+}
+async function loadProposalAi(){
+  const r=await api('GET','/api/proposals/ai-settings');
+  const el=document.getElementById('propAiBox');if(!el)return;
+  if(r.error){el.innerHTML=`<div class="auth-err">${esc(r.error)}</div>`;return;}
+  PRP.ai=r;
+  PRP.aiForm={
+    text_profile:{...r.defaults.text_profile,...((r.settings&&r.settings.text_profile)||{})},
+    image_profile:{...r.defaults.image_profile,...((r.settings&&r.settings.image_profile)||{})},
+    image_fallback:(r.settings?r.settings.image_fallback:null)||null,
+    text_fallback:(r.settings?r.settings.text_fallback:null)||null,
+    limits:{...r.defaults.limits,...((r.settings&&r.settings.limits)||{})}
+  };
+  renderProposalAi();
+}
+function _paiProfile(key,label,showQuality,optional){
+  const f=PRP.aiForm[key],provs=PRP.ai.providers,creds=PRP.ai.credentials_present;
+  if(optional&&!f)return `<div class="card" style="margin-bottom:12px"><div class="card-title">${label} <span style="font-weight:400;color:var(--gray-500)">(optional)</span></div><button class="btn btn-sm" onclick="paiEnable('${key}')">+ Configure ${label.toLowerCase()}</button></div>`;
+  const dc=PRP.ai.defaults;
+  return `<div class="card" style="margin-bottom:12px"><div class="card-title">${label}${optional?` <button class="btn btn-sm" style="float:right" onclick="PRP.aiForm['${key}']=null;renderProposalAi()">Remove</button>`:''}</div>
+    <div class="field-grid g2">
+      <div class="fld2"><label>Provider</label><select onchange="paiSet('${key}','provider',this.value)">${Object.keys(provs).map(k=>`<option value="${k}" ${f.provider===k?'selected':''}>${esc(provs[k])}</option>`).join('')}</select></div>
+      <div class="fld2"><label>Model</label><input value="${esc(f.model||'')}" placeholder="exact model id" onchange="paiSet('${key}','model',this.value)"></div>
+      <div class="fld2"><label>Credential (server env var)</label><input value="${esc(f.credential_ref||'')}" onchange="paiSet('${key}','credential_ref',this.value)"></div>
+      ${showQuality?`<div class="fld2"><label>Image quality</label><select onchange="paiSet('${key}','quality',this.value)"><option value="high" ${f.quality!=='standard'?'selected':''}>High</option><option value="standard" ${f.quality==='standard'?'selected':''}>Standard</option></select></div>`:''}
+    </div>
+    <div style="font-size:12px;margin-top:6px;color:${creds[f.credential_ref]?'var(--green)':'var(--amber)'}">${creds[f.credential_ref]?'✓ Credential found on the server':(f.credential_ref in creds?'Credential not set on the server yet — add it in Vercel project settings → Environment Variables':'Custom credential name — verify after saving')}</div>
+    <div id="paiVerify_${key}" style="font-size:12px;margin-top:4px"></div></div>`;
+}
+function renderProposalAi(){
+  const el=document.getElementById('propAiBox');if(!el||!PRP.ai)return;
+  const st=PRP.ai.status,v=PRP.ai.settings?PRP.ai.settings.version:0,L=PRP.aiForm.limits;
+  const badge=s=>`<span style="font-size:11px;padding:2px 8px;border-radius:6px;background:${s==='ready'?'var(--green-light,#e6f4ea)':'var(--amber-light,#fff4e0)'};color:${s==='ready'?'var(--green)':'var(--amber)'}">${s==='ready'?'Ready':s==='credential_missing'?'Credential missing':'Not configured'}</span>`;
+  el.innerHTML=`<div style="font-size:13px;margin-bottom:12px">Configuration version <strong>${v||'—'}</strong> · Text ${badge(st.text)} · Image ${badge(st.image)}</div>
+    ${_paiProfile('text_profile','Proposal text profile',false,false)}
+    ${_paiProfile('image_profile','Proposal image profile',true,false)}
+    ${_paiProfile('image_fallback','Image fallback',true,true)}
+    ${_paiProfile('text_fallback','Text fallback',false,true)}
+    <div class="card" style="margin-bottom:12px"><div class="card-title">Proposal usage limits</div>
+      <div class="field-grid g2">
+        <div class="fld2"><label>Monthly budget (USD, blank = none)</label><input type="number" value="${L.monthly_budget_usd??''}" onchange="PRP.aiForm.limits.monthly_budget_usd=this.value===''?null:+this.value"></div>
+        <div class="fld2"><label>Concurrent jobs</label><input type="number" value="${L.max_concurrent_jobs}" onchange="PRP.aiForm.limits.max_concurrent_jobs=+this.value"></div>
+        <div class="fld2"><label>Images per preview</label><input type="number" value="${L.max_images_per_package}" onchange="PRP.aiForm.limits.max_images_per_package=+this.value"></div>
+      </div></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-navy" onclick="paiSave()">Save configuration</button><button class="btn" onclick="paiVerify()" ${PRP.ai.settings?'':'disabled'}>Verify configuration</button></div>
+    <div style="font-size:12px;color:var(--gray-500);margin-top:8px">Saving and verifying never generate text or images.</div>
+    <div id="paiMsg" style="font-size:13px;margin-top:8px"></div>`;
+}
+function paiSet(key,field,val){PRP.aiForm[key][field]=val;if(field==='provider'){const d={openai:'OPENAI_API_KEY',anthropic:'ANTHROPIC_API_KEY',google:'GEMINI_API_KEY'};PRP.aiForm[key].credential_ref=d[val]||'';renderProposalAi();}else if(field==='credential_ref')renderProposalAi();}
+function paiEnable(key){PRP.aiForm[key]={...(PRP.ai.defaults[key]||PRP.ai.defaults.image_fallback)};renderProposalAi();}
+async function paiSave(){
+  const msg=document.getElementById('paiMsg');
+  const f=PRP.aiForm;
+  const r=await api('PATCH','/api/proposals/ai-settings',{expected_version:PRP.ai.settings?PRP.ai.settings.version:undefined,text_profile:f.text_profile,image_profile:f.image_profile,text_fallback:f.text_fallback,image_fallback:f.image_fallback,limits:f.limits});
+  if(r.error){if(msg)msg.innerHTML=`<span style="color:var(--red)">${esc(r.error)}</span>`;return;}
+  await loadProposalAi();
+  const m=document.getElementById('paiMsg');if(m)m.innerHTML='<span style="color:var(--green)">Saved as a new version.</span>';
+}
+async function paiVerify(){
+  const r=await api('POST','/api/proposals/ai-settings/verify',{});
+  if(r.error){const m=document.getElementById('paiMsg');if(m)m.innerHTML=`<span style="color:var(--red)">${esc(r.error)}</span>`;return;}
+  Object.keys(r.results).forEach(k=>{const el=document.getElementById('paiVerify_'+k);if(el){const x=r.results[k];el.innerHTML=`<span style="color:${x.ok?'var(--green)':'var(--red)'}">${x.ok?'✓':'✕'} ${esc(x.message)}</span>`;}});
+}
+
 // ── Platform Admin: every company on this SaaS, onboarding + suspend ───────────
 function platformHTML(){return`<div class="card">
   <div style="font-size:13px;color:var(--gray-500);margin-bottom:14px">Every company using this platform. Suspending a company blocks their team from logging in (existing sessions may remain valid for a short while) until reactivated.</div>
@@ -9334,6 +9526,7 @@ const FEATURE_CATALOG={
   testimonials:'Testimonials',
   diagrams:'AI System Diagrams',
   proposal_builder:'Professional Proposal Builder (paid add-on)',
+  proposals:'Proposals module (separate menu, AI previews)',
 };
 // Subset of FEATURE_CATALOG a company's own Admin can flip for themselves
 // from the Company Profile page (POST /api/auth/company-profile/features),
