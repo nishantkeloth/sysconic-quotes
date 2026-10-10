@@ -3448,7 +3448,7 @@ const HELP_CONTENT={
       <li><strong>✨ Auto-BOM</strong> — describe a project in plain language and AI suggests a bill of materials, matching your Product Catalog where it can.</li>
       <li><strong>🧮 Price Check</strong> — sums cost × qty by vendor per option, letting you cross-check against the distributor's quoted totals before sending.</li>
       <li><strong>📄 Template / 📥 Import Excel</strong> — download a blank item template or bulk-import items from a spreadsheet.</li>
-      <li><strong>⋯ More</strong> — 📜 History (past review submissions), 🔍 Compare (diff any two saved versions), 🖼 Images toggle (product photos + catalog assist), ⧉ Duplicate quote, ⬇ Export PDF.</li>
+      <li><strong>⋯ More</strong> — 📜 History (past review submissions), 🔍 Compare (diff any two saved versions), 🖼 Images toggle (product photos + catalog assist), ⧉ Duplicate quote, ⬇ Export PDF, 📊 Export Excel.</li>
     </ul>
     <div class="help-tip">💡 An Awarded or Sent quote locks editing — use "Unlock — set to Draft" at the top if you need to change it.</div>
   `},
@@ -3849,6 +3849,7 @@ function buildTopbarRight(){
         <div class="mp-divider"></div>
         <button onclick="duplicateCurrentQuote()" title="Create an editable copy of this quote">⧉ Duplicate quote</button>
         <button onclick="closeMoreMenu();downloadPDF()" title="Export this quote as a PDF">⬇ Export PDF</button>
+        <button onclick="closeMoreMenu();exportQuoteExcel()" title="Export the current option's BOQ to Excel (customer-facing: no cost or margin)">📊 Export Excel</button>
         ${hasFeature('delivery_challans')&&hasPageAccess('deliveryChallans')?`
         <div class="mp-divider"></div>
         <button ${A.activeQuote?.status==='awarded'?`onclick="closeMoreMenu();dcStartFromQuote()"`:'disabled style="color:var(--gray-400);cursor:not-allowed"'} title="${A.activeQuote?.status==='awarded'?'Create a delivery challan pre-linked to this quote':'Only available once this quote is awarded'}">🚚 Create Delivery Challan</button>`:''}
@@ -9674,6 +9675,37 @@ async function sendInvite(){
     alert('⚠️ Invite created but email failed.\n\nShare this link manually:\n\n' + r.invite_url);
   }
   loadTeam();
+}
+
+// ── Export the current option's BOQ to Excel (customer-facing: no cost/margin) ──
+function exportQuoteExcel(){
+  const q=A.activeQuote, opt=q&&q.quote_data&&q.quote_data[A.activeOpt];
+  if(!opt||!(opt.sections||[]).length){alert('Nothing to export yet.');return;}
+  const vatOn=opt.vatEnabled!==false, vatRate=+opt.vatRate||0;
+  const rows=[
+    ['Quote ref',opt.ref||q.quote_ref||''],['Customer',q.customer||opt.customer||''],['Date',opt.date||''],['Option',opt.label||''],[],
+    ['#','SECTION','BRAND','MODEL','DESCRIPTION','UOM','QTY','UNIT PRICE','TOTAL']
+  ];
+  let n=0, grand=0;
+  (opt.sections||[]).forEach(sec=>{
+    let sub=0;
+    (sec.items||[]).forEach(it=>{
+      if(!it.brand&&!it.model&&!it.desc)return;
+      const c=calcItem(it); n++; sub+=c.tp;
+      rows.push([n,sec.name||'',it.brand||'',it.model||'',it.desc||'',it.uom||'Pcs',it.qty||1,c.up,c.tp]);
+    });
+    rows.push(['','','','','Subtotal — '+(sec.name||''),'','','',sub]);
+    grand+=sub;
+  });
+  rows.push([]);
+  rows.push(['','','','','Total (excl. VAT)','','','',grand]);
+  if(vatOn){rows.push(['','','','','VAT '+vatRate+'%','','','',grand*vatRate/100]);rows.push(['','','','','Grand total','','','',grand*(1+vatRate/100)]);}
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols']=[{wch:5},{wch:26},{wch:16},{wch:24},{wch:56},{wch:7},{wch:7},{wch:14},{wch:14}];
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,'BOQ');
+  const nm=String(opt.ref||q.quote_ref||'quote').replace(/[^A-Za-z0-9_-]+/g,'_');
+  XLSX.writeFile(wb,nm+(opt.label?'_'+String(opt.label).replace(/[^A-Za-z0-9_-]+/g,'_'):'')+'.xlsx');
 }
 
 // ── Excel template download ───────────────────────────────────────────────────
