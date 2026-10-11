@@ -27,7 +27,7 @@
 { "src": "api/delivery_challans.py", "use": "@vercel/python" },
 { "src": "api/vouchers.py", "use": "@vercel/python" },
 { "src": "api/receipt_vouchers.py", "use": "@vercel/python" },
-{ "src": "api/proposals.py", "use": "@vercel/python", "config": { "maxDuration": 30 } },
+{ "src": "api/proposals.py", "use": "@vercel/python", "config": { "maxDuration": 300 } },
 { "src": "api/workflows.py", "use": "@vercel/python" },
     { "src": "api/pdf-render.js", "use": "@vercel/node", "config": { "maxLambdaSize": "250mb", "maxDuration": 30, "memory": 3009 } },
         { "src": "index.html",    "use": "@vercel/static" },

@@ -9366,11 +9366,81 @@ async function propArchive(id,archive){
   if(r.error){alert(r.error);return;}
   loadProposals();
 }
-async function openProposal(id){PRP.detailId=id;PRP.detail=null;A.page='proposalDetail';draw();}
+async function openProposal(id){PRP.detailId=id;PRP.detail=null;PRP.pv=null;PRP.pvSel=null;PRP.pvMsg='';clearTimeout(PRP.pvTimer);A.page='proposalDetail';draw();}
 async function loadProposalDetail(){
   const r=await api('GET','/api/proposals/'+PRP.detailId);
   if(r.error){PRP.detail={error:r.error};}else PRP.detail=r;
   const el=document.getElementById('propDetailBox');if(el)el.innerHTML=proposalDetailInner();
+  if(!r.error)loadPreviews();
+}
+// ── Proposals M3: preview packages ──
+PRP.pv=null;PRP.pvSel=null;PRP.pvBusy=false;PRP.pvMsg='';PRP.pvTimer=null;
+async function loadPreviews(){
+  if(!PRP.detailId)return;
+  const r=await api('GET','/api/proposals/'+PRP.detailId+'/previews');
+  if(r.error){PRP.pvMsg=r.error;PRP.pv=[];}else{PRP.pv=r.previews||[];PRP.pvSel=r.selected_preview_id||null;}
+  renderPreviews();
+  clearTimeout(PRP.pvTimer);
+  if((PRP.pv||[]).some(v=>v.status==='queued'||v.status==='running')&&A.page==='proposalDetail')PRP.pvTimer=setTimeout(loadPreviews,4000);
+}
+function renderPreviews(){const el=document.getElementById('propPreviewBox');if(el)el.innerHTML=proposalPreviewInner();}
+async function generatePreview(){
+  if(PRP.pvBusy)return;
+  const instr=document.getElementById('pvInstr')?.value||'';
+  PRP.pvBusy=true;PRP.pvMsg='';renderPreviews();
+  const r=await api('POST','/api/proposals/'+PRP.detailId+'/previews',{instruction:instr});
+  if(r.error){PRP.pvBusy=false;PRP.pvMsg=r.error;renderPreviews();return;}
+  const id=r.preview.id;
+  await loadPreviews();PRP.pvBusy=false;renderPreviews();
+  // Kick off the run; polling shows progress. Long request is fine - the row is updated server-side.
+  api('POST','/api/proposals/'+PRP.detailId+'/previews/'+id+'/run').then(()=>loadPreviews()).catch(()=>loadPreviews());
+}
+async function usePreview(vid){
+  const r=await api('POST','/api/proposals/'+PRP.detailId+'/previews/'+vid+'/select');
+  if(r.error){PRP.pvMsg=r.error;renderPreviews();return;}
+  PRP.pvSel=vid;if(PRP.detail&&PRP.detail.proposal)PRP.detail.proposal={...PRP.detail.proposal,...r.proposal};
+  PRP.pvMsg='';loadProposalDetail();
+}
+async function propArchiveToggle(){
+  const p=PRP.detail.proposal,restore=p.lifecycle==='archived';
+  if(!restore&&!confirm('Archive this proposal?'))return;
+  const r=await api('POST','/api/proposals/'+p.id+(restore?'/restore':'/archive'));
+  if(r.error){alert(r.error);return;}
+  PRP.detail=null;loadProposalDetail();
+}
+function pvCardHTML(v,isSel){
+  const w=v.writeup||{};
+  const busy=v.status==='queued'||v.status==='running';
+  const stateTxt=v.status==='queued'?'Waiting to start…':v.stage_detail==='rendering'?'Write-up done — rendering the image (up to ~2 min)…':'Writing the proposal text…';
+  const img=v.image_url?`<img src="${esc(v.image_url)}" alt="Preview ${v.seq}" style="width:100%;border-radius:8px;display:block">`:(busy?`<div style="aspect-ratio:3/2;background:var(--gray-100);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--gray-500);font-size:13px;padding:12px;text-align:center">${esc(stateTxt)}</div>`:'');
+  const body=w.summary?`<div style="font-size:15px;font-weight:700;margin:10px 0 4px">${esc(w.headline||'')}</div><div style="font-size:13px;margin-bottom:8px">${esc(w.summary)}</div>${(w.sections||[]).map(s=>`<div style="font-size:13px;margin-bottom:6px"><strong>${esc(s.title)}</strong><div>${esc(s.body)}</div></div>`).join('')}${(w.highlights||[]).length?`<ul style="font-size:13px;margin:6px 0 0 18px">${w.highlights.map(h=>`<li>${esc(h)}</li>`).join('')}</ul>`:''}`:'';
+  const fail=v.status==='failed'?`<div class="auth-err" style="margin-top:8px">${esc(v.error||'Generation failed.')}</div>`:'';
+  const canUse=v.status==='ready'&&PRP.detail.proposal.lifecycle==='active';
+  return `<div style="border:${isSel?'2px solid var(--navy)':'1px solid var(--gray-200)'};border-radius:10px;padding:12px;background:#fff">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:12px;color:var(--gray-500)"><span>Preview ${v.seq}${v.image_model?' · '+esc(v.image_model):''}</span>${isSel?'<span style="color:var(--navy);font-weight:700">✓ Selected</span>':''}</div>
+    ${img}${body}${fail}
+    ${v.instruction?`<div style="font-size:12px;color:var(--gray-500);margin-top:6px">Guidance: ${esc(v.instruction)}</div>`:''}
+    ${canUse&&!isSel?`<button class="btn btn-navy btn-sm" style="margin-top:10px" onclick="usePreview('${v.id}')">Use this preview</button>`:''}
+  </div>`;
+}
+function proposalPreviewInner(){
+  const d=PRP.detail;if(!d||!d.proposal)return '';
+  const p=d.proposal,list=PRP.pv;
+  const active=p.lifecycle==='active';
+  const running=(list||[]).some(v=>v.status==='queued'||v.status==='running');
+  const gen=active?`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
+      <div style="flex:1;min-width:240px"><label style="font-size:12px;color:var(--gray-500)">Guidance for this preview (optional)</label>
+      <input id="pvInstr" placeholder="e.g. Boardroom for 14 people, modern look, wall-mounted displays" style="width:100%"></div>
+      <button class="btn btn-navy" onclick="generatePreview()" ${(PRP.pvBusy||running)?'disabled':''}>${(list&&list.length)?'Generate another preview':'Generate preview'}</button></div>`
+    :'<div style="font-size:13px;color:var(--gray-500);margin-bottom:10px">Restore this proposal to generate previews.</div>';
+  const note='<div style="font-size:12px;color:var(--gray-500);margin-bottom:10px">Only the customer-safe equipment list is sent to the AI — no cost, margin, supplier discounts or prices. The image is illustrative; screens are not shown with real content.</div>';
+  const msg=PRP.pvMsg?`<div class="auth-err" style="margin-bottom:10px">${esc(PRP.pvMsg)}</div>`:'';
+  let grid='';
+  if(list==null)grid='<div style="color:var(--gray-500);font-size:13px">Loading…</div>';
+  else if(!list.length)grid='<div style="color:var(--gray-500);font-size:13px">No previews yet.</div>';
+  else grid=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px">${list.map(v=>pvCardHTML(v,v.id===PRP.pvSel)).join('')}</div>`;
+  const arch=`<div style="margin-top:12px;text-align:right"><button class="btn btn-sm" onclick="propArchiveToggle()">${active?'Archive proposal':'Restore proposal'}</button></div>`;
+  return note+msg+gen+grid+arch;
 }
 function proposalDetailHTML(){
   return `<button class="btn" style="margin-bottom:12px" onclick="A.page='proposals';PRP.list=null;draw()">← Back to Proposals</button><div id="propDetailBox">${proposalDetailInner()}</div>`;
@@ -9384,8 +9454,8 @@ function proposalDetailInner(){
       <div><h2 style="margin:0">${esc(p.title||p.reference)}</h2><div style="font-size:13px;color:var(--gray-500)">${esc(p.reference)} · ${esc(p.customer_name||'General proposal')} · Source ${esc(p.quote_ref||'—')} · ${esc(propStageLabel(p))}</div></div>
     </div>
     <div class="card" style="margin-bottom:12px">
-      <div class="card-title">Next step</div>
-      <div style="font-size:13px;color:var(--gray-500)">Source captured. Image and write-up preview generation is the next release of this module — nothing is generated yet, and nothing has been sent to any AI service.</div>
+      <div class="card-title">AI preview</div>
+      <div id="propPreviewBox">${proposalPreviewInner()}</div>
     </div>
     <div class="card"><div class="card-title">Source summary (${esc(s?s.visibility:'')})</div>
       <div style="font-size:12px;color:var(--gray-500);margin-bottom:8px">Customer-safe view: cost, margin and supplier discounts are not stored or shown here.</div>

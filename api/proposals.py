@@ -11,7 +11,7 @@ Add this file to BOTH `builds` and `routes` in vercel.json.
 """
 from flask import Flask, request, jsonify, g
 import os, re, json, hashlib, urllib.request, urllib.error, urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from api.auth import verify_token, get_sb
 
@@ -123,7 +123,7 @@ def _quote_visible(claims, quote):
 def _public(p):
     return {k: p.get(k) for k in ('id', 'reference', 'title', 'customer_name', 'source_kind', 'quote_id', 'quote_ref',
                                   'instruction', 'owner_id', 'lifecycle', 'stage', 'lock_version', 'archived_at',
-                                  'created_at', 'updated_at')}
+                                  'selected_preview_id', 'created_at', 'updated_at')}
 
 
 # ── Register ──────────────────────────────────────────────────────────────────
@@ -342,6 +342,271 @@ def _http_ok(url, headers):
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=15) as r:
         return r.status
+
+
+# ── M3: preview packages (write-up + image) ───────────────────────────────────
+# One proposal_previews row is both the package and its generation job.
+# Flow (works on serverless): client POSTs /previews (row = queued, returns at
+# once) -> client POSTs /previews/<id>/run (does the work, up to maxDuration)
+# -> client polls GET /previews. A run that dies leaves the row 'running';
+# the list endpoint marks it failed after STALE_MINUTES so it never hangs.
+# Only the customer-safe snapshot ever reaches a model: no cost/margin/supplier
+# discount, and prices are deliberately NOT sent (not needed for a visual).
+STALE_MINUTES = 8
+MAX_PREVIEWS_PER_PROPOSAL = 25
+PREVIEW_BUCKET = 'company-assets'
+
+
+class GenError(Exception):
+    pass
+
+
+def _post_json(url, headers, body, timeout):
+    data = json.dumps(body).encode()
+    h = {'Content-Type': 'application/json', **headers}
+    req = urllib.request.Request(url, data=data, headers=h, method='POST')
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(e.read().decode())
+            msg = (msg.get('error') or {}).get('message') if isinstance(msg.get('error'), dict) else (msg.get('error') or msg)
+        except Exception:
+            msg = ''
+        raise GenError(f'provider returned {e.code}: {str(msg)[:200]}')
+    except Exception as e:
+        raise GenError(f'could not reach provider: {str(e)[:150]}')
+
+
+def _brief_from_snapshot(safe_source, customer, project, instruction):
+    lines = []
+    for l in (safe_source.get('lines') or []):
+        lines.append({'section': l.get('section'), 'item': (str(l.get('manufacturer') or '') + ' ' + str(l.get('model') or '')).strip(),
+                      'description': (l.get('description') or '')[:240], 'qty': l.get('quantity')})
+    return {'customer': customer, 'project': project, 'equipment': lines[:60], 'extra_guidance': instruction or ''}
+
+
+TEXT_SYSTEM = (
+    "You are a pre-sales solutions writer for an audio-visual systems integrator. From the equipment list you are given, "
+    "write a short customer-facing proposal narrative and a prompt for an illustrative room visual.\n"
+    "Rules: use ONLY the equipment provided; never invent products, quantities, specifications, performance figures, "
+    "certifications or prices; do not mention cost, margin or discounts; plain professional English; no marketing hype.\n"
+    "For the image prompt: describe ONE photorealistic, well-lit architectural visualisation of the space showing the listed "
+    "equipment types in plausible positions (displays, cameras, microphones, speakers, control surfaces, etc.). Screens must show "
+    "abstract or blank content - no readable text, no logos, no brand names, no people's faces. Keep it under 120 words.\n"
+    "Return ONLY a JSON object: {\"headline\": str, \"summary\": str (2-3 sentences), "
+    "\"sections\": [{\"title\": str, \"body\": str}] (2-4 sections, e.g. Understanding, Proposed solution, How it works), "
+    "\"highlights\": [str] (3-5 short bullets drawn from the equipment list), \"image_prompt\": str}."
+)
+
+
+def _extract_json(text):
+    text = (text or '').strip()
+    m = re.search(r'\{.*\}', text, re.S)
+    if not m:
+        raise GenError('the writing model did not return JSON')
+    return json.loads(m.group(0))
+
+
+def _call_text(profile, brief):
+    secret = os.environ.get(profile['credential_ref'], '')
+    if not secret:
+        raise GenError(f"server variable {profile['credential_ref']} is not set")
+    user = 'Project brief (JSON):\n' + json.dumps(brief, ensure_ascii=False)
+    if profile['provider'] == 'anthropic':
+        r = _post_json('https://api.anthropic.com/v1/messages',
+                       {'x-api-key': secret, 'anthropic-version': '2023-06-01'},
+                       {'model': profile['model'], 'max_tokens': 2200, 'system': TEXT_SYSTEM,
+                        'messages': [{'role': 'user', 'content': user}]}, 90)
+        txt = ''.join(b.get('text', '') for b in (r.get('content') or []) if b.get('type') == 'text')
+    elif profile['provider'] == 'openai':
+        r = _post_json('https://api.openai.com/v1/chat/completions', {'Authorization': 'Bearer ' + secret},
+                       {'model': profile['model'], 'messages': [{'role': 'system', 'content': TEXT_SYSTEM},
+                                                                {'role': 'user', 'content': user}]}, 90)
+        txt = (((r.get('choices') or [{}])[0]).get('message') or {}).get('content') or ''
+    else:
+        raise GenError('text generation supports Anthropic or OpenAI profiles')
+    out = _extract_json(txt)
+    if not out.get('image_prompt') or not out.get('summary'):
+        raise GenError('the writing model returned an incomplete result')
+    out['sections'] = [{'title': str(s.get('title', ''))[:120], 'body': str(s.get('body', ''))[:1500]}
+                       for s in (out.get('sections') or [])[:5] if isinstance(s, dict)]
+    out['highlights'] = [str(h)[:200] for h in (out.get('highlights') or [])[:6]]
+    out['headline'] = str(out.get('headline', ''))[:200]
+    out['summary'] = str(out['summary'])[:1200]
+    out['image_prompt'] = str(out['image_prompt'])[:1500]
+    return out
+
+
+def _call_image(profile, prompt):
+    import base64
+    secret = os.environ.get(profile['credential_ref'], '')
+    if not secret:
+        raise GenError(f"server variable {profile['credential_ref']} is not set")
+    if profile['provider'] == 'openai':
+        q = 'high' if profile.get('quality', 'high') == 'high' else 'medium'
+        r = _post_json('https://api.openai.com/v1/images/generations', {'Authorization': 'Bearer ' + secret},
+                       {'model': profile['model'], 'prompt': prompt, 'size': '1536x1024', 'quality': q, 'n': 1}, 230)
+        b64 = (((r.get('data') or [{}])[0]).get('b64_json'))
+        if not b64:
+            raise GenError('the image model returned no image')
+        return base64.b64decode(b64)
+    if profile['provider'] == 'google':
+        r = _post_json('https://generativelanguage.googleapis.com/v1beta/models/' + urllib.parse.quote(profile['model']) + ':generateContent',
+                       {'x-goog-api-key': secret},
+                       {'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'responseModalities': ['IMAGE']}}, 230)
+        for c in (r.get('candidates') or []):
+            for part in ((c.get('content') or {}).get('parts') or []):
+                inl = part.get('inlineData') or part.get('inline_data')
+                if inl and inl.get('data'):
+                    return base64.b64decode(inl['data'])
+        raise GenError('the image model returned no image')
+    raise GenError('image generation supports OpenAI or Google profiles')
+
+
+def _preview_public(sb, v):
+    out = {k: v.get(k) for k in ('id', 'proposal_id', 'seq', 'status', 'instruction', 'writeup', 'image_provider', 'image_model',
+                                  'text_model', 'error', 'stage_detail', 'created_at', 'started_at', 'finished_at')}
+    out['image_url'] = None
+    if v.get('image_path'):
+        try:
+            from api.auth import _signed_url
+            out['image_url'] = _signed_url(PREVIEW_BUCKET, v['image_path'], 3600)
+        except Exception:
+            out['image_url'] = None
+    return out
+
+
+def _sweep_stale(sb, pid):
+    cutoff = (datetime.utcnow() - timedelta(minutes=STALE_MINUTES)).isoformat()
+    sb.table('proposal_previews').update({'status': 'failed', 'error': 'Generation timed out. Please try again.',
+                                          'finished_at': datetime.utcnow().isoformat()})\
+        .eq('proposal_id', pid).in_('status', ['queued', 'running']).lt('created_at', cutoff).execute()
+
+
+@app.route('/api/proposals/<pid>/previews', methods=['GET'])
+def list_previews(pid):
+    sb, claims = get_sb(), g.claims
+    p = _load(sb, claims, pid)
+    if not p: return jsonify({'error': 'Not found'}), 404
+    _sweep_stale(sb, pid)
+    rows = sb.table('proposal_previews').select('*').eq('proposal_id', pid).order('seq', desc=True).limit(MAX_PREVIEWS_PER_PROPOSAL).execute().data or []
+    return jsonify({'previews': [_preview_public(sb, r) for r in rows], 'selected_preview_id': p.get('selected_preview_id')})
+
+
+@app.route('/api/proposals/<pid>/previews', methods=['POST'])
+def create_preview(pid):
+    sb, claims = get_sb(), g.claims
+    p = _load(sb, claims, pid)
+    if not p: return jsonify({'error': 'Not found'}), 404
+    if p['lifecycle'] != 'active':
+        return jsonify({'error': 'Restore this proposal before generating previews.'}), 409
+    s = _active_settings(sb, claims['company_id'])
+    st = _status(s)
+    if st['text'] != 'ready' or st['image'] != 'ready':
+        return jsonify({'error': 'Proposal AI is not ready. An administrator must finish Settings → Proposal AI '
+                                 f"(text: {st['text'].replace('_', ' ')}, image: {st['image'].replace('_', ' ')}).",
+                        'code': 'PROPOSAL_AI_NOT_CONFIGURED'}), 503
+    _sweep_stale(sb, pid)
+    lim = (s.get('limits') or {})
+    maxc = int(lim.get('max_concurrent_jobs') or 2)
+    busy = sb.table('proposal_previews').select('id', count='exact').eq('company_id', claims['company_id'])\
+        .in_('status', ['queued', 'running']).execute().count or 0
+    if busy >= maxc:
+        return jsonify({'error': 'Other previews are still generating. Try again in a minute.', 'code': 'TOO_MANY_JOBS'}), 429
+    last = sb.table('proposal_previews').select('seq').eq('proposal_id', pid).order('seq', desc=True).limit(1).execute().data
+    seq = (last[0]['seq'] if last else 0) + 1
+    if seq > MAX_PREVIEWS_PER_PROPOSAL:
+        return jsonify({'error': f'This proposal already has {MAX_PREVIEWS_PER_PROPOSAL} previews.'}), 422
+    snap = sb.table('proposal_source_snapshots').select('id').eq('proposal_id', pid).order('created_at', desc=True).limit(1).execute().data
+    d = request.json or {}
+    row = sb.table('proposal_previews').insert({
+        'company_id': claims['company_id'], 'proposal_id': pid, 'seq': seq, 'status': 'queued',
+        'instruction': (str(d.get('instruction') or '').strip()[:1500] or None),
+        'snapshot_id': snap[0]['id'] if snap else None, 'created_by': claims.get('user_id'),
+        'settings_version': s['version'],
+    }).execute().data[0]
+    return jsonify({'preview': _preview_public(sb, row)}), 201
+
+
+@app.route('/api/proposals/<pid>/previews/<vid>/run', methods=['POST'])
+def run_preview(pid, vid):
+    sb, claims = get_sb(), g.claims
+    p = _load(sb, claims, pid)
+    if not p: return jsonify({'error': 'Not found'}), 404
+    now = datetime.utcnow().isoformat()
+    # Atomic claim: only a queued row can start, so double-clicks/retries never double-bill.
+    claimed = sb.table('proposal_previews').update({'status': 'running', 'started_at': now, 'stage_detail': 'writing'})\
+        .eq('id', vid).eq('proposal_id', pid).eq('company_id', claims['company_id']).eq('status', 'queued').execute().data
+    if not claimed:
+        cur = sb.table('proposal_previews').select('*').eq('id', vid).eq('proposal_id', pid).eq('company_id', claims['company_id']).execute().data
+        if not cur: return jsonify({'error': 'Not found'}), 404
+        return jsonify({'preview': _preview_public(sb, cur[0])}), 202
+    v = claimed[0]
+
+    def fail(msg):
+        r = sb.table('proposal_previews').update({'status': 'failed', 'error': msg[:400], 'stage_detail': None,
+                                                  'finished_at': datetime.utcnow().isoformat()}).eq('id', vid).execute().data
+        return jsonify({'preview': _preview_public(sb, r[0])}), 200
+
+    try:
+        s = _active_settings(sb, claims['company_id'])
+        if not s: return fail('Proposal AI is not configured.')
+        sn = sb.table('proposal_source_snapshots').select('safe_source').eq('id', v['snapshot_id']).execute().data if v.get('snapshot_id') else []
+        if not sn: return fail('The source snapshot is missing.')
+        brief = _brief_from_snapshot(sn[0]['safe_source'], p.get('customer_name'), p.get('title'),
+                                     ' '.join(x for x in (p.get('instruction'), v.get('instruction')) if x))
+        # 1) write-up (primary, then fallback)
+        text_used, writeup, terr = None, None, None
+        for prof in (s.get('text_profile'), s.get('text_fallback')):
+            if not prof: continue
+            try:
+                writeup = _call_text(prof, brief); text_used = prof; break
+            except (GenError, ValueError) as e:
+                terr = str(e)
+        if not writeup: return fail(f'Write-up failed: {terr}')
+        sb.table('proposal_previews').update({'stage_detail': 'rendering', 'writeup': {k: writeup[k] for k in ('headline', 'summary', 'sections', 'highlights')},
+                                              'image_prompt': writeup['image_prompt'], 'text_provider': text_used['provider'],
+                                              'text_model': text_used['model']}).eq('id', vid).execute()
+        # 2) image (primary, then fallback)
+        img, img_used, ierr = None, None, None
+        for prof in (s.get('image_profile'), s.get('image_fallback')):
+            if not prof or not prof.get('model'): continue
+            try:
+                img = _call_image(prof, writeup['image_prompt']); img_used = prof; break
+            except GenError as e:
+                ierr = str(e)
+        if not img: return fail(f'Image failed: {ierr}')
+        path = f"{claims['company_id']}/proposals/{pid}/{vid}.png"
+        try:
+            sb.storage.from_(PREVIEW_BUCKET).upload(path, img, {'content-type': 'image/png'})
+        except Exception:
+            return fail('The image was generated but could not be saved to storage.')
+        r = sb.table('proposal_previews').update({'status': 'ready', 'image_path': path, 'image_provider': img_used['provider'],
+                                                  'image_model': img_used['model'], 'stage_detail': None, 'error': None,
+                                                  'finished_at': datetime.utcnow().isoformat()}).eq('id', vid).execute().data
+        return jsonify({'preview': _preview_public(sb, r[0])})
+    except Exception as e:
+        return fail(f'Unexpected error: {str(e)[:200]}')
+
+
+@app.route('/api/proposals/<pid>/previews/<vid>/select', methods=['POST'])
+def select_preview(pid, vid):
+    """'Use this preview': records the exact package the user chose."""
+    sb, claims = get_sb(), g.claims
+    p = _load(sb, claims, pid)
+    if not p: return jsonify({'error': 'Not found'}), 404
+    if p['lifecycle'] != 'active': return jsonify({'error': 'Restore this proposal first.'}), 409
+    v = sb.table('proposal_previews').select('id,status').eq('id', vid).eq('proposal_id', pid).eq('company_id', claims['company_id']).execute().data
+    if not v: return jsonify({'error': 'Not found'}), 404
+    if v[0]['status'] != 'ready': return jsonify({'error': 'Only a finished preview can be selected.'}), 422
+    now = datetime.utcnow().isoformat()
+    r = sb.table('proposals').update({'selected_preview_id': vid, 'selected_at': now, 'stage': 'preview_selected',
+                                      'updated_at': now, 'lock_version': p['lock_version'] + 1})\
+        .eq('id', pid).eq('lock_version', p['lock_version']).execute().data
+    if not r: return jsonify({'error': 'Someone else changed this proposal. Reload and try again.', 'code': 'REVISION_CONFLICT'}), 409
+    return jsonify({'proposal': _public(r[0]), 'selected_preview_id': vid})
 
 
 @app.route('/api/proposals/ai-settings/verify', methods=['POST'])
