@@ -9351,7 +9351,7 @@ function proposalsListInner(){
 }
 function propStageLabel(p){
   if(p.lifecycle==='archived')return 'Archived';
-  return ({draft:'Draft'})[p.stage]||p.stage||'Draft';
+  return ({draft:'Draft',preview_selected:'Preview selected',document_draft:'Document drafted',pending_approval:'Awaiting approval',approved:'Approved',changes_requested:'Sent back for changes'})[p.stage]||p.stage||'Draft';
 }
 let _propSearchT=null;
 function propSearchInput(v){PRP.search=v;clearTimeout(_propSearchT);_propSearchT=setTimeout(loadProposals,250);}
@@ -9366,12 +9366,12 @@ async function propArchive(id,archive){
   if(r.error){alert(r.error);return;}
   loadProposals();
 }
-async function openProposal(id){PRP.detailId=id;PRP.detail=null;PRP.pv=null;PRP.pvSel=null;PRP.pvMsg='';clearTimeout(PRP.pvTimer);A.page='proposalDetail';draw();}
+async function openProposal(id){PRP.detailId=id;PRP.detail=null;PRP.pv=null;PRP.pvSel=null;PRP.pvMsg='';PRP.docs=null;clearTimeout(PRP.pvTimer);A.page='proposalDetail';draw();}
 async function loadProposalDetail(){
   const r=await api('GET','/api/proposals/'+PRP.detailId);
   if(r.error){PRP.detail={error:r.error};}else PRP.detail=r;
   const el=document.getElementById('propDetailBox');if(el)el.innerHTML=proposalDetailInner();
-  if(!r.error)loadPreviews();
+  if(!r.error){loadPreviews();loadDocs();}
 }
 // ── Proposals M3: preview packages ──
 PRP.pv=null;PRP.pvSel=null;PRP.pvBusy=false;PRP.pvMsg='';PRP.pvTimer=null;
@@ -9408,6 +9408,113 @@ async function propArchiveToggle(){
   if(r.error){alert(r.error);return;}
   PRP.detail=null;loadProposalDetail();
 }
+// ── Proposals M4/M6: document versions, approval, PDF ──
+PRP.docs=null;
+async function loadDocs(){
+  const r=await api('GET','/api/proposals/'+PRP.detailId+'/documents');
+  PRP.docs=r.error?[]:(r.documents||[]);renderPreviews();
+}
+async function createDoc(){
+  const prices=!!document.getElementById('docPrices')?.checked;
+  const note=document.getElementById('docNote')?.value||'';
+  const r=await api('POST','/api/proposals/'+PRP.detailId+'/documents',{options:{show_prices:prices,cover_note:note}});
+  if(r.error){PRP.pvMsg=r.error;renderPreviews();return;}
+  PRP.pvMsg='';await loadProposalDetail();
+}
+async function docSubmit(did){
+  const r=await api('POST','/api/proposals/'+PRP.detailId+'/documents/'+did+'/submit');
+  if(r.error){PRP.pvMsg=r.error;renderPreviews();return;}
+  await loadProposalDetail();
+}
+async function docDecide(did,decision){
+  let note='';if(decision==='reject'){note=prompt('Reason for sending back (optional):')||'';}
+  const r=await api('POST','/api/proposals/'+PRP.detailId+'/documents/'+did+'/decide',{decision,note});
+  if(r.error){PRP.pvMsg=r.error;renderPreviews();return;}
+  await loadProposalDetail();
+}
+async function refreshProposalSource(){
+  if(!confirm('Re-capture the quotation as it is now? Existing document versions stay unchanged; create a new version to use the new data.'))return;
+  const r=await api('POST','/api/proposals/'+PRP.detailId+'/refresh-source');
+  if(r.error){PRP.pvMsg=r.error;renderPreviews();return;}
+  PRP.pvMsg='';await loadProposalDetail();
+}
+async function downloadProposalPdf(did,btn){
+  if(btn){btn.disabled=true;btn.textContent='⏳ Generating…';}
+  try{
+    await ensurePrintCompany();
+    const r=await api('GET','/api/proposals/'+PRP.detailId+'/documents/'+did);
+    if(r.error){alert(r.error);return;}
+    const doc=r.document,html=proposalPdfHTML(doc);
+    const b=await api2Blob('/api/pdf/render2',{html,filename:`${doc.content.reference}-v${doc.version}.pdf`});
+    if(!b)return;
+    const a=document.createElement('a');a.href=URL.createObjectURL(b.blob);a.download=b.filename;
+    document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),5000);
+  }catch(e){alert('Could not generate the PDF.');}
+  finally{if(btn){btn.disabled=false;btn.textContent='📄 PDF';}}
+}
+function proposalPdfHTML(doc){
+  const c=doc.content||{},w=c.writeup||{},cm=c.commercials,priced=!!cm;
+  const logo=PRINTCO?.logo_url?`<img src="${esc(PRINTCO.logo_url)}" alt="" style="max-height:56px;max-width:180px;object-fit:contain;margin-bottom:8px">`:'';
+  const addr=printAddrLines().map(l=>`<div>${esc(l)}</div>`).join('');
+  const bySec={};(c.lines||[]).forEach(l=>{(bySec[l.section||'Equipment']=bySec[l.section||'Equipment']||[]).push(l);});
+  const rows=Object.keys(bySec).map(sec=>`<tr class="sec"><td colspan="${priced?6:4}">${esc(sec)}</td></tr>`+bySec[sec].map((l,i)=>`<tr><td>${i+1}</td><td><strong>${esc((l.manufacturer+' '+l.model).trim())}</strong><br><span class="muted">${esc(l.description||'')}</span></td><td style="text-align:right;white-space:nowrap">${esc(l.quantity)} ${esc(l.unit||'')}</td>${priced?`<td style="text-align:right">${fmt(l.unit_selling_price||0)}</td><td style="text-align:right">${fmt(l.line_total||0)}</td>`:''}</tr>`).join('')).join('');
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+    @page{size:A4;margin:12mm 10mm 15mm 10mm}
+    body{font-family:Arial,Helvetica,sans-serif;color:#1a1f2b;margin:0;padding:24px 34px;font-size:13px;line-height:1.45}
+    .letterhead{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;border-bottom:2px solid #1e3a5f;padding-bottom:12px}
+    .co{font-weight:700;font-size:15px}.muted{color:#667085;font-size:11.5px}
+    .doctitle{text-align:right}.doctitle h1{font-size:22px;margin:0 0 4px;color:#1e3a5f}
+    h2{font-size:18px;color:#1e3a5f;margin:22px 0 6px}h3{font-size:13px;margin:14px 0 4px;color:#1e3a5f}
+    .hero{width:100%;border-radius:6px;margin:14px 0 4px;display:block}
+    .cap{font-size:10.5px;color:#7c8798;font-style:italic;margin-bottom:10px}
+    table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+    th{background:#1e3a5f;color:#fff;text-align:left;padding:6px 8px;font-size:11px}
+    td{border:1px solid #d8dce3;padding:6px 8px;vertical-align:top}
+    tr.sec td{background:#eef2f7;font-weight:700;color:#1e3a5f}
+    tr{page-break-inside:avoid}
+    .tot{text-align:right;margin-top:8px;font-size:12.5px}
+    .pb{page-break-before:always}
+    ul{margin:6px 0 0 18px;padding:0}
+  </style></head><body>
+    <div class="letterhead"><div>${logo}<div class="co">${esc(printCoName())}</div>${addr}</div>
+      <div class="doctitle"><h1>PROPOSAL</h1><div>${esc(c.reference||'')}${doc.version>1?' · v'+doc.version:''}</div><div class="muted">${esc(c.date||'')}</div></div></div>
+    <div style="margin-top:14px"><div class="muted">Prepared for</div><div style="font-size:16px;font-weight:700">${esc(c.customer||'')}</div>${c.project?`<div class="muted">${esc(c.project)}</div>`:''}</div>
+    <h2>${esc(w.headline||c.title||'Proposal')}</h2>
+    ${doc.content.image_url?`<img class="hero" src="${esc(doc.content.image_url)}" alt=""><div class="cap">Illustrative visualisation. Final equipment, layout and appearance are as per the scope below.</div>`:''}
+    <p>${esc(w.summary||'')}</p>
+    ${c.cover_note||doc.options?.cover_note?`<p>${esc(doc.options.cover_note)}</p>`:''}
+    ${(w.sections||[]).map(s=>`<h3>${esc(s.title)}</h3><div>${esc(s.body)}</div>`).join('')}
+    ${(w.highlights||[]).length?`<h3>Highlights</h3><ul>${w.highlights.map(h=>`<li>${esc(h)}</li>`).join('')}</ul>`:''}
+    <div class="pb"></div>
+    <h2>Scope of supply</h2>
+    <table><thead><tr><th style="width:28px">#</th><th>Item &amp; description</th><th style="text-align:right">Qty</th>${priced?'<th style="text-align:right">Unit price</th><th style="text-align:right">Total</th>':''}</tr></thead><tbody>${rows}</tbody></table>
+    ${priced?`<div class="tot">Subtotal ${esc(cm.currency)} ${fmt(cm.subtotal)} · VAT ${cm.vat_rate}% ${fmt(cm.vat)} · <strong>Total ${esc(cm.currency)} ${fmt(cm.total)}</strong></div>`:''}
+    <div class="muted" style="margin-top:18px">Proposal ${esc(c.reference||'')}${c.quote_ref?' · based on quotation '+esc(c.quote_ref):''}${doc.status==='approved'?' · Approved':''}</div>
+  </body></html>`;
+}
+function propDocStatus(s){return ({draft:'Draft',pending_approval:'Awaiting approval',approved:'Approved',rejected:'Sent back'})[s]||s;}
+function proposalDocsHTML(){
+  const p=PRP.detail.proposal,docs=PRP.docs,active=p.lifecycle==='active';
+  const isAdmin=A.user?.role==='admin',canPrice=hasPageAccess('quotes');
+  const changed=PRP.detail.source_changed;
+  let h='<div class="card-title" style="margin-top:18px">Proposal document</div>';
+  if(changed)h+=`<div style="background:#fff7e6;border:1px solid #f5c26b;border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:10px">The source quotation has changed since this proposal captured it. ${active?`<button class="btn btn-sm" style="margin-left:8px" onclick="refreshProposalSource()">Re-capture quotation</button>`:''}</div>`;
+  if(active&&p.selected_preview_id){
+    h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
+      <div style="flex:1;min-width:240px"><label style="font-size:12px;color:var(--gray-500)">Cover note (optional)</label><input id="docNote" style="width:100%" placeholder="Short message shown under the summary"></div>
+      ${canPrice?'<label style="font-size:13px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="docPrices"> Show prices</label>':''}
+      <button class="btn btn-navy" onclick="createDoc()">${(docs&&docs.length)?'Create new version':'Create document'}</button></div>`;
+  }else if(active)h+='<div style="font-size:13px;color:var(--gray-500);margin-bottom:10px">Pick a preview with “Use this preview” to create the document.</div>';
+  if(docs==null)h+='<div style="color:var(--gray-500);font-size:13px">Loading…</div>';
+  else if(!docs.length)h+='<div style="color:var(--gray-500);font-size:13px">No document versions yet.</div>';
+  else h+=`<table style="width:100%;font-size:13px;border-collapse:collapse">${docs.map(d=>`<tr style="border-top:1px solid var(--gray-100)">
+      <td style="padding:7px 4px"><strong>v${d.version}</strong></td><td>${esc(propDocStatus(d.status))}${d.options&&d.options.show_prices?' · with prices':''}${d.decision_note?`<div style="font-size:12px;color:var(--gray-500)">${esc(d.decision_note)}</div>`:''}</td>
+      <td style="color:var(--gray-500);font-size:12px">${esc((d.created_at||'').slice(0,10))}</td>
+      <td style="text-align:right;white-space:nowrap"><button class="btn btn-sm" onclick="downloadProposalPdf('${d.id}',this)">📄 PDF</button>
+        ${active&&(d.status==='draft'||d.status==='rejected')?`<button class="btn btn-sm" onclick="docSubmit('${d.id}')">Submit for approval</button>`:''}
+        ${active&&isAdmin&&d.status==='pending_approval'?`<button class="btn btn-navy btn-sm" onclick="docDecide('${d.id}','approve')">Approve</button> <button class="btn btn-sm" onclick="docDecide('${d.id}','reject')">Send back</button>`:''}</td></tr>`).join('')}</table>`;
+  return h;
+}
 function pvCardHTML(v,isSel){
   const w=v.writeup||{};
   const busy=v.status==='queued'||v.status==='running';
@@ -9440,7 +9547,7 @@ function proposalPreviewInner(){
   else if(!list.length)grid='<div style="color:var(--gray-500);font-size:13px">No previews yet.</div>';
   else grid=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px">${list.map(v=>pvCardHTML(v,v.id===PRP.pvSel)).join('')}</div>`;
   const arch=`<div style="margin-top:12px;text-align:right"><button class="btn btn-sm" onclick="propArchiveToggle()">${active?'Archive proposal':'Restore proposal'}</button></div>`;
-  return note+msg+gen+grid+arch;
+  return note+msg+gen+grid+proposalDocsHTML()+arch;
 }
 function proposalDetailHTML(){
   return `<button class="btn" style="margin-bottom:12px" onclick="A.page='proposals';PRP.list=null;draw()">← Back to Proposals</button><div id="propDetailBox">${proposalDetailInner()}</div>`;

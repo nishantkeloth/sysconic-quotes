@@ -94,6 +94,7 @@ def _safe_quote_projection(quote, option_idx, can_commercial):
         'source_kind': 'quotation',
         'quote_ref': quote.get('quote_ref') or '',
         'option_label': opt.get('label') or '',
+        'option_index': option_idx if 0 <= option_idx < len(qd) else 0,
         'customer': quote.get('customer') or opt.get('customer') or '',
         'project': quote.get('title') or '',
         'lines': lines,
@@ -211,7 +212,45 @@ def get_proposal(pid):
         s.pop('commercials', None)
         s['lines'] = [{k: v for k, v in l.items() if k not in ('unit_selling_price', 'line_total')} for l in s.get('lines', [])]
         src = {**src, 'safe_source': s}
-    return jsonify({'proposal': _public(p), 'source': src})
+    return jsonify({'proposal': _public(p), 'source': src, 'source_changed': _source_changed(sb, claims, p, snap[0] if snap else None)})
+
+
+def _source_changed(sb, claims, p, snap):
+    """True when the live quotation no longer matches the snapshot this proposal was built on."""
+    try:
+        if not snap or not p.get('quote_id'): return False
+        qr = sb.table('quotes').select('*').eq('id', p['quote_id']).eq('company_id', claims['company_id']).execute().data
+        if not qr: return False
+        ss = snap.get('safe_source') or {}
+        # snapshot rows fetched in get_proposal omit the hash; recompute from the stored projection
+        cur = _safe_quote_projection(qr[0], int(ss.get('option_index', 0) or 0), ss.get('visibility') == 'commercial')
+        a = {k: v for k, v in cur.items() if k != 'option_index'}
+        b = {k: v for k, v in ss.items() if k != 'option_index'}
+        return _stable_hash(a) != _stable_hash(b)
+    except Exception:
+        return False
+
+
+@app.route('/api/proposals/<pid>/refresh-source', methods=['POST'])
+def refresh_source(pid):
+    """Re-capture the quotation as a new snapshot. Existing document versions are untouched."""
+    sb, claims = get_sb(), g.claims
+    p = _load(sb, claims, pid)
+    if not p: return jsonify({'error': 'Not found'}), 404
+    if p['lifecycle'] != 'active': return jsonify({'error': 'Restore this proposal first.'}), 409
+    qr = sb.table('quotes').select('*').eq('id', p.get('quote_id') or '').eq('company_id', claims['company_id']).execute().data if p.get('quote_id') else []
+    if not qr or not _quote_visible(claims, qr[0]): return jsonify({'error': 'Source quotation not available.'}), 404
+    old = sb.table('proposal_source_snapshots').select('safe_source').eq('proposal_id', pid).order('created_at', desc=True).limit(1).execute().data
+    oidx = int(((old[0]['safe_source'] if old else {}) or {}).get('option_index', 0) or 0)
+    snap = _safe_quote_projection(qr[0], oidx, _can_commercial(claims))
+    if not snap['lines']: return jsonify({'error': 'The quotation now has no lines.'}), 422
+    sb.table('proposal_source_snapshots').insert({
+        'company_id': claims['company_id'], 'proposal_id': pid, 'safe_source': snap,
+        'source_hash': _stable_hash(snap), 'visibility': snap['visibility'], 'created_by': claims.get('user_id'),
+    }).execute()
+    now = datetime.utcnow().isoformat()
+    sb.table('proposals').update({'updated_at': now, 'customer_name': snap['customer'] or p.get('customer_name')}).eq('id', pid).execute()
+    return jsonify({'ok': True})
 
 
 @app.route('/api/proposals/<pid>', methods=['PATCH'])
@@ -393,8 +432,11 @@ TEXT_SYSTEM = (
     "Rules: use ONLY the equipment provided; never invent products, quantities, specifications, performance figures, "
     "certifications or prices; do not mention cost, margin or discounts; plain professional English; no marketing hype.\n"
     "For the image prompt: describe ONE photorealistic, well-lit architectural visualisation of the space showing the listed "
-    "equipment types in plausible positions (displays, cameras, microphones, speakers, control surfaces, etc.). Screens must show "
-    "abstract or blank content - no readable text, no logos, no brand names, no people's faces. Keep it under 120 words.\n"
+    "equipment types in plausible positions (displays, cameras, microphones, speakers, control surfaces, etc.). If the list covers "
+    "several room types, depict the most representative room (the package that repeats most), and state exact per-room counts of each "
+    "device type (e.g. 'one video bar below the display, one touch console on the table, one wireless dongle'); do not add any "
+    "device that is not in the list. Screens must show abstract or blank content - no readable text, no logos, no brand names, "
+    "no people's faces. Keep it under 150 words.\n"
     "Return ONLY a JSON object: {\"headline\": str, \"summary\": str (2-3 sentences), "
     "\"sections\": [{\"title\": str, \"body\": str}] (2-4 sections, e.g. Understanding, Proposed solution, How it works), "
     "\"highlights\": [str] (3-5 short bullets drawn from the equipment list), \"image_prompt\": str}."
@@ -439,7 +481,7 @@ def _call_text(profile, brief):
     return out
 
 
-def _call_image(profile, prompt):
+def _call_image(profile, prompt, timeout=230):
     import base64
     secret = os.environ.get(profile['credential_ref'], '')
     if not secret:
@@ -447,7 +489,7 @@ def _call_image(profile, prompt):
     if profile['provider'] == 'openai':
         q = 'high' if profile.get('quality', 'high') == 'high' else 'medium'
         r = _post_json('https://api.openai.com/v1/images/generations', {'Authorization': 'Bearer ' + secret},
-                       {'model': profile['model'], 'prompt': prompt, 'size': '1536x1024', 'quality': q, 'n': 1}, 230)
+                       {'model': profile['model'], 'prompt': prompt, 'size': '1536x1024', 'quality': q, 'n': 1}, timeout)
         b64 = (((r.get('data') or [{}])[0]).get('b64_json'))
         if not b64:
             raise GenError('the image model returned no image')
@@ -455,7 +497,7 @@ def _call_image(profile, prompt):
     if profile['provider'] == 'google':
         r = _post_json('https://generativelanguage.googleapis.com/v1beta/models/' + urllib.parse.quote(profile['model']) + ':generateContent',
                        {'x-goog-api-key': secret},
-                       {'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'responseModalities': ['IMAGE']}}, 230)
+                       {'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'responseModalities': ['IMAGE']}}, timeout)
         for c in (r.get('candidates') or []):
             for part in ((c.get('content') or {}).get('parts') or []):
                 inl = part.get('inlineData') or part.get('inline_data')
@@ -463,6 +505,69 @@ def _call_image(profile, prompt):
                     return base64.b64decode(inl['data'])
         raise GenError('the image model returned no image')
     raise GenError('image generation supports OpenAI or Google profiles')
+
+
+def _norm_key(s):
+    return re.sub(r'[\s\-_]+', '', (s or '').strip().lower())
+
+
+def _reference_images(sb, company_id, safe_source, limit=4):
+    """Catalogue product photos for the quote's models, used as visual references.
+    Best-effort: any failure just means no references."""
+    out = []
+    try:
+        keys = []
+        for l in (safe_source.get('lines') or []):
+            k = _norm_key(l.get('model'))
+            if k and k not in keys: keys.append(k)
+        if not keys: return out
+        rows = sb.table('products').select('model_key,image_url').eq('company_id', company_id)\
+            .in_('model_key', keys[:40]).not_.is_('image_url', 'null').execute().data or []
+        by = {r['model_key']: r['image_url'] for r in rows if r.get('image_url')}
+        for k in keys:
+            u = by.get(k)
+            if not u: continue
+            try:
+                with urllib.request.urlopen(urllib.request.Request(u, headers={'User-Agent': 'qtcal'}), timeout=15) as r:
+                    b = r.read(4_000_001)
+                    ct = (r.headers.get('Content-Type') or '').split(';')[0].strip()
+                if len(b) <= 4_000_000 and ct in ('image/png', 'image/jpeg', 'image/webp'):
+                    out.append((ct, b))
+            except Exception:
+                continue
+            if len(out) >= limit: break
+    except Exception:
+        return []
+    return out
+
+
+def _call_image_edit_openai(profile, prompt, refs):
+    """gpt-image edits endpoint with reference photos (multipart)."""
+    import base64, uuid
+    secret = os.environ.get(profile['credential_ref'], '')
+    if not secret: raise GenError(f"server variable {profile['credential_ref']} is not set")
+    boundary = uuid.uuid4().hex
+    parts = []
+    def field(n, v):
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{n}"\r\n\r\n{v}\r\n'.encode())
+    field('model', profile['model']); field('prompt', prompt); field('size', '1536x1024')
+    field('quality', 'high' if profile.get('quality', 'high') == 'high' else 'medium'); field('n', '1')
+    for i, (ct, b) in enumerate(refs):
+        ext = {'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp'}[ct]
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="image[]"; filename="ref{i}.{ext}"\r\nContent-Type: {ct}\r\n\r\n'.encode() + b + b'\r\n')
+    parts.append(f'--{boundary}--\r\n'.encode())
+    req = urllib.request.Request('https://api.openai.com/v1/images/edits', data=b''.join(parts), method='POST',
+                                 headers={'Authorization': 'Bearer ' + secret, 'Content-Type': f'multipart/form-data; boundary={boundary}'})
+    try:
+        with urllib.request.urlopen(req, timeout=110) as r:
+            j = json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        raise GenError(f'provider returned {e.code} on reference edit')
+    except Exception as e:
+        raise GenError(f'could not reach provider: {str(e)[:120]}')
+    b64 = (((j.get('data') or [{}])[0]).get('b64_json'))
+    if not b64: raise GenError('the image model returned no image')
+    return base64.b64decode(b64)
 
 
 def _preview_public(sb, v):
@@ -571,10 +676,19 @@ def run_preview(pid, vid):
                                               'text_model': text_used['model']}).eq('id', vid).execute()
         # 2) image (primary, then fallback)
         img, img_used, ierr = None, None, None
+        refs = _reference_images(sb, claims['company_id'], sn[0]['safe_source'])
         for prof in (s.get('image_profile'), s.get('image_fallback')):
             if not prof or not prof.get('model'): continue
             try:
-                img = _call_image(prof, writeup['image_prompt']); img_used = prof; break
+                if refs and prof['provider'] == 'openai':
+                    try:
+                        img = _call_image_edit_openai(prof, 'Use the attached product photos as the exact visual reference for the matching '
+                                                      'equipment (shape, colour, proportions). ' + writeup['image_prompt'], refs)
+                    except GenError:
+                        img = None  # reference path failed -> plain generation below
+                if img is None:
+                    img = _call_image(prof, writeup['image_prompt'], 110 if refs else 230)
+                img_used = prof; break
             except GenError as e:
                 ierr = str(e)
         if not img: return fail(f'Image failed: {ierr}')
@@ -607,6 +721,128 @@ def select_preview(pid, vid):
         .eq('id', pid).eq('lock_version', p['lock_version']).execute().data
     if not r: return jsonify({'error': 'Someone else changed this proposal. Reload and try again.', 'code': 'REVISION_CONFLICT'}), 409
     return jsonify({'proposal': _public(r[0]), 'selected_preview_id': vid})
+
+
+# ── M4/M6: immutable document versions + approval ─────────────────────────────
+# A version freezes the selected preview (write-up + image) and the source lines
+# it was built on. Later quotation edits, regenerated previews or setting changes
+# never alter an existing version -- a new version is created instead.
+DOC_PUBLIC = ('id', 'proposal_id', 'version', 'preview_id', 'snapshot_id', 'options', 'status', 'submitted_at',
+              'decided_at', 'decision_note', 'created_at')
+
+
+def _doc_public(d):
+    return {k: d.get(k) for k in DOC_PUBLIC}
+
+
+def _doc_full(sb, claims, d):
+    out = _doc_public(d)
+    c = dict(d.get('content') or {})
+    img = c.get('image_path')
+    c['image_url'] = None
+    if img:
+        try:
+            from api.auth import _signed_url
+            c['image_url'] = _signed_url(PREVIEW_BUCKET, img, 3600)
+        except Exception:
+            pass
+    if not _can_commercial(claims):  # technical-only reader never gets prices
+        c.pop('commercials', None)
+        c['lines'] = [{k: v for k, v in l.items() if k not in ('unit_selling_price', 'line_total')} for l in c.get('lines', [])]
+    out['content'] = c
+    return out
+
+
+@app.route('/api/proposals/<pid>/documents', methods=['GET'])
+def list_documents(pid):
+    sb, claims = get_sb(), g.claims
+    if not _load(sb, claims, pid): return jsonify({'error': 'Not found'}), 404
+    rows = sb.table('proposal_documents').select('id,proposal_id,version,preview_id,snapshot_id,options,status,submitted_at,decided_at,decision_note,created_at')\
+        .eq('proposal_id', pid).order('version', desc=True).limit(50).execute().data or []
+    return jsonify({'documents': [_doc_public(r) for r in rows]})
+
+
+@app.route('/api/proposals/<pid>/documents/<did>', methods=['GET'])
+def get_document(pid, did):
+    sb, claims = get_sb(), g.claims
+    if not _load(sb, claims, pid): return jsonify({'error': 'Not found'}), 404
+    r = sb.table('proposal_documents').select('*').eq('id', did).eq('proposal_id', pid).eq('company_id', claims['company_id']).execute().data
+    if not r: return jsonify({'error': 'Not found'}), 404
+    return jsonify({'document': _doc_full(sb, claims, r[0])})
+
+
+@app.route('/api/proposals/<pid>/documents', methods=['POST'])
+def create_document(pid):
+    sb, claims = get_sb(), g.claims
+    p = _load(sb, claims, pid)
+    if not p: return jsonify({'error': 'Not found'}), 404
+    if p['lifecycle'] != 'active': return jsonify({'error': 'Restore this proposal first.'}), 409
+    d = request.json or {}
+    vid = d.get('preview_id') or p.get('selected_preview_id')
+    if not vid: return jsonify({'error': 'Choose a preview with "Use this preview" first.'}), 422
+    pv = sb.table('proposal_previews').select('*').eq('id', vid).eq('proposal_id', pid).eq('company_id', claims['company_id']).execute().data
+    if not pv or pv[0]['status'] != 'ready': return jsonify({'error': 'That preview is not available.'}), 422
+    pv = pv[0]
+    snap = sb.table('proposal_source_snapshots').select('*').eq('proposal_id', pid).order('created_at', desc=True).limit(1).execute().data
+    if not snap: return jsonify({'error': 'Source snapshot missing.'}), 422
+    snap = snap[0]
+    opts_in = d.get('options') or {}
+    show_prices = bool(opts_in.get('show_prices')) and _can_commercial(claims) and snap['visibility'] == 'commercial'
+    options = {'show_prices': show_prices, 'include_terms': bool(opts_in.get('include_terms', True)),
+               'cover_note': str(opts_in.get('cover_note') or '')[:1500]}
+    ss = snap['safe_source']
+    lines = ss.get('lines') or []
+    if not show_prices:
+        lines = [{k: v for k, v in l.items() if k not in ('unit_selling_price', 'line_total')} for l in lines]
+    content = {
+        'reference': p['reference'], 'title': p.get('title') or '', 'customer': ss.get('customer') or p.get('customer_name') or '',
+        'quote_ref': p.get('quote_ref') or '', 'project': ss.get('project') or '', 'date': datetime.utcnow().strftime('%Y-%m-%d'),
+        'writeup': pv.get('writeup') or {}, 'image_path': pv.get('image_path'), 'lines': lines,
+    }
+    if show_prices and ss.get('commercials'): content['commercials'] = ss['commercials']
+    last = sb.table('proposal_documents').select('version').eq('proposal_id', pid).order('version', desc=True).limit(1).execute().data
+    ver = (last[0]['version'] if last else 0) + 1
+    row = sb.table('proposal_documents').insert({
+        'company_id': claims['company_id'], 'proposal_id': pid, 'version': ver, 'preview_id': vid, 'snapshot_id': snap['id'],
+        'source_hash': snap.get('source_hash'), 'options': options, 'content': content, 'status': 'draft', 'created_by': claims.get('user_id'),
+    }).execute().data[0]
+    now = datetime.utcnow().isoformat()
+    sb.table('proposals').update({'current_document_id': row['id'], 'stage': 'document_draft', 'updated_at': now}).eq('id', pid).execute()
+    return jsonify({'document': _doc_public(row)}), 201
+
+
+def _load_doc(sb, claims, pid, did):
+    r = sb.table('proposal_documents').select('*').eq('id', did).eq('proposal_id', pid).eq('company_id', claims['company_id']).execute().data
+    return r[0] if r else None
+
+
+@app.route('/api/proposals/<pid>/documents/<did>/submit', methods=['POST'])
+def submit_document(pid, did):
+    sb, claims = get_sb(), g.claims
+    p = _load(sb, claims, pid); doc = _load_doc(sb, claims, pid, did) if p else None
+    if not doc: return jsonify({'error': 'Not found'}), 404
+    if doc['status'] not in ('draft', 'rejected'): return jsonify({'error': 'This version is already submitted or approved.'}), 409
+    now = datetime.utcnow().isoformat()
+    r = sb.table('proposal_documents').update({'status': 'pending_approval', 'submitted_by': claims.get('user_id'), 'submitted_at': now,
+                                               'decided_by': None, 'decided_at': None, 'decision_note': None}).eq('id', did).execute().data
+    sb.table('proposals').update({'stage': 'pending_approval', 'updated_at': now}).eq('id', pid).execute()
+    return jsonify({'document': _doc_public(r[0])})
+
+
+@app.route('/api/proposals/<pid>/documents/<did>/decide', methods=['POST'])
+def decide_document(pid, did):
+    sb, claims = get_sb(), g.claims
+    if not is_admin(claims): return jsonify({'error': 'Only an administrator can approve or reject proposals.'}), 403
+    p = _load(sb, claims, pid); doc = _load_doc(sb, claims, pid, did) if p else None
+    if not doc: return jsonify({'error': 'Not found'}), 404
+    if doc['status'] != 'pending_approval': return jsonify({'error': 'This version is not awaiting approval.'}), 409
+    d = request.json or {}
+    approve = d.get('decision') == 'approve'
+    now = datetime.utcnow().isoformat()
+    r = sb.table('proposal_documents').update({'status': 'approved' if approve else 'rejected', 'decided_by': claims.get('user_id'),
+                                               'decided_at': now, 'decision_note': str(d.get('note') or '')[:500] or None}).eq('id', did).execute().data
+    sb.table('proposals').update({'stage': 'approved' if approve else 'changes_requested', 'updated_at': now}).eq('id', pid).execute()
+    return jsonify({'document': _doc_public(r[0])})
 
 
 @app.route('/api/proposals/ai-settings/verify', methods=['POST'])
