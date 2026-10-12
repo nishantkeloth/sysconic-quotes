@@ -3718,7 +3718,6 @@ function appHTML(){
       ${sbGroupHTML('proposals','Proposals',[
         hasPageAccess('quotes')?`<div class="sb-item ${A.page==='dashboard'?'active':''}" onclick="${nav('dashboard')}"><span class="sb-icon">🏠</span>Quotes</div>`:'',
         hasFeature('proposals')&&hasPageAccess('proposals')?`<div class="sb-item ${(A.page==='proposals'||A.page==='proposalDetail')?'active':''}" onclick="${nav('proposals','PRP.list=null;')}"><span class="sb-icon">📑</span>Proposals</div>`:'',
-        hasFeature('proposals')&&A.user?.role==='admin'&&hasPageAccess('proposalAi')?`<div class="sb-item ${A.page==='proposalAi'?'active':''}" onclick="${nav('proposalAi')}"><span class="sb-icon">🤖</span>Proposal AI</div>`:'',
         hasPageAccess('reviewQueue')?`<div class="sb-item ${A.page==='reviewQueue'?'active':''}" onclick="${nav('reviewQueue')}"><span class="sb-icon">📝</span>Review Queue${A.reviewQueueCount?` <span class="sb-badge">${A.reviewQueueCount}</span>`:''}</div>`:''
       ])}
       ${sbGroupHTML('masterdata','Master Data',[
@@ -3754,7 +3753,8 @@ function appHTML(){
       <div class="sb-item ${A.page==='integrations'?'active':''}" onclick="${nav('integrations')}"><span class="sb-icon">🔌</span>Integrations</div>
       <div class="sb-item ${A.page==='companyProfile'?'active':''}" onclick="${nav('companyProfile')}"><span class="sb-icon">🏢</span>Company Profile</div>
       <div class="sb-item ${A.page==='rolesPermissions'?'active':''}" onclick="${nav('rolesPermissions')}"><span class="sb-icon">🔐</span>Roles & Permissions</div>
-      ${hasFeature('workflowEngine')?`<div class="sb-item ${A.page==='workflowSettings'?'active':''}" onclick="${nav('workflowSettings')}"><span class="sb-icon">🔀</span>Workflow Settings</div>`:''}`:''}
+      ${hasFeature('workflowEngine')?`<div class="sb-item ${A.page==='workflowSettings'?'active':''}" onclick="${nav('workflowSettings')}"><span class="sb-icon">🔀</span>Workflow Settings</div>`:''}
+      ${hasFeature('proposals')?`<div class="sb-item ${A.page==='proposalAi'?'active':''}" onclick="${nav('proposalAi')}"><span class="sb-icon">🤖</span>Proposal AI</div>`:''}`:''}
       ${A.user?.is_platform_admin?`<div class="sb-sec">Platform</div><div class="sb-item ${A.page==='platform'?'active':''}" onclick="${nav('platform')}"><span class="sb-icon">🌐</span>All Companies</div>`:''}
     </nav>
     <div class="sb-foot">
@@ -3809,7 +3809,7 @@ function appHTML(){
   else if(A.page==='zohoReport')pageContent=zohoReportHTML();
   else if(A.page==='proposals')pageContent=proposalsHTML();
   else if(A.page==='proposalDetail')pageContent=proposalDetailHTML();
-  else if(A.page==='proposalAi')pageContent=proposalAiHTML();
+  else if(A.page==='proposalAi')pageContent=(A.user?.role==='admin'?proposalAiHTML():'<div class="auth-err">Proposal AI settings are available to administrators only.</div>');
 
   if(['editor','terms','vendor'].includes(A.page)&&isQuoteLocked()&&!A.reviewMode){
     pageContent=`<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
