@@ -541,6 +541,11 @@ def _reference_images(sb, company_id, safe_source, limit=4):
     return out
 
 
+def _refs_for_models(sb, company_id, models, limit=4):
+    """Like _reference_images but for an explicit list of model names (one image slot)."""
+    return _reference_images(sb, company_id, {'lines': [{'model': m} for m in (models or [])]}, limit)
+
+
 def _call_image_edit_openai(profile, prompt, refs):
     """gpt-image edits endpoint with reference photos (multipart)."""
     import base64, uuid
@@ -746,6 +751,13 @@ def _doc_full(sb, claims, d):
             c['image_url'] = _signed_url(PREVIEW_BUCKET, img, 3600)
         except Exception:
             pass
+    if c.get('v') in (2, 3):
+        for k, im in (c.get('images') or {}).items():
+            try:
+                from api.auth import _signed_url
+                im['url'] = _signed_url(PREVIEW_BUCKET, im['path'], 3600) if im.get('path') else None
+            except Exception:
+                im['url'] = None
     if not _can_commercial(claims):  # technical-only reader never gets prices
         c.pop('commercials', None)
         c['lines'] = [{k: v for k, v in l.items() if k not in ('unit_selling_price', 'line_total')} for l in c.get('lines', [])]
@@ -875,3 +887,8 @@ def verify_ai_settings():
         except Exception as e:
             results[key] = {'ok': False, 'message': f'Could not reach the provider: {str(e)[:120]}'}
     return jsonify({'results': results, 'version': s['version']})
+
+
+# ── 4-step flow (content -> images -> review -> final) lives in its own module ──
+import api.proposals_draft as _proposals_draft
+_proposals_draft.register(app, globals())

@@ -9366,41 +9366,470 @@ async function propArchive(id,archive){
   if(r.error){alert(r.error);return;}
   loadProposals();
 }
-async function openProposal(id){PRP.detailId=id;PRP.detail=null;PRP.pv=null;PRP.pvSel=null;PRP.pvMsg='';PRP.docs=null;clearTimeout(PRP.pvTimer);A.page='proposalDetail';draw();}
+async function openProposal(id){PRP.detailId=id;PRP.detail=null;PRP.dr=null;PRP.im=null;PRP.loaded=false;PRP.step=1;PRP.msg='';PRP.docs=null;PRP.opts={show_prices:false,cover_note:''};clearTimeout(PRP.timer);A.page='proposalDetail';draw();}
 async function loadProposalDetail(){
   const r=await api('GET','/api/proposals/'+PRP.detailId);
   if(r.error){PRP.detail={error:r.error};}else PRP.detail=r;
   const el=document.getElementById('propDetailBox');if(el)el.innerHTML=proposalDetailInner();
-  if(!r.error){loadPreviews();loadDocs();}
+  if(!r.error){loadDraft(true);loadDocs();}
 }
-// ── Proposals M3: preview packages ──
-PRP.pv=null;PRP.pvSel=null;PRP.pvBusy=false;PRP.pvMsg='';PRP.pvTimer=null;
-async function loadPreviews(){
+// ── Proposals: 4-step flow (content → images → review → final) ──
+PRP.dr=null;PRP.im=null;PRP.step=1;PRP.msg='';PRP.timer=null;PRP.saveT=null;PRP.running={};PRP.opts={show_prices:false,cover_note:''};PRP.loaded=false;
+function prpLines(){const s=PRP.detail&&PRP.detail.source&&PRP.detail.source.safe_source;return (s&&s.lines)||[];}
+function prpLineMap(){const m={};prpLines().forEach((l,i)=>{m[l.source_line_id]={n:i+1,l};});return m;}
+async function loadDraft(first){
   if(!PRP.detailId)return;
-  const r=await api('GET','/api/proposals/'+PRP.detailId+'/previews');
-  if(r.error){PRP.pvMsg=r.error;PRP.pv=[];}else{PRP.pv=r.previews||[];PRP.pvSel=r.selected_preview_id||null;}
-  renderPreviews();
-  clearTimeout(PRP.pvTimer);
-  if((PRP.pv||[]).some(v=>v.status==='queued'||v.status==='running')&&A.page==='proposalDetail')PRP.pvTimer=setTimeout(loadPreviews,4000);
+  const r=await api('GET','/api/proposals/'+PRP.detailId+'/draft');
+  if(r.error){PRP.msg=r.error;PRP.dr=null;PRP.im=[];}
+  else{
+    const keepEdits=PRP.dr&&PRP.dr.status==='ready'&&r.draft&&r.draft.status==='ready'&&PRP.saveT;
+    if(!keepEdits){PRP.dr=r.draft;}
+    PRP.im=r.images||[];
+  }
+  if(first&&!PRP.loaded){PRP.loaded=true;PRP.step=(PRP.dr&&PRP.dr.status==='ready')?(PRP.im.length&&PRP.im.every(i=>!i.include||i.status==='ready')?3:(PRP.step>1?PRP.step:1)):1;}
+  const ae=document.activeElement,box=document.getElementById('propPreviewBox');
+  if(!(ae&&box&&box.contains(ae)&&/^(INPUT|TEXTAREA)$/.test(ae.tagName)))renderWizard(); // never re-render under the user's cursor
+  clearTimeout(PRP.timer);
+  const busy=(PRP.dr&&(PRP.dr.status==='queued'||PRP.dr.status==='running'))||(PRP.im||[]).some(i=>i.status==='queued'||i.status==='running');
+  if(busy&&A.page==='proposalDetail')PRP.timer=setTimeout(()=>loadDraft(false),4000);
 }
-function renderPreviews(){const el=document.getElementById('propPreviewBox');if(el)el.innerHTML=proposalPreviewInner();}
-async function generatePreview(){
-  if(PRP.pvBusy)return;
-  const instr=document.getElementById('pvInstr')?.value||'';
-  PRP.pvBusy=true;PRP.pvMsg='';renderPreviews();
-  const r=await api('POST','/api/proposals/'+PRP.detailId+'/previews',{instruction:instr});
-  if(r.error){PRP.pvBusy=false;PRP.pvMsg=r.error;renderPreviews();return;}
-  const id=r.preview.id;
-  await loadPreviews();PRP.pvBusy=false;renderPreviews();
-  // Kick off the run; polling shows progress. Long request is fine - the row is updated server-side.
-  api('POST','/api/proposals/'+PRP.detailId+'/previews/'+id+'/run').then(()=>loadPreviews()).catch(()=>loadPreviews());
+function renderWizard(){const el=document.getElementById('propPreviewBox');if(el)el.innerHTML=proposalPreviewInner();}
+function prpGo(n){
+  if(n>1&&!(PRP.dr&&PRP.dr.status==='ready'))return;
+  prpFlush().then(()=>{PRP.step=n;PRP.msg='';renderWizard();});
 }
-async function usePreview(vid){
-  const r=await api('POST','/api/proposals/'+PRP.detailId+'/previews/'+vid+'/select');
-  if(r.error){PRP.pvMsg=r.error;renderPreviews();return;}
-  PRP.pvSel=vid;if(PRP.detail&&PRP.detail.proposal)PRP.detail.proposal={...PRP.detail.proposal,...r.proposal};
-  PRP.pvMsg='';loadProposalDetail();
+function prpGet(path){return path.split('.').reduce((o,k)=>o==null?o:o[k],PRP.dr&&PRP.dr.content);}
+function prpSet(path,val,silent){
+  const ks=path.split('.'),last=ks.pop();
+  const o=ks.reduce((o,k)=>o==null?o:o[k],PRP.dr.content);if(!o)return;
+  o[last]=val;prpDirty();if(!silent)renderWizard();
 }
+function prpToggle(path){prpSet(path,!prpGet(path));}
+function prpDirty(){
+  clearTimeout(PRP.saveT);
+  const s=document.getElementById('prpSaved');if(s)s.textContent='Editing…';
+  PRP.saveT=setTimeout(prpSave,1200);
+}
+async function prpSave(){
+  clearTimeout(PRP.saveT);PRP.saveT=null;
+  if(!PRP.dr||PRP.dr.status!=='ready')return true;
+  const r=await api('PATCH','/api/proposals/'+PRP.detailId+'/draft',{content:PRP.dr.content,expected_rev:PRP.dr.rev});
+  const s=document.getElementById('prpSaved');
+  if(r.error){PRP.msg=r.error;if(s)s.textContent='Not saved';renderWizard();return false;}
+  PRP.dr.rev=r.rev;if(s)s.textContent='All changes saved';return true;
+}
+async function prpFlush(){if(PRP.saveT)await prpSave();}
+async function prpGenerateContent(){
+  if(PRP.dr&&PRP.dr.status==='ready'&&!confirm('Regenerating replaces all current content, your edits and the images. Continue?'))return;
+  const instr=document.getElementById('prpInstr')?.value||(PRP.dr&&PRP.dr.instruction)||'';
+  PRP.msg='';
+  const r=await api('POST','/api/proposals/'+PRP.detailId+'/draft/generate',{instruction:instr});
+  if(r.error){PRP.msg=r.error;renderWizard();return;}
+  PRP.step=1;PRP.dr={status:'queued',instruction:instr};PRP.im=[];renderWizard();
+  api('POST','/api/proposals/'+PRP.detailId+'/draft/run').then(()=>loadDraft(false)).catch(()=>loadDraft(false));
+  setTimeout(()=>loadDraft(false),1500);
+}
+async function prpImageRun(key){
+  if(PRP.running[key])return;
+  PRP.running[key]=true;
+  try{
+    const q=await api('POST','/api/proposals/'+PRP.detailId+'/draft/images/'+key+'/queue');
+    if(q.error){PRP.msg=q.error;return;}
+    await loadDraft(false);
+    await api('POST','/api/proposals/'+PRP.detailId+'/draft/images/'+key+'/run');
+  }catch(e){}
+  finally{delete PRP.running[key];loadDraft(false);}
+}
+async function prpImagesAll(){
+  const todo=(PRP.im||[]).filter(i=>i.include&&i.status!=='ready'&&i.status!=='running'&&i.status!=='queued').map(i=>i.slot_key);
+  if(!todo.length){PRP.msg='All included images are already generated.';renderWizard();return;}
+  PRP.msg='';
+  let idx=0;const worker=async()=>{while(idx<todo.length){const k=todo[idx++];await prpImageRun(k);}};
+  worker();worker(); // two at a time
+}
+async function prpImagePatch(key,field,val){
+  const r=await api('PATCH','/api/proposals/'+PRP.detailId+'/draft/images/'+key,{[field]:val});
+  if(r.error){PRP.msg=r.error;}else{const i=PRP.im.findIndex(x=>x.slot_key===key);if(i>=0)PRP.im[i]={...PRP.im[i],...r.image};}
+  renderWizard();
+}
+async function prpImageField(key,field,val){
+  const i=PRP.im.findIndex(x=>x.slot_key===key);if(i>=0)PRP.im[i][field]=val;
+  await api('PATCH','/api/proposals/'+PRP.detailId+'/draft/images/'+key,{[field]:val});
+}
+async function prpConfirm(){
+  await prpFlush();
+  const r=await api('POST','/api/proposals/'+PRP.detailId+'/draft/confirm',{options:PRP.opts,prepared_by:A.user?.name||''});
+  if(r.error){PRP.msg=r.error;renderWizard();return;}
+  PRP.msg='';PRP.step=4;PRP.docs=null;await loadProposalDetail();
+}
+// ── wizard UI ──
+function prpIn(path,label,opts){
+  opts=opts||{};const v=prpGet(path)||'';
+  const st='width:100%;font-size:13px;box-sizing:border-box';
+  const fld=opts.area?`<textarea rows="${opts.rows||3}" style="${st};resize:vertical" oninput="prpSet('${path}',this.value,true)">${esc(v)}</textarea>`
+    :`<input value="${esc(v)}" style="${st}" oninput="prpSet('${path}',this.value,true)">`;
+  return `<div style="margin-bottom:8px">${label?`<label style="font-size:11px;color:var(--gray-500);display:block;margin-bottom:2px">${label}</label>`:''}${fld}</div>`;
+}
+function prpChk(path,label){
+  return `<label style="font-size:12px;display:inline-flex;gap:5px;align-items:center;cursor:pointer;white-space:nowrap"><input type="checkbox" ${prpGet(path)!==false?'checked':''} onchange="prpToggle('${path}')"> ${label||'Include'}</label>`;
+}
+function prpBox(title,incPath,inner){
+  const on=!incPath||prpGet(incPath)!==false;
+  return `<div style="border:1px solid var(--gray-200);border-radius:10px;padding:12px;margin-bottom:12px;background:#fff;${on?'':'opacity:.55'}">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><strong style="font-size:14px">${title}</strong>${incPath?prpChk(incPath,'Include in proposal'):''}</div>${on?inner:'<div style="font-size:12px;color:var(--gray-500)">Removed from the proposal. Tick “Include” to bring it back.</div>'}</div>`;
+}
+function prpStepper(){
+  const ready=PRP.dr&&PRP.dr.status==='ready';
+  const imgs=PRP.im||[],imgOk=imgs.length&&imgs.filter(i=>i.include).every(i=>i.status==='ready');
+  const hasDoc=(PRP.docs||[]).length>0;
+  const steps=[[1,'Content',ready],[2,'Images',imgOk],[3,'Review & confirm',hasDoc],[4,'Final output',hasDoc&&PRP.docs.some(d=>d.status==='approved')]];
+  return `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">${steps.map(([n,l,done])=>{
+    const act=PRP.step===n,dis=n>1&&!ready;
+    return `<button class="btn ${act?'btn-navy':''}" style="${dis?'opacity:.5;cursor:not-allowed':''}" ${dis?'disabled':''} onclick="prpGo(${n})">${done?'✓ ':n+'. '}${l}</button>`;}).join('')}
+    <span id="prpSaved" style="align-self:center;font-size:12px;color:var(--gray-500);margin-left:6px"></span></div>`;
+}
+
+function prpStep2(){
+  const ims=PRP.im||[],active=PRP.detail.proposal.lifecycle==='active';
+  if(!ims.length)return '<div style="color:var(--gray-500);font-size:13px">No image slots were proposed. You can continue without images.</div><div style="margin-top:10px"><button class="btn btn-navy" onclick="prpGo(3)">Next: Review →</button></div>';
+  const nReady=ims.filter(i=>i.status==='ready').length;
+  let h=`<div style="font-size:13px;color:var(--gray-500);margin-bottom:10px">One image per slot. Edit the description, then generate. Use “Regenerate” until you like it, or untick “Include” to drop an image. Catalogue product photos are used as references where your product master has them. ${nReady}/${ims.length} generated.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">${active?'<button class="btn btn-navy" onclick="prpImagesAll()">Generate all images</button>':''}<button class="btn" onclick="prpGo(1)">← Content</button><button class="btn btn-navy" onclick="prpGo(3)">Next: Review →</button></div>`;
+  h+=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px">`+ims.map(i=>{
+    const busy=i.status==='queued'||i.status==='running';
+    const pic=i.url?`<img src="${esc(i.url)}" style="width:100%;border-radius:8px;display:block" alt="">`:`<div style="aspect-ratio:3/2;background:var(--gray-100);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--gray-500);font-size:13px;text-align:center;padding:10px">${busy?'Generating… (up to ~2 min)':i.status==='failed'?'Failed':'Not generated yet'}</div>`;
+    const k=i.slot_key;
+    return `<div style="border:1px solid var(--gray-200);border-radius:10px;padding:12px;background:#fff;${i.include?'':'opacity:.55'}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><strong style="font-size:13px">${k==='hero'?'Main image':'Image'}: ${esc(i.title||k)}</strong><label style="font-size:12px;cursor:pointer"><input type="checkbox" ${i.include?'checked':''} onchange="prpImagePatch('${k}','include',this.checked)"> Include</label></div>
+      ${pic}
+      ${i.status==='failed'&&i.error?`<div class="auth-err" style="margin-top:6px">${esc(i.error)}</div>`:''}
+      <label style="font-size:11px;color:var(--gray-500);display:block;margin-top:8px">Caption</label><input value="${esc(i.caption||'')}" style="width:100%;box-sizing:border-box;font-size:13px" onchange="prpImageField('${k}','caption',this.value)">
+      <label style="font-size:11px;color:var(--gray-500);display:block;margin-top:6px">What the image shows (prompt)</label><textarea rows="4" style="width:100%;box-sizing:border-box;font-size:12px" onchange="prpImageField('${k}','prompt',this.value)">${esc(i.prompt||'')}</textarea>
+      ${active?`<button class="btn btn-sm ${i.status==='ready'?'':'btn-navy'}" style="margin-top:8px" ${busy?'disabled':''} onclick="prpImageRun('${k}')">${i.status==='ready'?'Regenerate':'Generate'}</button>`:''}
+    </div>`;}).join('')+`</div>`;
+  return h;
+}
+function prpPreviewDoc(){
+  const d=PRP.detail,p=d.proposal,s=d.source&&d.source.safe_source||{};
+  const show=!!PRP.opts.show_prices&&!!s.commercials;
+  let lines=prpLines();if(!show)lines=lines.map(l=>{const o={...l};delete o.unit_selling_price;delete o.line_total;return o;});
+  const imgs={};(PRP.im||[]).forEach(i=>{if(i.include&&i.status==='ready'&&i.url)imgs[i.slot_key]={url:i.url,title:i.title||'',caption:i.caption||''};});
+  return {version:'draft',status:'draft',options:{show_prices:show,cover_note:PRP.opts.cover_note||''},
+    content:{v:(PRP.dr.content&&PRP.dr.content.v)||3,reference:p.reference,title:p.title||'',customer:s.customer||p.customer_name||'',quote_ref:p.quote_ref||'',project:s.project||'',date:new Date().toISOString().slice(0,10),prepared_by:A.user?.name||'',doc:PRP.dr.content,lines,images:imgs,commercials:show?s.commercials:undefined}};
+}
+function prpStep3(){
+  const canPrice=hasPageAccess('quotes')&&PRP.detail.source&&PRP.detail.source.visibility==='commercial';
+  const pend=(PRP.im||[]).filter(i=>i.include&&i.status!=='ready');
+  const active=PRP.detail.proposal.lifecycle==='active';
+  let h=`<div style="font-size:13px;color:var(--gray-500);margin-bottom:10px">This is the proposal as it will be issued. Go back to edit anything, then confirm to create the final document version.</div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">
+      ${canPrice?`<label style="font-size:13px;display:flex;gap:6px;align-items:center"><input type="checkbox" ${PRP.opts.show_prices?'checked':''} onchange="PRP.opts.show_prices=this.checked;renderWizard()"> Show prices</label>`:''}
+      <div style="flex:1;min-width:240px"><label style="font-size:11px;color:var(--gray-500)">Cover note (optional, shown under the summary)</label><input style="width:100%;box-sizing:border-box" value="${esc(PRP.opts.cover_note||'')}" onchange="PRP.opts.cover_note=this.value;renderWizard()"></div></div>
+    ${pend.length?`<div class="auth-err" style="margin-bottom:10px">${pend.length} included image(s) are not generated yet: ${pend.map(i=>esc(i.title||i.slot_key)).join(', ')}. Generate them or untick “Include” on the Images step.</div>`:''}
+    ${PRP.msg?`<div class="auth-err" style="margin-bottom:10px">${esc(PRP.msg)}</div>`:''}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><button class="btn" onclick="prpGo(1)">← Edit content</button><button class="btn" onclick="prpGo(2)">← Edit images</button>${active?`<button class="btn btn-navy" onclick="prpConfirm()" ${pend.length?'disabled':''}>Confirm &amp; create document</button>`:''}</div>
+    <iframe id="prpFrame" style="width:100%;height:1100px;border:1px solid var(--gray-200);border-radius:8px;background:#fff" srcdoc="${esc(proposalPdfHTML(prpPreviewDoc()))}"></iframe>`;
+  return h;
+}
+function prpStep4(){
+  return `<div style="font-size:13px;color:var(--gray-500);margin-bottom:6px">Each confirmed version is frozen. Download the PDF, submit it for approval, or go back and create a new version after changes.</div>${proposalDocsHTML()}<div style="margin-top:10px"><button class="btn" onclick="prpGo(3)">← Back to review</button></div>`;
+}
+function proposalPreviewInner(){
+  const d=PRP.detail;if(!d||!d.proposal)return '';
+  const p=d.proposal,active=p.lifecycle==='active';
+  const loading=PRP.dr===null&&!PRP.loaded;
+  const body=loading?'<div style="color:var(--gray-500);font-size:13px">Loading…</div>':(PRP.step===1?prpStep1():PRP.step===2?prpStep2():PRP.step===3?prpStep3():prpStep4());
+  const msg=PRP.msg&&PRP.step!==3?`<div class="auth-err" style="margin-bottom:10px">${esc(PRP.msg)}</div>`:'';
+  const arch=`<div style="margin-top:14px;text-align:right"><button class="btn btn-sm" onclick="propArchiveToggle()">${active?'Archive proposal':'Restore proposal'}</button></div>`;
+  return prpStepper()+msg+body+arch;
+}
+function proposalPdfHTML(doc){const v=doc.content&&doc.content.v;return v===3?proposalPdfHTML3(doc):v===2?proposalPdfHTML2(doc):proposalPdfHTMLv1(doc);}
+// ── v3 content: free-form list of sections (structure decided per proposal) ──
+function prpMoveSec(i,d){
+  const a=PRP.dr.content.sections,j=i+d;if(j<0||j>=a.length)return;
+  [a[i],a[j]]=[a[j],a[i]];prpDirty();renderWizard();
+}
+function prpDelSec(i){
+  const s=PRP.dr.content.sections[i];
+  if(s.type==='systems'){alert('The equipment section cannot be deleted (it covers every BOQ line). You can untick Include to hide it.');return;}
+  if(!confirm('Delete the section “'+(s.title||s.type)+'” completely?'))return;
+  PRP.dr.content.sections.splice(i,1);prpDirty();renderWizard();
+}
+function prpAddSec(){
+  const t=document.getElementById('prpAddType')?.value||'text';
+  const id='sec-'+Math.random().toString(36).slice(2,7),b={id,type:t,title:'New section',include:true};
+  if(t==='text')b.paragraphs=[''];
+  if(t==='columns'){b.intro='';b.items=[{title:'',body:'',include:true}];}
+  if(t==='points'){b.intro='';b.items=[{title:'',body:'',include:true}];}
+  if(t==='list')b.items=[{text:'',include:true}];
+  if(t==='kpis')b.items=[{value:'',label:'',sub:'',include:true}];
+  PRP.dr.content.sections.push(b);prpDirty();renderWizard();
+}
+function prpAddItem(i,blank){
+  const s=PRP.dr.content.sections[i];
+  if(s.type==='text'){s.paragraphs.push('');}else{s.items.push(Object.assign({include:true},blank));}
+  prpDirty();renderWizard();
+}
+function prpDelItem(i,k){
+  const s=PRP.dr.content.sections[i];
+  (s.type==='text'?s.paragraphs:s.items).splice(k,1);prpDirty();renderWizard();
+}
+const PRP_TYPE_LABEL={text:'Text',kpis:'Key figures',columns:'Side-by-side ideas',points:'Numbered points',systems:'Equipment',list:'List'};
+function prpSecEditor(s,i){
+  const P='sections.'+i,n=PRP.dr.content.sections.length,LM=prpLineMap();
+  const rm=(k)=>`<button class="btn btn-sm" title="Delete" onclick="prpDelItem(${i},${k})">✕</button>`;
+  let inner='';
+  if(s.type==='text'){
+    inner=(s.paragraphs||[]).map((_,k)=>`<div style="display:grid;grid-template-columns:1fr auto;gap:6px;align-items:start">${prpIn(P+'.paragraphs.'+k,'',{area:1,rows:4})}${rm(k)}</div>`).join('')+`<button class="btn btn-sm" onclick="prpAddItem(${i},{})">+ Paragraph</button>`;
+  }else if(s.type==='kpis'){
+    inner=(s.items||[]).map((k,x)=>`<div style="display:grid;grid-template-columns:90px 1.2fr 1.6fr auto auto;gap:6px;align-items:end;${k.include===false?'opacity:.5':''}">${prpIn(P+'.items.'+x+'.value','Value')}${prpIn(P+'.items.'+x+'.label','Label')}${prpIn(P+'.items.'+x+'.sub','Detail')}<div style="margin-bottom:8px">${prpChk(P+'.items.'+x+'.include','')}</div><div style="margin-bottom:8px">${rm(x)}</div></div>`).join('')+`<button class="btn btn-sm" onclick="prpAddItem(${i},{value:'',label:'',sub:''})">+ Figure</button>`;
+  }else if(s.type==='columns'||s.type==='points'){
+    inner=prpIn(P+'.intro','Introduction',{area:1,rows:2})+(s.items||[]).map((k,x)=>`<div style="display:grid;grid-template-columns:1fr auto auto;gap:6px;align-items:start;${k.include===false?'opacity:.5':''}"><div>${prpIn(P+'.items.'+x+'.title','Title')}${prpIn(P+'.items.'+x+'.body','Text',{area:1,rows:2})}</div><div style="margin-top:18px">${prpChk(P+'.items.'+x+'.include','')}</div><div style="margin-top:14px">${rm(x)}</div></div>`).join('')+`<button class="btn btn-sm" onclick="prpAddItem(${i},{title:'',body:''})">+ Item</button>`;
+  }else if(s.type==='list'){
+    inner=(s.items||[]).map((k,x)=>`<div style="display:grid;grid-template-columns:1fr auto auto;gap:6px;align-items:start;${k.include===false?'opacity:.5':''}">${prpIn(P+'.items.'+x+'.text','',{area:1,rows:2})}<div style="margin-top:6px">${prpChk(P+'.items.'+x+'.include','')}</div><div style="margin-top:2px">${rm(x)}</div></div>`).join('')+`<button class="btn btn-sm" onclick="prpAddItem(${i},{text:''})">+ Line</button>`;
+  }else if(s.type==='systems'){
+    inner=prpIn(P+'.intro','Introduction',{area:1,rows:2})+(s.groups||[]).map((gr,gi)=>{
+      const G=P+'.groups.'+gi;
+      const items=(gr.items||[]).map((it,ii)=>{
+        const ls=(it.line_ids||[]).map(id=>LM[id]).filter(Boolean);
+        const lab=ls.map(x=>`#${x.n} ${esc(((x.l.manufacturer||'')+' '+(x.l.model||'')).trim())} × ${esc(x.l.quantity)}`).join(', ');
+        return `<div style="border-top:1px solid var(--gray-100);padding:6px 0;${it.include===false?'opacity:.5':''}"><div style="display:flex;justify-content:space-between;gap:8px;font-size:12px;margin-bottom:3px"><strong>${lab||'Item'}</strong>${prpChk(G+'.items.'+ii+'.include','')}</div>${prpIn(G+'.items.'+ii+'.does','',{area:1,rows:2})}</div>`;}).join('');
+      return `<div style="border:1px solid var(--gray-100);border-radius:8px;padding:8px 10px;margin:8px 0;${gr.include===false?'opacity:.5':''}"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><strong style="font-size:13px">Group</strong>${prpChk(G+'.include','Include group')}</div>${prpIn(G+'.title','Title')}${prpIn(G+'.intro','Introduction',{area:1,rows:2})}${items}</div>`;}).join('');
+  }
+  const on=s.include!==false;
+  return `<div style="border:1px solid var(--gray-200);border-radius:10px;padding:12px;margin-bottom:12px;background:#fff;${on?'':'opacity:.55'}">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+      <div style="font-size:11px;color:var(--gray-500)">${PRP_TYPE_LABEL[s.type]||s.type}</div>
+      <div style="display:flex;gap:6px;align-items:center">${prpChk(P+'.include','Include')}<button class="btn btn-sm" ${i?'':'disabled'} onclick="prpMoveSec(${i},-1)">↑</button><button class="btn btn-sm" ${i<n-1?'':'disabled'} onclick="prpMoveSec(${i},1)">↓</button><button class="btn btn-sm" onclick="prpDelSec(${i})">Delete section</button></div></div>
+    ${prpIn(P+'.title','Section title')}${on?inner:'<div style="font-size:12px;color:var(--gray-500)">Hidden from the proposal. Tick “Include” to bring it back.</div>'}</div>`;
+}
+function prpStep1(){
+  const dr=PRP.dr,active=PRP.detail.proposal.lifecycle==='active';
+  if(!dr||dr.status==='failed'||(dr.status!=='ready'&&dr.status!=='queued'&&dr.status!=='running')){
+    return `${dr&&dr.status==='failed'?`<div class="auth-err" style="margin-bottom:10px">${esc(dr.error||'Generation failed.')}</div>`:''}
+      <div style="font-size:13px;margin-bottom:8px">QTCal reads the quotation and plans the proposal for <strong>this</strong> project: which sections it needs, how long each should be, and what every item does. The structure is different for every proposal. You can then edit, reorder, add or remove any section.</div>
+      <label style="font-size:12px;color:var(--gray-500)">Customer requirements, design notes or guidance (optional, but the more you give, the more specific it gets)</label>
+      <textarea id="prpInstr" rows="6" style="width:100%;box-sizing:border-box;font-size:13px" placeholder="Paste the customer's brief, room descriptions, design notes, special requirements…">${esc((dr&&dr.instruction)||PRP.detail.proposal.instruction||'')}</textarea>
+      <div style="font-size:12px;color:var(--gray-500);margin:6px 0 10px">Only the customer-safe equipment list and this text are sent to the AI. No cost, margin, supplier discount or prices.</div>
+      ${active?'<button class="btn btn-navy" onclick="prpGenerateContent()">Generate full content</button>':'<div style="color:var(--gray-500);font-size:13px">Restore this proposal to generate content.</div>'}`;
+  }
+  if(dr.status==='queued'||dr.status==='running'){
+    return `<div style="padding:26px 10px;text-align:center"><div style="font-size:15px;font-weight:700;margin-bottom:6px">Planning and writing the proposal…</div><div style="font-size:13px;color:var(--gray-500)">This usually takes 1–2 minutes. You can leave this page; the result will be here when you return.</div></div>`;
+  }
+  const c=dr.content;
+  if(!c||c.v!==3)return `<div class="auth-err" style="margin-bottom:10px">This draft was made with an older fixed layout. Regenerate it to get the new flexible structure.</div>${active?'<button class="btn btn-navy" onclick="prpGenerateContent()">Regenerate content</button>':''}`;
+  let h=`<div style="font-size:13px;color:var(--gray-500);margin-bottom:12px">Read through the content. Edit any text, move sections with ↑ ↓, delete or hide what you don't want, or add your own sections. Changes save automatically.</div>`;
+  h+=prpBox('Cover',null,prpIn('cover.title','Document title')+prpIn('cover.subtitle','Subtitle (project / site)')+prpIn('cover.scope_line','Scope line',{area:1,rows:2}));
+  h+=(c.sections||[]).map((s,i)=>prpSecEditor(s,i)).join('');
+  h+=`<div style="display:flex;gap:8px;align-items:center;margin:4px 0 14px"><select id="prpAddType">${['text','columns','points','kpis','list'].map(t=>`<option value="${t}">${PRP_TYPE_LABEL[t]}</option>`).join('')}</select><button class="btn btn-sm" onclick="prpAddSec()">+ Add section</button></div>`;
+  h+=`<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px"><button class="btn btn-navy" onclick="prpGo(2)">Next: Images →</button><button class="btn" onclick="prpGenerateContent()">Regenerate all content</button></div>`;
+  return h;
+}
+function proposalPdfHTML3(doc){
+  const C=doc.content,D=C.doc||{},lines=C.lines||[],cm=C.commercials,priced=!!cm,imgs=C.images||{};
+  const cur=cm?cm.currency:'AED';
+  const LM={};lines.forEach((l,i)=>{LM[l.source_line_id]={n:i+1,l};});
+  const logo=PRINTCO?.logo_url?`<img src="${esc(PRINTCO.logo_url)}" alt="" style="max-height:54px;max-width:190px;object-fit:contain">`:'';
+  const addr=printAddrLines().map(l=>`<div>${esc(l)}</div>`).join('');
+  const on=x=>x&&x.include!==false;
+  const p2=s=>esc(s||'').replace(/\n/g,'<br>');
+  const img=(key,cls)=>{const i=imgs[key];return i&&i.url?`<figure class="fig ${cls||''}"><img src="${esc(i.url)}" alt=""><figcaption>${esc(i.caption||'')}</figcaption></figure>`:'';};
+  const qtyOf=ids=>{const ls=(ids||[]).map(id=>LM[id]).filter(Boolean);return {q:ls.reduce((a,x)=>a+(+x.l.quantity||0),0),u:ls[0]?ls[0].l.unit:'',ls};};
+  let no=0;const toc=[];const parts=[];
+  const head=(t)=>{no++;toc.push([no,t]);return `<h2><span>${no}</span> ${esc(t)}</h2>`;};
+  const boq=()=>{
+    const bySec={},order=[];lines.forEach((l,i)=>{const k=l.section||'Equipment';if(!bySec[k]){bySec[k]=[];order.push(k);}bySec[k].push({n:i+1,l});});
+    let h=`<section class="breakbefore">${head('Bill of quantities')}<p class="muted">${C.quote_ref?`Items and quantities are as per quotation ${esc(C.quote_ref)}. `:''}${priced?`Prices are in ${esc(cur)} and exclude VAT.`:''}</p>
+      <table class="t boq"><thead><tr><th style="width:30px">#</th><th style="width:15%">Brand</th><th style="width:16%">Model</th><th>Description</th><th style="text-align:right;width:8%">Qty</th>${priced?'<th style="text-align:right;width:11%">Unit price</th><th style="text-align:right;width:12%">Total</th>':''}</tr></thead><tbody>
+      ${order.map(k=>{const rows=bySec[k];const tot=rows.reduce((a,r)=>a+(r.l.line_total||0),0);
+        return `<tr class="grp"><td colspan="${priced?7:5}">${esc(k)}</td></tr>`+rows.map(r=>`<tr><td>${r.n}</td><td>${esc(r.l.manufacturer||'')}</td><td>${esc(r.l.model||'')}</td><td>${esc(r.l.description||'')}</td><td style="text-align:right;white-space:nowrap">${esc(r.l.quantity)} ${esc(r.l.unit||'')}</td>${priced?`<td style="text-align:right">${fmt(r.l.unit_selling_price||0)}</td><td style="text-align:right">${fmt(r.l.line_total||0)}</td>`:''}</tr>`).join('')+(priced?`<tr class="sub"><td colspan="6" style="text-align:right">${esc(k)} total</td><td style="text-align:right">${fmt(tot)}</td></tr>`:'');}).join('')}
+      </tbody></table>
+      ${priced?`<table class="t tot"><tr><td>Subtotal</td><td style="text-align:right">${esc(cur)} ${fmt(cm.subtotal)}</td></tr><tr><td>VAT ${cm.vat_rate}%</td><td style="text-align:right">${fmt(cm.vat)}</td></tr><tr class="gt"><td>Grand total</td><td style="text-align:right">${esc(cur)} ${fmt(cm.total)}</td></tr></table>`:''}</section>`;
+    if(priced&&order.length>1){
+      const tot=cm.subtotal||1;
+      h+=`<section>${head('Commercial summary')}<p>Quoted value by section, ${esc(cur)} excluding VAT, with share of the ${fmt(cm.subtotal)} subtotal.</p>${order.map(k=>{const v=bySec[k].reduce((a,r)=>a+(r.l.line_total||0),0);const pc=Math.round(v/tot*100);return `<div class="bar"><div class="bl">${esc(k)}</div><div class="bt"><div class="bf" style="width:${Math.max(2,pc)}%"></div></div><div class="bv">${fmt(v)} · ${pc}%</div></div>`;}).join('')}</section>`;
+    }
+    return h;
+  };
+  let boqDone=false;
+  (D.sections||[]).filter(on).forEach(s=>{
+    const title=s.title||PRP_TYPE_LABEL[s.type]||'';
+    if(s.type==='text'){parts.push(`<section>${head(title)}${(s.paragraphs||[]).map(x=>`<p>${p2(x)}</p>`).join('')}</section>`);}
+    else if(s.type==='kpis'){const k=(s.items||[]).filter(on);if(k.length)parts.push(`<section>${head(title)}<div class="kpis">${k.map(x=>`<div class="kpi"><div class="kv">${esc(x.value)}</div><div class="kl">${esc(x.label)}</div><div class="ks">${esc(x.sub||'')}</div></div>`).join('')}</div></section>`);}
+    else if(s.type==='columns'){const k=(s.items||[]).filter(on);if(k.length||s.intro)parts.push(`<section>${head(title)}${s.intro?`<p>${p2(s.intro)}</p>`:''}<div class="cols c${Math.min(4,Math.max(1,k.length))}">${k.map(x=>`<div class="pillar"><h4>${esc(x.title)}</h4><p>${p2(x.body)}</p></div>`).join('')}</div></section>`);}
+    else if(s.type==='points'){const k=(s.items||[]).filter(on);if(k.length)parts.push(`<section class="keep">${head(title)}${s.intro?`<p>${p2(s.intro)}</p>`:''}${k.map((x,i)=>`<div class="pt"><div class="pn">${i+1}</div><div><h4>${esc(x.title)}</h4><p>${p2(x.body)}</p></div></div>`).join('')}</section>`);}
+    else if(s.type==='list'){const k=(s.items||[]).filter(on);if(k.length)parts.push(`<section>${head(title)}<ol class="terms">${k.map(x=>`<li>${p2(x.text)}</li>`).join('')}</ol></section>`);}
+    else if(s.type==='systems'){
+      const gs=(s.groups||[]).filter(on);const n0=no+1;
+      let h=`<section class="breakbefore">${head(title)}${s.intro?`<p>${p2(s.intro)}</p>`:''}`;
+      gs.forEach((gr,gi)=>{const its=(gr.items||[]).filter(on);
+        h+=`<div class="sys"><h3>${n0}.${gi+1} ${esc(gr.title)}</h3>${gr.intro?`<p>${p2(gr.intro)}</p>`:''}${img(gr.image)}
+          <table class="t"><thead><tr><th style="width:34%">Item</th><th style="width:9%;text-align:right">Qty</th><th>What it does</th></tr></thead><tbody>${its.map(i=>{const x=qtyOf(i.line_ids);
+            const name=x.ls.map(y=>`<strong>${esc(y.l.model||y.l.description||'')}</strong><br><span class="muted">${esc(y.l.manufacturer||'')} · BOQ #${y.n}</span>`).join('<br>');
+            return `<tr><td>${name}</td><td style="text-align:right;white-space:nowrap">${x.q} ${esc(x.u||'')}</td><td>${p2(i.does||(x.ls[0]?x.ls[0].l.description:''))}</td></tr>`;}).join('')}</tbody></table></div>`;});
+      parts.push(h+'</section>');parts.push(boq());boqDone=true;
+    }
+  });
+  if(!boqDone)parts.push(boq());
+  const tocHTML=toc.length>=4?`<section><h2 style="margin-top:6px">In this proposal</h2><div class="toc">${toc.map(([n,t])=>`<div><b>${n}</b> ${esc(t)}</div>`).join('')}</div>${doc.options&&doc.options.cover_note?`<p style="margin-top:12px"><em>${p2(doc.options.cover_note)}</em></p>`:''}</section>`:(doc.options&&doc.options.cover_note?`<p><em>${p2(doc.options.cover_note)}</em></p>`:'');
+  const accept=`<section class="keep"><h3>Acceptance</h3><div class="sign"><div><div class="muted">FOR ${esc((C.customer||'THE CUSTOMER').toUpperCase())}</div><br>Name:<br><br>Signature:<br><br>Date:</div><div><div class="muted">FOR ${esc(printCoName().toUpperCase())}</div><br>Name: ${esc(C.prepared_by||'')}<br><br>Signature:<br><br>Date:</div></div></section>`;
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${PRP_CSS}</style></head><body>
+    <div class="cover">
+      <div class="lh"><div>${logo}<div class="co">${esc(printCoName())}</div><div class="muted">${addr}</div></div><div class="kind">${priced?'Technical and commercial proposal':'Technical proposal'}</div></div>
+      <div class="ct">${esc((D.cover&&D.cover.title)||C.title||'Proposal')}</div>
+      <div class="cs">${esc((D.cover&&D.cover.subtitle)||C.project||'')}</div>
+      <div class="meta"><div><label>Reference</label>${esc(C.reference||'')}${doc.version>1?' · v'+doc.version:''}</div><div><label>Date</label>${esc(C.date||'')}</div><div><label>Prepared for</label>${esc(C.customer||'')}</div><div><label>Prepared by</label>${esc(C.prepared_by||'')}</div></div>
+      <p>${p2(D.cover&&D.cover.scope_line)}</p>
+      ${img('hero','hero')}
+    </div>
+    <div class="breakbefore"></div>${tocHTML}${parts.join('')}${accept}
+  </body></html>`;
+}
+const PRP_CSS=`
+    @page{size:A4;margin:12mm 10mm 15mm 10mm}
+    *{box-sizing:border-box}
+    body{font-family:Arial,Helvetica,sans-serif;color:#1a1f2b;margin:0;padding:6px 26px;font-size:12.5px;line-height:1.5}
+    h2{font-size:21px;color:#1e3a5f;margin:0 0 8px;display:flex;align-items:baseline;gap:8px}h2 span{color:#c28a00}
+    h3{font-size:14px;color:#1e3a5f;margin:16px 0 6px}h4{font-size:13px;margin:0 0 3px;color:#1e3a5f}
+    p{margin:0 0 8px}.muted{color:#667085;font-size:11px}
+    section{margin-bottom:22px}.breakbefore{page-break-before:always}.keep{break-inside:avoid}
+    .cover{min-height:250mm;display:flex;flex-direction:column}
+    .lh{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;border-bottom:2px solid #1e3a5f;padding-bottom:12px}
+    .co{font-weight:700;font-size:14px;margin-top:6px}
+    .kind{text-align:right;font-size:11px;letter-spacing:.12em;color:#667085;text-transform:uppercase}
+    .ct{font-size:34px;line-height:1.15;color:#1e3a5f;margin:42px 0 6px;font-weight:700}.cs{font-size:17px;color:#475467;margin-bottom:16px}
+    .meta{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0;font-size:12px}.meta label{display:block;color:#667085;font-size:10px;text-transform:uppercase;letter-spacing:.05em}
+    .fig{margin:10px 0;break-inside:avoid}.fig img{width:100%;display:block;border-radius:6px}.fig figcaption{font-size:10.5px;color:#7c8798;font-style:italic;margin-top:4px}
+    .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0}
+    .kpi{background:#1e3a5f;color:#fff;border-radius:8px;padding:10px 12px;break-inside:avoid}.kv{font-size:22px;font-weight:700;color:#ffc83d}.kl{font-size:11.5px;font-weight:700;margin-top:2px}.ks{font-size:10px;opacity:.8}
+    table.t{width:100%;border-collapse:collapse;font-size:11.5px;margin:8px 0}
+    table.t th{background:#1e3a5f;color:#fff;text-align:left;padding:6px 8px;font-size:10.5px}
+    table.t td{border:1px solid #d8dce3;padding:6px 8px;vertical-align:top}
+    table.t tr{break-inside:avoid}
+    tr.grp td{background:#eef2f7;font-weight:700;color:#1e3a5f}tr.sub td{background:#f8fafc;font-weight:700}
+    table.tot{width:55%;margin-left:auto}table.tot td{font-size:12px}tr.gt td{background:#1e3a5f;color:#fff;font-weight:700}
+    .cols{display:grid;gap:10px;margin:10px 0}.c1{grid-template-columns:1fr}.c2{grid-template-columns:1fr 1fr}.c3{grid-template-columns:repeat(3,1fr)}.c4{grid-template-columns:repeat(4,1fr)}
+    .pillar{border:1px solid #d8dce3;border-radius:8px;padding:10px 12px;break-inside:avoid;background:#fafbfd}.pillar p{font-size:11.5px;margin:0}
+    .sys{margin-bottom:18px}.sys h3{border-left:4px solid #ffc83d;padding-left:8px}
+    .bar{display:grid;grid-template-columns:34% 1fr 24%;gap:8px;align-items:center;margin:5px 0;font-size:11.5px}.bt{background:#eef2f7;border-radius:4px;height:12px}.bf{background:#1e3a5f;height:12px;border-radius:4px}.bv{text-align:right}
+    ol.terms{margin:6px 0 0 18px;padding:0}ol.terms li{margin-bottom:6px}
+    .pt{display:flex;gap:10px;margin:8px 0;break-inside:avoid}.pn{width:24px;height:24px;border-radius:50%;background:#1e3a5f;color:#fff;text-align:center;line-height:24px;font-weight:700;flex:none}
+    .sign{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:10px;font-size:12px;break-inside:avoid}
+    .toc{columns:2;font-size:12px}.toc div{margin-bottom:3px}.toc b{color:#c28a00;margin-right:4px}`;
+
+function proposalPdfHTML2(doc){
+  const C=doc.content,D=C.doc||{},lines=C.lines||[],cm=C.commercials,priced=!!cm,imgs=C.images||{};
+  const cur=cm?cm.currency:'AED';
+  const LM={};lines.forEach((l,i)=>{LM[l.source_line_id]={n:i+1,l};});
+  const logo=PRINTCO?.logo_url?`<img src="${esc(PRINTCO.logo_url)}" alt="" style="max-height:54px;max-width:190px;object-fit:contain">`:'';
+  const addr=printAddrLines().map(l=>`<div>${esc(l)}</div>`).join('');
+  const on=x=>x&&x.include!==false;
+  const p2=s=>esc(s||'').replace(/\n/g,'<br>');
+  const footer=`${esc(printCoName())}`;
+  let secNo=0;const toc=[];
+  const sec=(title)=>{secNo++;toc.push(`${secNo} ${title}`);return secNo;};
+  const img=(key,cls)=>{const i=imgs[key];return i&&i.url?`<figure class="fig ${cls||''}"><img src="${esc(i.url)}" alt=""><figcaption>${esc(i.caption||'')}</figcaption></figure>`:'';};
+  const qtyOf=ids=>{const ls=(ids||[]).map(id=>LM[id]).filter(Boolean);const q=ls.reduce((a,x)=>a+(+x.l.quantity||0),0);const u=ls[0]?ls[0].l.unit:'';return {q,u,ls};};
+  // sections (built first so numbering/TOC are known)
+  let sSpace='',sOverview='',sSystems='',sBoq='',sComm='',sDelivery='',sTerms='',sConfirm='';
+  if(on(D.space)&&D.space.body){const n=sec(D.space.title||'The space');sSpace=`<section><h2><span>${n}</span> ${esc(D.space.title||'The space')}</h2><p>${p2(D.space.body)}</p></section>`;}
+  if(on(D.overview)){
+    const pill=(D.overview.pillars||[]).filter(on);
+    const glance=(D.systems||[]).filter(on).map(s=>{const its=(s.items||[]).filter(on);const nums=[].concat(...its.map(i=>(i.line_ids||[]).map(id=>LM[id]?LM[id].n:null))).filter(Boolean).sort((a,b)=>a-b);
+      return `<tr><td><strong>${esc(s.title)}</strong></td><td>${its.map(i=>{const x=qtyOf(i.line_ids);return x.ls.map(y=>esc(((y.l.model)||'').trim())).join(', ');}).filter(Boolean).join(' · ')}</td><td style="white-space:nowrap">BOQ ${nums.length>1?nums[0]+'–'+nums[nums.length-1]:nums[0]||''}</td></tr>`;}).join('');
+    const n=sec('System overview');
+    sOverview=`<section><h2><span>${n}</span> System overview</h2><p>${p2(D.overview.intro)}</p>
+      ${pill.length?`<div class="cols c${Math.min(4,pill.length)}">${pill.map(x=>`<div class="pillar"><h4>${esc(x.title)}</h4><p>${p2(x.body)}</p></div>`).join('')}</div>`:''}
+      <table class="t"><thead><tr><th style="width:26%">System</th><th>Main equipment</th><th style="width:14%">BOQ lines</th></tr></thead><tbody>${glance}</tbody></table></section>`;
+  }
+  const systems=(D.systems||[]).filter(on);
+  if(systems.length){
+    const n=sec('The systems');
+    sSystems=`<section class="breakbefore"><h2><span>${n}</span> The systems</h2>`+systems.map((s,si)=>{
+      const its=(s.items||[]).filter(on);
+      return `<div class="sys"><h3>${n}.${si+1} ${esc(s.title)}</h3>${s.intro?`<p>${p2(s.intro)}</p>`:''}${img(s.image)}
+        <table class="t"><thead><tr><th style="width:34%">Item</th><th style="width:9%;text-align:right">Qty</th><th>What it does</th></tr></thead><tbody>${its.map(i=>{const x=qtyOf(i.line_ids);
+          const name=x.ls.map(y=>`<strong>${esc(y.l.model||y.l.description||'')}</strong><br><span class="muted">${esc(y.l.manufacturer||'')} · BOQ #${y.n}</span>`).join('<br>');
+          return `<tr><td>${name}</td><td style="text-align:right;white-space:nowrap">${x.q} ${esc(x.u||'')}</td><td>${p2(i.does||(x.ls[0]?x.ls[0].l.description:''))}</td></tr>`;}).join('')}</tbody></table></div>`;}).join('')+`</section>`;
+  }
+  { // Bill of quantities (always)
+    const n=sec('Bill of quantities');
+    const bySec={},order=[];lines.forEach((l,i)=>{const k=l.section||'Equipment';if(!bySec[k]){bySec[k]=[];order.push(k);}bySec[k].push({n:i+1,l});});
+    sBoq=`<section class="breakbefore"><h2><span>${n}</span> Bill of quantities</h2>
+      <p class="muted">${C.quote_ref?`Items and quantities are as per quotation ${esc(C.quote_ref)}. `:''}${priced?`Prices are in ${esc(cur)} and exclude VAT.`:''}</p>
+      <table class="t boq"><thead><tr><th style="width:30px">#</th><th style="width:15%">Brand</th><th style="width:16%">Model</th><th>Description</th><th style="text-align:right;width:8%">Qty</th>${priced?'<th style="text-align:right;width:11%">Unit price</th><th style="text-align:right;width:12%">Total</th>':''}</tr></thead><tbody>
+      ${order.map(k=>{const rows=bySec[k];const tot=rows.reduce((a,r)=>a+(r.l.line_total||0),0);
+        return `<tr class="grp"><td colspan="${priced?7:5}">${esc(k)}</td></tr>`+rows.map(r=>`<tr><td>${r.n}</td><td>${esc(r.l.manufacturer||'')}</td><td>${esc(r.l.model||'')}</td><td>${esc(r.l.description||'')}</td><td style="text-align:right;white-space:nowrap">${esc(r.l.quantity)} ${esc(r.l.unit||'')}</td>${priced?`<td style="text-align:right">${fmt(r.l.unit_selling_price||0)}</td><td style="text-align:right">${fmt(r.l.line_total||0)}</td>`:''}</tr>`).join('')+(priced?`<tr class="sub"><td colspan="6" style="text-align:right">${esc(k)} total</td><td style="text-align:right">${fmt(tot)}</td></tr>`:'');}).join('')}
+      </tbody></table>
+      ${priced?`<table class="t tot"><tr><td>Subtotal</td><td style="text-align:right">${esc(cur)} ${fmt(cm.subtotal)}</td></tr><tr><td>VAT ${cm.vat_rate}%</td><td style="text-align:right">${fmt(cm.vat)}</td></tr><tr class="gt"><td>Grand total</td><td style="text-align:right">${esc(cur)} ${fmt(cm.total)}</td></tr></table>`:''}</section>`;
+    if(priced){
+      const tot=cm.subtotal||1;
+      const bars=order.map(k=>{const v=bySec[k].reduce((a,r)=>a+(r.l.line_total||0),0);const pc=Math.round(v/tot*100);return `<div class="bar"><div class="bl">${esc(k)}</div><div class="bt"><div class="bf" style="width:${Math.max(2,pc)}%"></div></div><div class="bv">${fmt(v)} · ${pc}%</div></div>`;}).join('');
+      const n2=sec('Commercial summary');
+      sComm=`<section><h2><span>${n2}</span> Commercial summary</h2><p>Quoted value by section, ${esc(cur)} excluding VAT, with share of the ${fmt(cm.subtotal)} subtotal.</p>${bars}</section>`;
+    }
+  }
+  if(on(D.delivery)){
+    const who=(D.delivery.who||[]).filter(on);const n=sec('Delivery and scope');
+    sDelivery=`<section><h2><span>${n}</span> Delivery and scope</h2><p>${p2(D.delivery.intro)}</p>${who.length?`<div class="cols c3">${who.map(w=>`<div class="who ${w.party==='client'?'cl':''}"><div class="par">${w.party==='client'?esc(C.customer||'Client'):esc(printCoName())}</div><h4>${esc(w.title)}</h4><p>${p2(w.body)}</p></div>`).join('')}</div>`:''}</section>`;
+  }
+  const terms=(D.terms||[]).filter(on);
+  if(terms.length){const n=sec('Terms and conditions');sTerms=`<section><h2><span>${n}</span> Terms and conditions</h2><ol class="terms">${terms.map(t=>`<li>${p2(t.text)}</li>`).join('')}</ol></section>`;}
+  const conf=(D.confirm||[]).filter(on);
+  { const n=sec(conf.length?'Points to confirm and acceptance':'Acceptance');
+    sConfirm=`<section class="breakbefore"><h2><span>${n}</span> ${conf.length?'Points to confirm and acceptance':'Acceptance'}</h2>
+      ${conf.length?`<p>The following need agreement before the order is placed. Any resulting change to size, finish or quantity would be covered by a revised proposal.</p>${conf.map((x,i)=>`<div class="pt"><div class="pn">${i+1}</div><div><h4>${esc(x.title)}</h4><p>${p2(x.body)}</p></div></div>`).join('')}`:''}
+      <h3 style="margin-top:18px">Acceptance</h3><div class="sign"><div><div class="muted">FOR ${esc((C.customer||'THE CUSTOMER').toUpperCase())}</div><br>Name:<br><br>Signature:<br><br>Date:</div><div><div class="muted">FOR ${esc(printCoName().toUpperCase())}</div><br>Name: ${esc(C.prepared_by||'')}<br><br>Signature:<br><br>Date:</div></div></section>`; }
+  const kp=(D.summary&&D.summary.kpis||[]).filter(on);
+  const invest=priced?`<h3>Investment</h3><table class="t tot"><tr><td>Subtotal</td><td style="text-align:right">${esc(cur)} ${fmt(cm.subtotal)}</td></tr><tr><td>VAT ${cm.vat_rate}%</td><td style="text-align:right">${fmt(cm.vat)}</td></tr><tr class="gt"><td>Grand total</td><td style="text-align:right">${esc(cur)} ${fmt(cm.total)}</td></tr></table>`:'';
+  const summary=on(D.summary)?`<section class="breakbefore"><h2>Summary</h2>${(D.summary.paragraphs||[]).map(x=>`<p>${p2(x)}</p>`).join('')}${doc.options&&doc.options.cover_note?`<p><em>${p2(doc.options.cover_note)}</em></p>`:''}
+      ${kp.length?`<div class="kpis">${kp.map(k=>`<div class="kpi"><div class="kv">${esc(k.value)}</div><div class="kl">${esc(k.label)}</div><div class="ks">${esc(k.sub||'')}</div></div>`).join('')}</div>`:''}${invest}
+      <h3>In this proposal</h3><div class="toc">${toc.map(t=>{const [n,...r]=t.split(' ');return `<div><b>${n}</b> ${esc(r.join(' '))}</div>`;}).join('')}</div></section>`:'';
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+    @page{size:A4;margin:12mm 10mm 15mm 10mm}
+    *{box-sizing:border-box}
+    body{font-family:Arial,Helvetica,sans-serif;color:#1a1f2b;margin:0;padding:6px 26px;font-size:12.5px;line-height:1.5}
+    h2{font-size:21px;color:#1e3a5f;margin:0 0 8px;display:flex;align-items:baseline;gap:8px}h2 span{color:#c28a00}
+    h3{font-size:14px;color:#1e3a5f;margin:16px 0 6px}h4{font-size:13px;margin:0 0 3px;color:#1e3a5f}
+    p{margin:0 0 8px}.muted{color:#667085;font-size:11px}
+    section{margin-bottom:22px}.breakbefore{page-break-before:always}
+    .cover{min-height:250mm;display:flex;flex-direction:column}
+    .lh{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;border-bottom:2px solid #1e3a5f;padding-bottom:12px}
+    .co{font-weight:700;font-size:14px;margin-top:6px}.lh .muted{font-size:11px}
+    .kind{text-align:right;font-size:11px;letter-spacing:.12em;color:#667085;text-transform:uppercase}
+    .ct{font-size:34px;line-height:1.15;color:#1e3a5f;margin:42px 0 6px;font-weight:700}.cs{font-size:17px;color:#475467;margin-bottom:16px}
+    .meta{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0;font-size:12px}.meta label{display:block;color:#667085;font-size:10px;text-transform:uppercase;letter-spacing:.05em}
+    .fig{margin:10px 0;break-inside:avoid}.fig img{width:100%;display:block;border-radius:6px}.fig figcaption{font-size:10.5px;color:#7c8798;font-style:italic;margin-top:4px}
+    .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:12px 0}
+    .kpi{background:#1e3a5f;color:#fff;border-radius:8px;padding:10px 12px;break-inside:avoid}.kv{font-size:22px;font-weight:700;color:#ffc83d}.kl{font-size:11.5px;font-weight:700;margin-top:2px}.ks{font-size:10px;opacity:.8}
+    table.t{width:100%;border-collapse:collapse;font-size:11.5px;margin:8px 0}
+    table.t th{background:#1e3a5f;color:#fff;text-align:left;padding:6px 8px;font-size:10.5px}
+    table.t td{border:1px solid #d8dce3;padding:6px 8px;vertical-align:top}
+    table.t tr{break-inside:avoid}
+    tr.grp td{background:#eef2f7;font-weight:700;color:#1e3a5f}tr.sub td{background:#f8fafc;font-weight:700}
+    table.tot{width:55%;margin-left:auto}table.tot td{font-size:12px}tr.gt td{background:#1e3a5f;color:#fff;font-weight:700}
+    .cols{display:grid;gap:10px;margin:10px 0}.c1{grid-template-columns:1fr}.c2{grid-template-columns:1fr 1fr}.c3{grid-template-columns:repeat(3,1fr)}.c4{grid-template-columns:repeat(4,1fr)}
+    .pillar,.who{border:1px solid #d8dce3;border-radius:8px;padding:10px 12px;break-inside:avoid;background:#fafbfd}.pillar p,.who p{font-size:11.5px;margin:0}
+    .who .par{font-size:9.5px;letter-spacing:.06em;color:#c28a00;font-weight:700;text-transform:uppercase;margin-bottom:2px}.who.cl .par{color:#667085}
+    .sys{margin-bottom:18px}.sys h3{border-left:4px solid #ffc83d;padding-left:8px}
+    .bar{display:grid;grid-template-columns:34% 1fr 24%;gap:8px;align-items:center;margin:5px 0;font-size:11.5px}.bt{background:#eef2f7;border-radius:4px;height:12px}.bf{background:#1e3a5f;height:12px;border-radius:4px}.bv{text-align:right}
+    ol.terms{margin:6px 0 0 18px;padding:0}ol.terms li{margin-bottom:6px}
+    .pt{display:flex;gap:10px;margin:8px 0;break-inside:avoid}.pn{width:24px;height:24px;border-radius:50%;background:#1e3a5f;color:#fff;text-align:center;line-height:24px;font-weight:700;flex:none}
+    .sign{display:grid;grid-template-columns:1fr 1fr;gap:30px;margin-top:10px;font-size:12px;break-inside:avoid}
+    .toc{columns:2;font-size:12px}.toc div{margin-bottom:3px}.toc b{color:#c28a00;margin-right:4px}
+  </style></head><body>
+    <div class="cover">
+      <div class="lh"><div>${logo}<div class="co">${esc(printCoName())}</div><div class="muted">${addr}</div></div><div class="kind">${priced?'Technical and commercial proposal':'Technical proposal'}</div></div>
+      <div class="ct">${esc((D.cover&&D.cover.title)||C.title||'Proposal')}</div>
+      <div class="cs">${esc((D.cover&&D.cover.subtitle)||C.project||'')}</div>
+      <div class="meta"><div><label>Reference</label>${esc(C.reference||'')}${doc.version>1?' · v'+doc.version:''}</div><div><label>Date</label>${esc(C.date||'')}</div><div><label>Prepared for</label>${esc(C.customer||'')}</div><div><label>Prepared by</label>${esc(C.prepared_by||'')}</div></div>
+      <p>${p2(D.cover&&D.cover.scope_line)}</p>
+      ${img('hero','hero')}
+    </div>
+    ${summary}${sSpace}${sOverview}${sSystems}${sBoq}${sComm}${sDelivery}${sTerms}${sConfirm}
+  </body></html>`;
+}
+
 async function propArchiveToggle(){
   const p=PRP.detail.proposal,restore=p.lifecycle==='archived';
   if(!restore&&!confirm('Archive this proposal?'))return;
@@ -9412,31 +9841,24 @@ async function propArchiveToggle(){
 PRP.docs=null;
 async function loadDocs(){
   const r=await api('GET','/api/proposals/'+PRP.detailId+'/documents');
-  PRP.docs=r.error?[]:(r.documents||[]);renderPreviews();
-}
-async function createDoc(){
-  const prices=!!document.getElementById('docPrices')?.checked;
-  const note=document.getElementById('docNote')?.value||'';
-  const r=await api('POST','/api/proposals/'+PRP.detailId+'/documents',{options:{show_prices:prices,cover_note:note}});
-  if(r.error){PRP.pvMsg=r.error;renderPreviews();return;}
-  PRP.pvMsg='';await loadProposalDetail();
+  PRP.docs=r.error?[]:(r.documents||[]);renderWizard();
 }
 async function docSubmit(did){
   const r=await api('POST','/api/proposals/'+PRP.detailId+'/documents/'+did+'/submit');
-  if(r.error){PRP.pvMsg=r.error;renderPreviews();return;}
+  if(r.error){PRP.msg=r.error;renderWizard();return;}
   await loadProposalDetail();
 }
 async function docDecide(did,decision){
   let note='';if(decision==='reject'){note=prompt('Reason for sending back (optional):')||'';}
   const r=await api('POST','/api/proposals/'+PRP.detailId+'/documents/'+did+'/decide',{decision,note});
-  if(r.error){PRP.pvMsg=r.error;renderPreviews();return;}
+  if(r.error){PRP.msg=r.error;renderWizard();return;}
   await loadProposalDetail();
 }
 async function refreshProposalSource(){
   if(!confirm('Re-capture the quotation as it is now? Existing document versions stay unchanged; create a new version to use the new data.'))return;
   const r=await api('POST','/api/proposals/'+PRP.detailId+'/refresh-source');
-  if(r.error){PRP.pvMsg=r.error;renderPreviews();return;}
-  PRP.pvMsg='';await loadProposalDetail();
+  if(r.error){PRP.msg=r.error;renderWizard();return;}
+  PRP.msg='';await loadProposalDetail();
 }
 async function downloadProposalPdf(did,btn){
   if(btn){btn.disabled=true;btn.textContent='⏳ Generating…';}
@@ -9452,7 +9874,7 @@ async function downloadProposalPdf(did,btn){
   }catch(e){alert('Could not generate the PDF.');}
   finally{if(btn){btn.disabled=false;btn.textContent='📄 PDF';}}
 }
-function proposalPdfHTML(doc){
+function proposalPdfHTMLv1(doc){
   const c=doc.content||{},w=c.writeup||{},cm=c.commercials,priced=!!cm;
   const logo=PRINTCO?.logo_url?`<img src="${esc(PRINTCO.logo_url)}" alt="" style="max-height:56px;max-width:180px;object-fit:contain;margin-bottom:8px">`:'';
   const addr=printAddrLines().map(l=>`<div>${esc(l)}</div>`).join('');
@@ -9499,12 +9921,7 @@ function proposalDocsHTML(){
   const changed=PRP.detail.source_changed;
   let h='<div class="card-title" style="margin-top:18px">Proposal document</div>';
   if(changed)h+=`<div style="background:#fff7e6;border:1px solid #f5c26b;border-radius:8px;padding:10px 12px;font-size:13px;margin-bottom:10px">The source quotation has changed since this proposal captured it. ${active?`<button class="btn btn-sm" style="margin-left:8px" onclick="refreshProposalSource()">Re-capture quotation</button>`:''}</div>`;
-  if(active&&p.selected_preview_id){
-    h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
-      <div style="flex:1;min-width:240px"><label style="font-size:12px;color:var(--gray-500)">Cover note (optional)</label><input id="docNote" style="width:100%" placeholder="Short message shown under the summary"></div>
-      ${canPrice?'<label style="font-size:13px;display:flex;gap:6px;align-items:center"><input type="checkbox" id="docPrices"> Show prices</label>':''}
-      <button class="btn btn-navy" onclick="createDoc()">${(docs&&docs.length)?'Create new version':'Create document'}</button></div>`;
-  }else if(active)h+='<div style="font-size:13px;color:var(--gray-500);margin-bottom:10px">Pick a preview with “Use this preview” to create the document.</div>';
+  if(active)h+=`<div style="margin-bottom:12px"><button class="btn btn-navy" onclick="prpGo(${PRP.dr&&PRP.dr.status==='ready'?3:1})">${(docs&&docs.length)?'Create a new version (review &amp; confirm)':'Review &amp; confirm to create the document'}</button></div>`;
   if(docs==null)h+='<div style="color:var(--gray-500);font-size:13px">Loading…</div>';
   else if(!docs.length)h+='<div style="color:var(--gray-500);font-size:13px">No document versions yet.</div>';
   else h+=`<table style="width:100%;font-size:13px;border-collapse:collapse">${docs.map(d=>`<tr style="border-top:1px solid var(--gray-100)">
@@ -9514,40 +9931,6 @@ function proposalDocsHTML(){
         ${active&&(d.status==='draft'||d.status==='rejected')?`<button class="btn btn-sm" onclick="docSubmit('${d.id}')">Submit for approval</button>`:''}
         ${active&&isAdmin&&d.status==='pending_approval'?`<button class="btn btn-navy btn-sm" onclick="docDecide('${d.id}','approve')">Approve</button> <button class="btn btn-sm" onclick="docDecide('${d.id}','reject')">Send back</button>`:''}</td></tr>`).join('')}</table>`;
   return h;
-}
-function pvCardHTML(v,isSel){
-  const w=v.writeup||{};
-  const busy=v.status==='queued'||v.status==='running';
-  const stateTxt=v.status==='queued'?'Waiting to start…':v.stage_detail==='rendering'?'Write-up done — rendering the image (up to ~2 min)…':'Writing the proposal text…';
-  const img=v.image_url?`<img src="${esc(v.image_url)}" alt="Preview ${v.seq}" style="width:100%;border-radius:8px;display:block">`:(busy?`<div style="aspect-ratio:3/2;background:var(--gray-100);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--gray-500);font-size:13px;padding:12px;text-align:center">${esc(stateTxt)}</div>`:'');
-  const body=w.summary?`<div style="font-size:15px;font-weight:700;margin:10px 0 4px">${esc(w.headline||'')}</div><div style="font-size:13px;margin-bottom:8px">${esc(w.summary)}</div>${(w.sections||[]).map(s=>`<div style="font-size:13px;margin-bottom:6px"><strong>${esc(s.title)}</strong><div>${esc(s.body)}</div></div>`).join('')}${(w.highlights||[]).length?`<ul style="font-size:13px;margin:6px 0 0 18px">${w.highlights.map(h=>`<li>${esc(h)}</li>`).join('')}</ul>`:''}`:'';
-  const fail=v.status==='failed'?`<div class="auth-err" style="margin-top:8px">${esc(v.error||'Generation failed.')}</div>`:'';
-  const canUse=v.status==='ready'&&PRP.detail.proposal.lifecycle==='active';
-  return `<div style="border:${isSel?'2px solid var(--navy)':'1px solid var(--gray-200)'};border-radius:10px;padding:12px;background:#fff">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:12px;color:var(--gray-500)"><span>Preview ${v.seq}${v.image_model?' · '+esc(v.image_model):''}</span>${isSel?'<span style="color:var(--navy);font-weight:700">✓ Selected</span>':''}</div>
-    ${img}${body}${fail}
-    ${v.instruction?`<div style="font-size:12px;color:var(--gray-500);margin-top:6px">Guidance: ${esc(v.instruction)}</div>`:''}
-    ${canUse&&!isSel?`<button class="btn btn-navy btn-sm" style="margin-top:10px" onclick="usePreview('${v.id}')">Use this preview</button>`:''}
-  </div>`;
-}
-function proposalPreviewInner(){
-  const d=PRP.detail;if(!d||!d.proposal)return '';
-  const p=d.proposal,list=PRP.pv;
-  const active=p.lifecycle==='active';
-  const running=(list||[]).some(v=>v.status==='queued'||v.status==='running');
-  const gen=active?`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
-      <div style="flex:1;min-width:240px"><label style="font-size:12px;color:var(--gray-500)">Guidance for this preview (optional)</label>
-      <input id="pvInstr" placeholder="e.g. Boardroom for 14 people, modern look, wall-mounted displays" style="width:100%"></div>
-      <button class="btn btn-navy" onclick="generatePreview()" ${(PRP.pvBusy||running)?'disabled':''}>${(list&&list.length)?'Generate another preview':'Generate preview'}</button></div>`
-    :'<div style="font-size:13px;color:var(--gray-500);margin-bottom:10px">Restore this proposal to generate previews.</div>';
-  const note='<div style="font-size:12px;color:var(--gray-500);margin-bottom:10px">Only the customer-safe equipment list is sent to the AI — no cost, margin, supplier discounts or prices. The image is illustrative; screens are not shown with real content.</div>';
-  const msg=PRP.pvMsg?`<div class="auth-err" style="margin-bottom:10px">${esc(PRP.pvMsg)}</div>`:'';
-  let grid='';
-  if(list==null)grid='<div style="color:var(--gray-500);font-size:13px">Loading…</div>';
-  else if(!list.length)grid='<div style="color:var(--gray-500);font-size:13px">No previews yet.</div>';
-  else grid=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px">${list.map(v=>pvCardHTML(v,v.id===PRP.pvSel)).join('')}</div>`;
-  const arch=`<div style="margin-top:12px;text-align:right"><button class="btn btn-sm" onclick="propArchiveToggle()">${active?'Archive proposal':'Restore proposal'}</button></div>`;
-  return note+msg+gen+grid+proposalDocsHTML()+arch;
 }
 function proposalDetailHTML(){
   return `<button class="btn" style="margin-bottom:12px" onclick="A.page='proposals';PRP.list=null;draw()">← Back to Proposals</button><div id="propDetailBox">${proposalDetailInner()}</div>`;
