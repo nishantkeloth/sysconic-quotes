@@ -546,7 +546,7 @@ def _refs_for_models(sb, company_id, models, limit=4):
     return _reference_images(sb, company_id, {'lines': [{'model': m} for m in (models or [])]}, limit)
 
 
-def _call_image_edit_openai(profile, prompt, refs):
+def _call_image_edit_openai(profile, prompt, refs, timeout=110):
     """gpt-image edits endpoint with reference photos (multipart)."""
     import base64, uuid
     secret = os.environ.get(profile['credential_ref'], '')
@@ -564,7 +564,7 @@ def _call_image_edit_openai(profile, prompt, refs):
     req = urllib.request.Request('https://api.openai.com/v1/images/edits', data=b''.join(parts), method='POST',
                                  headers={'Authorization': 'Bearer ' + secret, 'Content-Type': f'multipart/form-data; boundary={boundary}'})
     try:
-        with urllib.request.urlopen(req, timeout=110) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             j = json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
         raise GenError(f'provider returned {e.code} on reference edit')

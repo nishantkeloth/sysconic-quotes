@@ -11,7 +11,7 @@ same auth gate, same Vercel function). Customer-safe snapshot only: no cost,
 margin or supplier discount ever reaches a model. Prices are never sent to a
 model either - they are added to the document by code, not by AI.
 """
-import os, re, json, base64
+import os, re, json, base64, time
 from datetime import datetime, timedelta
 from flask import request, jsonify, g
 
@@ -53,8 +53,9 @@ def register(app, H):
         cutoff = (datetime.utcnow() - timedelta(minutes=STALE_MINUTES)).isoformat()
         sb.table('proposal_drafts').update({'status': 'failed', 'error': 'Generation timed out. Please try again.'})\
             .eq('proposal_id', pid).in_('status', ['queued', 'running']).lt('updated_at', cutoff).execute()
-        sb.table('proposal_images').update({'status': 'failed', 'error': 'Image generation timed out. Please try again.'})\
-            .eq('proposal_id', pid).in_('status', ['queued', 'running']).lt('updated_at', cutoff).execute()
+        icut = (datetime.utcnow() - timedelta(minutes=6)).isoformat()
+        sb.table('proposal_images').update({'status': 'failed', 'error': 'Image generation timed out (the provider took too long or the request was interrupted). Try again, or use fewer reference photos.'})\
+            .eq('proposal_id', pid).in_('status', ['queued', 'running']).lt('updated_at', icut).execute()
 
     def latest_snapshot(sb, pid):
         r = sb.table('proposal_source_snapshots').select('*').eq('proposal_id', pid).order('created_at', desc=True).limit(1).execute().data
@@ -62,7 +63,7 @@ def register(app, H):
 
     def image_public(row):
         out = {k: row.get(k) for k in ('slot_key', 'title', 'caption', 'prompt', 'model_refs', 'status', 'include', 'sort',
-                                         'image_model', 'error', 'updated_at')}
+                                         'image_model', 'error', 'updated_at', 'started_at')}
         out['url'] = None
         if row.get('image_path'):
             try:
@@ -385,6 +386,16 @@ The first image must have key "hero" (main space with the principal equipment). 
         sb.table('proposal_images').update({'status': 'queued', 'error': None, 'updated_at': now()}).eq('id', im['id']).execute()
         return jsonify({'ok': True})
 
+    @app.route('/api/proposals/<pid>/draft/images/<key>/reset', methods=['POST'])
+    def reset_image(pid, key):
+        sb, claims = get_sb(), g.claims
+        if not H['_load'](sb, claims, pid): return jsonify({'error': 'Not found'}), 404
+        im = load_image(sb, claims, pid, key)
+        if not im: return jsonify({'error': 'Not found'}), 404
+        if im['status'] in ('queued', 'running'):
+            sb.table('proposal_images').update({'status': 'failed', 'error': 'Cancelled.', 'updated_at': now()}).eq('id', im['id']).execute()
+        return jsonify({'ok': True})
+
     @app.route('/api/proposals/<pid>/draft/images/<key>/run', methods=['POST'])
     def run_image(pid, key):
         sb, claims = get_sb(), g.claims
@@ -403,19 +414,22 @@ The first image must have key "hero" (main space with the principal equipment). 
             style = (' Photorealistic professional architectural photography, natural balanced lighting, clean modern interior. '
                      'Any screens show blank or abstract gradients. No readable text, no logos, no brand names, no people.')
             prompt = (im.get('prompt') or im.get('title') or 'Meeting room') + style
+            t0 = time.time()
+            left = lambda: 275 - (time.time() - t0)   # Vercel limit is 300 s; keep a margin for upload + DB writes
             refs = H['_refs_for_models'](sb, claims['company_id'], im.get('model_refs') or [])
             img, used, err = None, None, None
             for prof in (s.get('image_profile'), s.get('image_fallback')):
                 if not prof or not prof.get('model'): continue
+                if left() < 40: err = err or 'ran out of time'; break
                 try:
                     if refs and prof['provider'] == 'openai':
                         try:
                             img = H['_call_image_edit_openai'](prof, 'Use the attached product photos as the exact visual reference for the matching '
-                                                               'equipment (shape, colour, proportions). ' + prompt, refs)
+                                                               'equipment (shape, colour, proportions). ' + prompt, refs, min(100, left() - 20))
                         except GenError:
                             img = None
                     if img is None:
-                        img = H['_call_image'](prof, prompt, 110 if refs else 230)
+                        img = H['_call_image'](prof, prompt, max(30, min(150, left() - 15)))
                     used = prof; break
                 except GenError as e:
                     err = str(e)

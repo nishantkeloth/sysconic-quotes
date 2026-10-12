@@ -9440,6 +9440,16 @@ async function prpImageRun(key){
   }catch(e){}
   finally{delete PRP.running[key];loadDraft(false);}
 }
+function prpElapsed(i){
+  const t=i.status==='running'&&i.started_at?Date.parse(i.started_at):NaN;
+  const sec=isNaN(t)?null:Math.max(0,Math.round((Date.now()-t)/1000));
+  if(i.status==='queued'||sec==null)return 'Starting…';
+  return 'Generating… '+sec+'s'+(sec>150?' (taking longer than usual; it stops by itself after about 5 minutes and shows the reason)':' (usually 1–2 min)');
+}
+async function prpImageReset(key){
+  await api('POST','/api/proposals/'+PRP.detailId+'/draft/images/'+key+'/reset');
+  delete PRP.running[key];await loadDraft(false);
+}
 async function prpImagesAll(){
   const todo=(PRP.im||[]).filter(i=>i.include&&i.status!=='ready'&&i.status!=='running'&&i.status!=='queued').map(i=>i.slot_key);
   if(!todo.length){PRP.msg='All included images are already generated.';renderWizard();return;}
@@ -9497,7 +9507,7 @@ function prpStep2(){
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">${active?'<button class="btn btn-navy" onclick="prpImagesAll()">Generate all images</button>':''}<button class="btn" onclick="prpGo(1)">← Content</button><button class="btn btn-navy" onclick="prpGo(3)">Next: Review →</button></div>`;
   h+=`<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(360px,1fr));gap:12px">`+ims.map(i=>{
     const busy=i.status==='queued'||i.status==='running';
-    const pic=i.url?`<img src="${esc(i.url)}" style="width:100%;border-radius:8px;display:block" alt="">`:`<div style="aspect-ratio:3/2;background:var(--gray-100);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--gray-500);font-size:13px;text-align:center;padding:10px">${busy?'Generating… (up to ~2 min)':i.status==='failed'?'Failed':'Not generated yet'}</div>`;
+    const pic=i.url?`<img src="${esc(i.url)}" style="width:100%;border-radius:8px;display:block" alt="">`:`<div style="aspect-ratio:3/2;background:var(--gray-100);border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--gray-500);font-size:13px;text-align:center;padding:10px">${busy?prpElapsed(i):i.status==='failed'?'Failed':'Not generated yet'}</div>`;
     const k=i.slot_key;
     return `<div style="border:1px solid var(--gray-200);border-radius:10px;padding:12px;background:#fff;${i.include?'':'opacity:.55'}">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><strong style="font-size:13px">${k==='hero'?'Main image':'Image'}: ${esc(i.title||k)}</strong><label style="font-size:12px;cursor:pointer"><input type="checkbox" ${i.include?'checked':''} onchange="prpImagePatch('${k}','include',this.checked)"> Include</label></div>
@@ -9505,7 +9515,7 @@ function prpStep2(){
       ${i.status==='failed'&&i.error?`<div class="auth-err" style="margin-top:6px">${esc(i.error)}</div>`:''}
       <label style="font-size:11px;color:var(--gray-500);display:block;margin-top:8px">Caption</label><input value="${esc(i.caption||'')}" style="width:100%;box-sizing:border-box;font-size:13px" onchange="prpImageField('${k}','caption',this.value)">
       <label style="font-size:11px;color:var(--gray-500);display:block;margin-top:6px">What the image shows (prompt)</label><textarea rows="4" style="width:100%;box-sizing:border-box;font-size:12px" onchange="prpImageField('${k}','prompt',this.value)">${esc(i.prompt||'')}</textarea>
-      ${active?`<button class="btn btn-sm ${i.status==='ready'?'':'btn-navy'}" style="margin-top:8px" ${busy?'disabled':''} onclick="prpImageRun('${k}')">${i.status==='ready'?'Regenerate':'Generate'}</button>`:''}
+      ${active?(busy?`<button class="btn btn-sm" style="margin-top:8px" onclick="prpImageReset('${k}')">Cancel</button>`:`<button class="btn btn-sm ${i.status==='ready'?'':'btn-navy'}" style="margin-top:8px" onclick="prpImageRun('${k}')">${i.status==='ready'?'Regenerate':'Generate'}</button>`):''}
     </div>`;}).join('')+`</div>`;
   return h;
 }
