@@ -445,6 +445,106 @@ The first image must have key "hero" (main space with the principal equipment). 
         except Exception as e:
             return fail(f'Unexpected error: {str(e)[:200]}')
 
+
+    # ── Upload a BOQ (PDF / Word / Excel text) instead of picking a quotation ──
+    EXTRACT_SYSTEM = """You extract a bill of quantities (BOQ) from a document. Return ONLY one JSON object, no markdown:
+{"customer": str, "project": str, "currency": str, "truncated": bool,
+ "lines": [{"section": str, "manufacturer": str, "model": str, "description": str, "quantity": number, "unit": str, "unit_price": number or null, "total": number or null}]}
+Rules: copy only what the document says; never invent or guess items, quantities, models or prices. One entry per BOQ line item. Skip sub-totals, totals, VAT and notes rows. "section" is the heading/group the line sits under (empty if none). Keep the original model/part number text. If a quantity is missing use 1. If a unit is missing use "Pcs". Put numbers as plain numbers (no currency symbols or thousands separators). customer/project/currency only if clearly stated, else "". If there are more than 150 line items, return the first 150 and set truncated to true."""
+
+    def docx_text(b):
+        import io, docx
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+        d = docx.Document(io.BytesIO(b))
+        out = []
+        for el in d.element.body.iterchildren():
+            if el.tag.endswith('}p'):
+                t = Paragraph(el, d).text.strip()
+                if t: out.append(t)
+            elif el.tag.endswith('}tbl'):
+                for row in Table(el, d).rows:
+                    cells, prev = [], None
+                    for c in row.cells:
+                        if c._tc is prev: continue
+                        prev = c._tc
+                        cells.append(c.text.strip().replace('\n', ' / '))
+                    if any(cells): out.append(' | '.join(cells))
+        return '\n'.join(out)
+
+    def pdf_text(b):
+        import io
+        from pypdf import PdfReader
+        r = PdfReader(io.BytesIO(b))
+        return '\n'.join((pg.extract_text() or '') for pg in r.pages[:60])
+
+    def num(x):
+        try:
+            if x is None or x == '': return None
+            return float(str(x).replace(',', '').strip())
+        except Exception:
+            return None
+
+    @app.route('/api/proposals/extract-boq', methods=['POST'])
+    def extract_boq():
+        sb, claims = get_sb(), g.claims
+        s = H['_active_settings'](sb, claims['company_id'])
+        if H['_status'](s)['text'] != 'ready':
+            return jsonify({'error': 'Proposal AI text model is not ready. An administrator must finish Settings → Proposal AI.', 'code': 'PROPOSAL_AI_NOT_CONFIGURED'}), 503
+        d = request.json or {}
+        fname = clip(d.get('filename'), 150).lower()
+        ext = fname.rsplit('.', 1)[-1] if '.' in fname else ''
+        prof = s.get('text_profile')
+        text, pdf_b64 = None, None
+        try:
+            if d.get('text'):                                   # Excel/CSV already converted to text in the browser
+                text = clip(d['text'], 250_000)
+            else:
+                raw = base64.b64decode(d.get('data') or '', validate=False)
+                if not raw: return jsonify({'error': 'The file is empty.'}), 400
+                if len(raw) > 3_000_000: return jsonify({'error': 'The file is too large. Please use a file under 3 MB.'}), 413
+                if ext == 'docx':
+                    text = docx_text(raw)
+                elif ext == 'pdf':
+                    if prof['provider'] == 'anthropic':
+                        pdf_b64 = base64.b64encode(raw).decode()
+                    else:
+                        text = pdf_text(raw)
+                elif ext in ('txt', 'csv'):
+                    text = raw.decode('utf-8', 'replace')[:250_000]
+                else:
+                    return jsonify({'error': 'Unsupported file type. Use PDF, Word (.docx), Excel or CSV.'}), 400
+        except Exception as e:
+            return jsonify({'error': 'Could not read the file: ' + str(e)[:150]}), 400
+        if text is not None and len(text.strip()) < 20:
+            return jsonify({'error': 'No readable text was found in the file. If it is a scanned PDF, use the Anthropic text model in Proposal AI settings.'}), 422
+        try:
+            secret = os.environ.get(prof['credential_ref'], '')
+            if not secret: raise GenError(f"server variable {prof['credential_ref']} is not set")
+            if pdf_b64:
+                r = H['_post_json']('https://api.anthropic.com/v1/messages', {'x-api-key': secret, 'anthropic-version': '2023-06-01'},
+                    {'model': prof['model'], 'max_tokens': 9000, 'system': EXTRACT_SYSTEM,
+                     'messages': [{'role': 'user', 'content': [
+                         {'type': 'document', 'source': {'type': 'base64', 'media_type': 'application/pdf', 'data': pdf_b64}},
+                         {'type': 'text', 'text': 'Extract the BOQ from this document.'}]}]}, 200)
+                out = ''.join(b.get('text', '') for b in (r.get('content') or []) if b.get('type') == 'text')
+            else:
+                out = llm(prof, EXTRACT_SYSTEM, 'Extract the BOQ from this document text:\n\n' + text, 9000, 200)
+            raw_j = H['_extract_json'](out)
+        except (GenError, ValueError) as e:
+            return jsonify({'error': 'Could not read the BOQ: ' + str(e)[:200]}), 502
+        lines = []
+        for l in (raw_j.get('lines') or [])[:150]:
+            if not isinstance(l, dict): continue
+            q = num(l.get('quantity')) or 1
+            row = {'section': clip(l.get('section'), 100), 'manufacturer': clip(l.get('manufacturer'), 80), 'model': clip(l.get('model'), 120),
+                   'description': clip(l.get('description'), 800), 'quantity': q, 'unit': clip(l.get('unit') or 'Pcs', 20),
+                   'unit_price': num(l.get('unit_price')), 'total': num(l.get('total'))}
+            if row['manufacturer'] or row['model'] or row['description']: lines.append(row)
+        if not lines: return jsonify({'error': 'No BOQ line items were found in this file.'}), 422
+        return jsonify({'lines': lines, 'customer': clip(raw_j.get('customer'), 120), 'project': clip(raw_j.get('project'), 160),
+                        'currency': clip(raw_j.get('currency'), 8), 'truncated': bool(raw_j.get('truncated'))})
+
     @app.route('/api/proposals/<pid>/draft/confirm', methods=['POST'])
     def confirm_draft(pid):
         """Step 3 -> 4: freeze the edited content + chosen images into an immutable document version."""

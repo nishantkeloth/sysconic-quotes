@@ -165,6 +165,8 @@ def create_proposal():
     sb, claims = get_sb(), g.claims
     d = request.json or {}
     src = d.get('source') or {}
+    if src.get('kind') == 'upload':
+        return _create_from_upload(sb, claims, d, src)
     if src.get('kind') != 'quotation' or not src.get('id'):
         return jsonify({'error': 'Choose a quotation as the source. (BOM sources arrive in a later release.)'}), 400
     qr = sb.table('quotes').select('*').eq('id', src['id']).eq('company_id', claims['company_id']).execute().data
@@ -185,6 +187,70 @@ def create_proposal():
         'customer_name': snap['customer'], 'source_kind': 'quotation',
         'quote_id': quote['id'], 'quote_ref': quote.get('quote_ref'),
         'instruction': (d.get('instruction') or '').strip()[:2000] or None,
+        'owner_id': claims.get('user_id'), 'stage': 'draft',
+    }).execute().data[0]
+    sb.table('proposal_source_snapshots').insert({
+        'company_id': claims['company_id'], 'proposal_id': row['id'], 'safe_source': snap,
+        'source_hash': _stable_hash(snap), 'visibility': snap['visibility'], 'created_by': claims.get('user_id'),
+    }).execute()
+    return jsonify({'proposal': _public(row)}), 201
+
+
+
+def _customer_in_master(sb, claims, name):
+    name = (name or '').strip()
+    if not name: return False
+    try:
+        safe = name.replace('%', '').replace(',', ' ').replace('(', ' ').replace(')', ' ').replace('*', ' ').strip()
+        if not safe: return False
+        rows = sb.table('customers').select('name,company_name').eq('company_id', claims['company_id'])\
+            .or_(f'name.ilike.{safe},company_name.ilike.{safe}').limit(10).execute().data or []
+        w = name.lower()
+        return any((r.get('name') or '').strip().lower() == w or (r.get('company_name') or '').strip().lower() == w for r in rows)
+    except Exception as e:
+        print('customer master check failed (allowing):', e)
+        return True
+
+
+def _fnum(x, default=0.0):
+    try: return float(x)
+    except Exception: return default
+
+
+def _create_from_upload(sb, claims, d, src):
+    """Proposal from an uploaded BOQ (PDF/Word/Excel). The lines were extracted by
+    /extract-boq and reviewed/edited by the user before arriving here."""
+    customer = str(d.get('customer_name') or '').strip()[:160]
+    if not _customer_in_master(sb, claims, customer):
+        return jsonify({'error': 'Select a valid customer from your Customer Master (add the customer first if needed).', 'code': 'CUSTOMER_REQUIRED'}), 422
+    use_prices = bool(src.get('use_prices')) and _can_commercial(claims)
+    lines = []
+    for i, l in enumerate((src.get('lines') or [])[:150], 1):
+        if not isinstance(l, dict): continue
+        q = _fnum(l.get('quantity'), 1) or 1
+        row = {'source_line_id': f'u{i}', 'section': str(l.get('section') or '')[:100], 'kind': 'equipment',
+               'manufacturer': str(l.get('manufacturer') or '')[:80], 'model': str(l.get('model') or '')[:120],
+               'description': str(l.get('description') or '')[:800], 'quantity': q, 'unit': str(l.get('unit') or 'Pcs')[:20], 'inclusion': 'included'}
+        if not (row['manufacturer'] or row['model'] or row['description']): continue
+        if use_prices:
+            up = _fnum(l.get('unit_price'), 0) or (_fnum(l.get('total'), 0) / q if l.get('total') else 0)
+            row['unit_selling_price'] = round(up, 2); row['line_total'] = round(up * q, 2)
+        lines.append(row)
+    if not lines:
+        return jsonify({'error': 'The BOQ has no lines.'}), 422
+    title = str(d.get('title') or '').strip()[:200] or None
+    snap = {'source_kind': 'bom', 'quote_ref': '', 'option_label': '', 'option_index': 0, 'customer': customer,
+            'project': title or '', 'lines': lines, 'visibility': 'commercial' if use_prices else 'technical'}
+    if use_prices:
+        sub = sum(l.get('line_total', 0) for l in lines)
+        vr = _fnum(src.get('vat_rate'), 5)
+        snap['commercials'] = {'currency': str(src.get('currency') or 'AED')[:8], 'subtotal': sub, 'vat_rate': vr,
+                               'vat': sub * vr / 100, 'total': sub * (1 + vr / 100)}
+    ref = _next_reference(sb, claims['company_id'])
+    row = sb.table('proposals').insert({
+        'company_id': claims['company_id'], 'reference': ref, 'title': title or customer or None, 'customer_name': customer,
+        'source_kind': 'bom', 'quote_id': None, 'quote_ref': None,
+        'instruction': (str(d.get('instruction') or '').strip()[:2000] or None),
         'owner_id': claims.get('user_id'), 'stage': 'draft',
     }).execute().data[0]
     sb.table('proposal_source_snapshots').insert({

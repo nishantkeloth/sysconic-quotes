@@ -2037,7 +2037,7 @@ async function openQuote(q){
   if(!A.activeQuote.vendor_data)A.activeQuote.vendor_data=[];
   if(!A.activeQuote.proposal_data)A.activeQuote.proposal_data={};
   A.cur=A.activeQuote.currency||'AED';A.rate=A.activeQuote.exchange_rate||1;A.activeOpt=0;A.page='editor';draw();
-  if(!A.activeQuote.customer)setTimeout(openCustModal,150);
+  A.activeQuote._custOk=false;setTimeout(verifyQuoteCustomer,150);
 }
 let _st=null;
 // Returns true/false so callers that need the save to have actually landed
@@ -2165,6 +2165,7 @@ function schedSave(){if(A.reviewMode)return;if(_st)clearTimeout(_st);_st=setTime
 // failing 3 seconds later with the dropdown left showing the wrong value.
 async function changeQuoteStatus(newStatus){
   if(!A.activeQuote||A.activeQuote.status===newStatus)return;
+  if(['sent','awarded'].includes(newStatus)&&!requireCustomer()){draw();return;}
   const old=A.activeQuote.status;
   A.activeQuote.status=newStatus;
   draw();
@@ -2258,6 +2259,7 @@ function reviewStatusBadgeHTML(){
   return `<span style="background:${m.bg};color:${m.c};font-size:12px;font-weight:700;padding:6px 12px;border-radius:20px;display:inline-flex;align-items:center;gap:5px">${m.t}${A.activeQuote.current_version?' · v'+A.activeQuote.current_version:''}</span>`;
 }
 async function submitForReview(){
+  if(!requireCustomer())return;
   if(!A.activeQuote)return;
   await saveQuote(); // make sure the snapshot reflects the latest saved edits
   const r=await api('GET','/api/quotes/reviewer-candidates');
@@ -2832,6 +2834,7 @@ let EML={attachments:[]};
 const EML_MAX_FILE_BYTES=3*1024*1024, EML_MAX_TOTAL_BYTES=10*1024*1024, EML_MAX_COUNT=5;
 function emlFmtSize(b){return b<1024*1024?Math.round(b/1024)+' KB':(b/1024/1024).toFixed(1)+' MB';}
 function showEmailQuoteModal(){
+  if(!requireCustomer())return;
   if(!A.activeQuote)return;
   EML={attachments:[]};
   const fromVal=A.user?.ms365_email||A.user?.email||'';
@@ -2940,29 +2943,79 @@ function zohoSearch(v){
     el.style.display='block';
   },320);
 }
-function pickCustomer(name){
-  const tmp=document.createElement('textarea');tmp.innerHTML=name;name=tmp.value;
-  A.activeQuote.customer=name;
-  const inp=document.getElementById('custInput');if(inp)inp.value=name;
-  hideCustDrop();schedSave();
-}
 function hideCustDrop(){const el=document.getElementById('custDrop');if(el)el.style.display='none';}
+function custOkNow(){return !!(A.activeQuote&&A.activeQuote.customer&&A.activeQuote._custOk);}
+function requireCustomer(){
+  if(A.reviewMode||custOkNow())return true;
+  openCustModal();return false;
+}
+async function verifyQuoteCustomer(){
+  const q=A.activeQuote;if(!q||A.page!=='editor')return;
+  if(!q.customer){q._custOk=false;openCustModal();return;}
+  const nm=q.customer.trim().toLowerCase();
+  try{
+    const r=await api('GET','/api/customers?limit=10&search='+encodeURIComponent(q.customer));
+    q._custOk=(r.customers||[]).some(c=>(c.name||'').trim().toLowerCase()===nm||(c.company_name||'').trim().toLowerCase()===nm);
+  }catch(e){q._custOk=true;} // a failed lookup must not lock people out
+  const el=document.getElementById('custInput');if(el)el.style.borderColor=q._custOk?'':'var(--red,#d92d20)';
+  if(!q._custOk)openCustModal();
+}
 function openCustModal(){
+  if(!A.activeQuote)return;
+  if(isQuoteLocked()&&A.activeQuote.customer&&A.activeQuote._custOk){alert('This quote is locked. Set it back to Draft to change the customer.');return;}
   closeCustModal();
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="custOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeCustModal()">
+  const must=!custOkNow(),cur=A.activeQuote.customer||'';
+  const note=must?`<div class="auth-err" style="margin:0 0 10px">${cur?`“${esc(cur)}” is not in your Customer Master. Select an existing customer or add it.`:'A customer is required before you can continue with this quote.'}</div>`:'';
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="custOverlay" ${must?'':`onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeCustModal()"`}>
     <div class="modal" style="max-width:520px">
       <div class="modal-title">🔍 Select customer</div>
       <div class="modal-sub">Search your Customer Master</div>
+      ${note}
       <div class="fld"><input id="zcSearch" placeholder="Start typing a customer name…" autocomplete="off" oninput="zcModalSearch(this.value)"></div>
-      <div id="zcResults" style="max-height:300px;overflow-y:auto;border:1px solid var(--gray-100);border-radius:8px"><div style="padding:16px;font-size:13px;color:var(--gray-500)">Type at least 2 letters to search…</div></div>
+      <div id="zcResults" style="max-height:260px;overflow-y:auto;border:1px solid var(--gray-100);border-radius:8px"><div style="padding:16px;font-size:13px;color:var(--gray-500)">Type at least 2 letters to search…</div></div>
+      <div id="qcAdd" style="display:none;margin-top:12px;padding:12px;border:1px solid var(--gray-200);border-radius:8px;background:var(--gray-50,#f8fafc)">
+        <div style="font-weight:700;font-size:13px;margin-bottom:6px">Add new customer <span style="font-weight:400;color:var(--gray-500)">(created in Zoho Books first)</span></div>
+        <div class="fld2"><label>Customer name *</label><input id="qcName"></div>
+        <div class="fld2"><label>Email *</label><input id="qcEmail" type="email"></div>
+        <div class="fld2"><label>VAT TRN <span style="color:var(--gray-500)">(optional)</span></label><input id="qcTrn"></div>
+        <div id="qcMsg" style="font-size:12px;margin:6px 0"></div>
+        <button class="btn btn-navy btn-sm" id="qcSave" onclick="qcCreate()">Create &amp; select</button>
+      </div>
       <div class="modal-actions" style="justify-content:space-between">
-        <div style="font-size:12px;color:var(--gray-500)">Not listed? Close and type the name manually, or add them on the Customers page.</div>
-        <button class="btn" onclick="closeCustModal()">Close</button>
+        <button class="btn" onclick="qcShowAdd()">+ Add new customer</button>
+        ${must?`<button class="btn" onclick="closeCustModal();A.page='dashboard';draw()">Back to quotes</button>`:`<button class="btn" onclick="closeCustModal()">Close</button>`}
       </div>
     </div></div>`);
   setTimeout(()=>{const el=document.getElementById('zcSearch');if(el)el.focus();},60);
 }
 function closeCustModal(){const el=document.getElementById('custOverlay');if(el)el.remove();}
+function qcShowAdd(){
+  const box=document.getElementById('qcAdd');if(!box)return;
+  box.style.display='block';
+  const n=document.getElementById('qcName');if(n&&!n.value)n.value=(document.getElementById('zcSearch')?.value||'').trim();
+  (n||{}).focus&&n.focus();
+}
+async function qcCreate(opts){
+  opts=opts||{};
+  const g=id=>(document.getElementById(id)?.value||'').trim();
+  const body={name:g('qcName'),email:g('qcEmail'),trn:g('qcTrn')};
+  if(opts.link)body.link_contact_id=opts.link;
+  if(opts.force)body.force=true;
+  const msg=document.getElementById('qcMsg'),btn=document.getElementById('qcSave');
+  if(!body.name||!body.email){if(msg)msg.innerHTML='<span style="color:var(--red)">Name and email are required.</span>';return;}
+  if(btn){btn.disabled=true;btn.textContent='Creating…';}
+  const r=await api('POST','/api/integrations/create-customer',body);
+  if(btn){btn.disabled=false;btn.innerHTML='Create &amp; select';}
+  if(r.needs_confirm){
+    window._qcMatches=r.matches||[];
+    if(msg)msg.innerHTML=`<div style="color:var(--amber);font-weight:700;margin-bottom:4px">${esc(r.message)}</div>`
+      +window._qcMatches.map((m,i)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--gray-100)"><span>${esc(m.name)}${m.email?` <span style="color:var(--gray-500)">· ${esc(m.email)}</span>`:''}</span><button class="btn btn-sm" onclick="qcCreate({link:window._qcMatches[${i}].id})">Use this</button></div>`).join('')
+      +`<div style="margin-top:6px"><button class="btn btn-sm" onclick="qcCreate({force:true})">None of these — create new</button></div>`;
+    return;
+  }
+  if(r.error||!r.customer){if(msg)msg.innerHTML=`<span style="color:var(--red)">${esc(r.error||'Could not create the customer.')}</span>`;return;}
+  zcPickValid(r.customer.name);
+}
 let ZM={t:null,last:''};
 function zcModalSearch(v){
   clearTimeout(ZM.t);
@@ -2978,7 +3031,7 @@ function zcModalSearch(v){
     if(ZM.last!==q)return;
     const el=document.getElementById('zcResults');if(!el)return;
     if(r.error){el.innerHTML=`<div class="auth-err" style="margin:10px">${esc(r.error)}</div>`;return;}
-    if(!(r.customers||[]).length){el.innerHTML='<div style="padding:16px;font-size:13px;color:var(--gray-500)">No matches. Close and type the name manually, or add them on the Customers page.</div>';return;}
+    if(!(r.customers||[]).length){el.innerHTML='<div style="padding:16px;font-size:13px;color:var(--gray-500)">No matches in your Customer Master. Use “+ Add new customer” below.</div>';return;}
     el.innerHTML=r.customers.map(ct=>`<div class="cust-opt" onclick="zcPick('${esc(ct.name).replace(/'/g,'&#39;')}')">
       <div class="cust-name">${esc(ct.name)}</div>
       ${(ct.company_name&&ct.company_name!==ct.name)||ct.email?`<div class="cust-sub">${esc(ct.company_name&&ct.company_name!==ct.name?ct.company_name:'')}${ct.company_name&&ct.company_name!==ct.name&&ct.email?' · ':''}${esc(ct.email)}</div>`:''}
@@ -2987,8 +3040,11 @@ function zcModalSearch(v){
 }
 function zcPick(name){
   const tmp=document.createElement('textarea');tmp.innerHTML=name;name=tmp.value;
-  A.activeQuote.customer=name;
-  const inp=document.getElementById('custInput');if(inp)inp.value=name;
+  zcPickValid(name);
+}
+function zcPickValid(name){
+  A.activeQuote.customer=name;A.activeQuote._custOk=true;
+  const inp=document.getElementById('custInput');if(inp){inp.value=name;inp.style.borderColor='';}
   closeCustModal();schedSave();
 }
 
@@ -3847,7 +3903,7 @@ function buildTopbarRight(){
     <span class="tb-sep"></span>
     <button class="btn" onclick="downloadTemplate()" title="Download Excel template">📄 Template</button>
     ${!isQuoteLocked()?`<label class="btn" style="cursor:pointer" title="Import from Excel">📥 Import Excel<input type="file" accept=".xlsx,.xls" style="display:none" onchange="importExcel(event)"></label>`:''}
-    <button class="btn" onclick="A.page='print';draw()" title="Open the print view">🖨 Print</button>
+    <button class="btn" onclick="if(requireCustomer()){A.page='print';draw();}" title="Open the print view">🖨 Print</button>
     <div class="more-wrap" id="moreMenuWrap">
       <button class="btn" onclick="toggleMoreMenu(event)">⋯ More</button>
       <div class="more-panel" id="moreMenuPanel">
@@ -5039,7 +5095,7 @@ function editorHTML(){
     <div class="card-title">Quote details</div>
     <div class="field-grid g4" style="margin-bottom:14px">
       <div class="fld2"><label>Quote title</label><input value="${esc(q.title)}" oninput="A.activeQuote.title=this.value;schedSave()"></div>
-      <div class="fld2" style="position:relative"><label>Customer</label><input id="custInput" value="${esc(q.customer)}" autocomplete="off" style="padding-right:36px" oninput="A.activeQuote.customer=this.value;schedSave();zohoSearch(this.value)" onblur="setTimeout(hideCustDrop,180)" placeholder="Type or search Zoho Books…"><button class="cust-search-btn" title="Search customers in Zoho Books" onclick="openCustModal()">🔍</button><div id="custDrop" class="cust-drop" style="display:none"></div></div>
+      <div class="fld2" style="position:relative"><label>Customer</label><input id="custInput" value="${esc(q.customer)}" readonly autocomplete="off" style="padding-right:36px;cursor:pointer;${custOkNow()?'':'border-color:var(--red,#d92d20)'}" onclick="openCustModal()" placeholder="Select a customer (required)…"><button class="cust-search-btn" title="Select a customer from your Customer Master" onclick="openCustModal()">🔍</button><div id="custDrop" class="cust-drop" style="display:none"></div></div>
       <div class="fld2"><label>Option label</label><input id="optLabelInp" value="${esc(o.label)}" oninput="opts()[A.activeOpt].label=this.value;draw()"></div>
       <div class="fld2"><label>Quote ref</label><input value="${esc(q.quote_ref||o.ref||'')}" readonly title="Auto-generated — configure the prefix or number range in Company Profile → Quotation numbering"></div>
     </div>
@@ -5300,6 +5356,7 @@ function pdfFooterHTML(){
   </div>`;
 }
 async function downloadPDF(){
+  if(!requireCustomer())return;
   const q=A.activeQuote;if(!q)return;
   const btns=document.querySelectorAll('button');let b=null;btns.forEach(x=>{if(x.textContent.includes('PDF'))b=x;});
   if(b){b.disabled=true;b.textContent='⏳ Generating…';}
@@ -9345,7 +9402,7 @@ function proposalsListInner(){
     <tr style="color:var(--gray-500);text-align:left"><th style="padding:6px">Reference</th><th>Title</th><th>Customer</th><th>Source</th><th>Stage</th><th>Updated</th><th></th></tr>
     ${PRP.list.map(p=>`<tr style="border-top:1px solid var(--gray-100);cursor:pointer" onclick="openProposal('${p.id}')">
       <td style="padding:8px 6px;font-weight:700">${esc(p.reference)}</td><td>${esc(p.title||'—')}</td><td>${esc(p.customer_name||'General proposal')}</td>
-      <td>${esc(p.quote_ref||'—')}</td><td>${esc(propStageLabel(p))}</td><td>${p.updated_at?new Date(p.updated_at).toLocaleDateString():''}</td>
+      <td>${esc(p.quote_ref||(p.source_kind==='bom'?'Uploaded BOQ':'—'))}</td><td>${esc(propStageLabel(p))}</td><td>${p.updated_at?new Date(p.updated_at).toLocaleDateString():''}</td>
       <td onclick="event.stopPropagation()">${p.lifecycle==='archived'?`<button class="btn btn-sm" onclick="propArchive('${p.id}',false)">Restore</button>`:`<button class="btn btn-sm" onclick="propArchive('${p.id}',true)">Archive</button>`}</td></tr>`).join('')}
   </table></div><div style="font-size:12px;color:var(--gray-500);margin-top:8px">${PRP.total} proposal${PRP.total===1?'':'s'}</div>`;
 }
@@ -9951,7 +10008,7 @@ function proposalDetailInner(){
   if(d.error)return `<div class="auth-err">${esc(d.error)}</div>`;
   const p=d.proposal,s=d.source&&d.source.safe_source,lines=(s&&s.lines)||[],c=s&&s.commercials;
   return `<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-      <div><h2 style="margin:0">${esc(p.title||p.reference)}</h2><div style="font-size:13px;color:var(--gray-500)">${esc(p.reference)} · ${esc(p.customer_name||'General proposal')} · Source ${esc(p.quote_ref||'—')} · ${esc(propStageLabel(p))}</div></div>
+      <div><h2 style="margin:0">${esc(p.title||p.reference)}</h2><div style="font-size:13px;color:var(--gray-500)">${esc(p.reference)} · ${esc(p.customer_name||'General proposal')} · Source ${esc(p.quote_ref||(p.source_kind==='bom'?'Uploaded BOQ':'—'))} · ${esc(propStageLabel(p))}</div></div>
     </div>
     <div class="card" style="margin-bottom:12px">
       <div class="card-title">AI preview</div>
@@ -9967,18 +10024,122 @@ function proposalDetailInner(){
     </div>`;
 }
 
+PRP.up={lines:null,fileName:'',customer:'',custOk:false,prices:false,currency:'AED',vat:5,title:'',busy:false,msg:'',truncated:false};
+PRP.newTab='quote';
 async function openNewProposal(){
-  PRP.quotes=[];
-  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="propNewOverlay"><div class="modal" style="max-width:560px">
-    <div class="modal-title">New Proposal</div>
+  PRP.quotes=[];PRP.pickedQuote=null;PRP.newTab='quote';
+  PRP.up={lines:null,fileName:'',customer:'',custOk:false,prices:false,currency:'AED',vat:5,title:'',busy:false,msg:'',truncated:false};
+  document.getElementById('propNewOverlay')?.remove();
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="propNewOverlay"><div class="modal" style="max-width:900px;width:94vw"><div id="pnBody"></div></div></div>`);
+  pnRender();pnSearchQuotes('');
+}
+function pnTabs(){
+  const t=PRP.newTab;
+  return `<div style="display:flex;gap:6px;margin-bottom:12px"><button class="btn ${t==='quote'?'btn-navy':''}" onclick="PRP.newTab='quote';pnRender();pnSearchQuotes('')">From a quotation</button><button class="btn ${t==='upload'?'btn-navy':''}" onclick="PRP.newTab='upload';pnRender()">Upload a BOQ (PDF / Word / Excel)</button></div>`;
+}
+function pnRender(){
+  const el=document.getElementById('pnBody');if(!el)return;
+  if(PRP.newTab==='upload'){el.innerHTML=pnUploadHTML();return;}
+  el.innerHTML=`<div class="modal-title">New Proposal</div>${pnTabs()}
     <div class="fld2" style="margin-bottom:10px"><label>From quotation</label><input id="pnSearch" placeholder="Search quote ref, customer or title…" autocomplete="off" oninput="pnSearchQuotes(this.value)"></div>
     <div id="pnList" style="max-height:200px;overflow-y:auto;border:1px solid var(--gray-100);border-radius:8px;margin-bottom:10px"></div>
-    <div id="pnPicked" style="font-size:13px;margin-bottom:10px;color:var(--gray-500)">No quotation selected.</div>
+    <div id="pnPicked" style="font-size:13px;margin-bottom:10px;color:var(--gray-500)">${PRP.pickedQuote?`Selected: <strong>${esc(PRP.pickedQuote.quote_ref||'')}</strong> · ${esc(PRP.pickedQuote.customer||'')}`:'No quotation selected.'}</div>
     <div class="fld2" style="margin-bottom:10px"><label>Optional instruction</label><input id="pnInstr" placeholder="e.g. Explain this for a non-technical client"></div>
     <div id="pnMsg" style="font-size:12px;color:var(--red);margin-bottom:8px"></div>
-    <div class="modal-actions"><button class="btn" onclick="document.getElementById('propNewOverlay').remove()">Cancel</button><button class="btn btn-navy" id="pnCreate" onclick="pnCreate()">Create proposal</button></div>
-  </div></div>`);
-  PRP.pickedQuote=null;pnSearchQuotes('');
+    <div class="modal-actions"><button class="btn" onclick="document.getElementById('propNewOverlay').remove()">Cancel</button><button class="btn btn-navy" id="pnCreate" onclick="pnCreate()">Create proposal</button></div>`;
+}
+function pnUploadHTML(){
+  const U=PRP.up,can=hasPageAccess('quotes');
+  const rows=U.lines?`<div style="max-height:260px;overflow:auto;border:1px solid var(--gray-100);border-radius:8px;margin:8px 0"><table style="width:100%;font-size:12px;border-collapse:collapse">
+    <tr style="background:var(--gray-50,#f8fafc);text-align:left;position:sticky;top:0"><th style="padding:5px">#</th><th>Section</th><th>Brand</th><th>Model</th><th>Description</th><th style="width:60px">Qty</th><th style="width:60px">Unit</th>${U.prices?'<th style="width:90px">Unit price</th>':''}<th></th></tr>
+    ${U.lines.map((l,i)=>`<tr style="border-top:1px solid var(--gray-100)"><td style="padding:3px 5px">${i+1}</td>
+      <td><input value="${esc(l.section)}" style="width:100%;font-size:12px" onchange="pnLine(${i},'section',this.value)"></td>
+      <td><input value="${esc(l.manufacturer)}" style="width:100%;font-size:12px" onchange="pnLine(${i},'manufacturer',this.value)"></td>
+      <td><input value="${esc(l.model)}" style="width:100%;font-size:12px" onchange="pnLine(${i},'model',this.value)"></td>
+      <td><input value="${esc(l.description)}" style="width:100%;font-size:12px" onchange="pnLine(${i},'description',this.value)"></td>
+      <td><input value="${esc(l.quantity)}" type="number" min="0" style="width:100%;font-size:12px" onchange="pnLine(${i},'quantity',this.value)"></td>
+      <td><input value="${esc(l.unit)}" style="width:100%;font-size:12px" onchange="pnLine(${i},'unit',this.value)"></td>
+      ${U.prices?`<td><input value="${esc(l.unit_price==null?'':l.unit_price)}" type="number" style="width:100%;font-size:12px" onchange="pnLine(${i},'unit_price',this.value)"></td>`:''}
+      <td><button class="btn btn-sm" title="Remove line" onclick="pnLineDel(${i})">✕</button></td></tr>`).join('')}</table></div>
+    <div style="font-size:12px;color:var(--gray-500);margin-bottom:8px">${U.lines.length} lines read from <strong>${esc(U.fileName)}</strong>${U.truncated?' (only the first 150 were read)':''}. Check them, fix anything wrong, remove what does not belong.</div>
+    ${can?`<label style="font-size:13px;display:flex;gap:6px;align-items:center;margin-bottom:6px"><input type="checkbox" ${U.prices?'checked':''} onchange="PRP.up.prices=this.checked;pnRender()"> This file's prices are <strong>our selling prices</strong> — use them in the proposal</label>${U.prices?`<div style="display:flex;gap:10px;margin-bottom:6px"><div class="fld2"><label>Currency</label><input value="${esc(U.currency)}" style="width:80px" onchange="PRP.up.currency=this.value"></div><div class="fld2"><label>VAT %</label><input type="number" value="${esc(U.vat)}" style="width:80px" onchange="PRP.up.vat=this.value"></div></div>`:''}`:''}`:'';
+  return `<div class="modal-title">New Proposal</div>${pnTabs()}
+    <div class="fld2" style="margin-bottom:8px"><label>BOQ file (PDF, Word .docx, Excel or CSV — up to 3 MB)</label><input type="file" id="pnFile" accept=".pdf,.docx,.xlsx,.xls,.csv,.txt" onchange="pnReadFile(this)" ${U.busy?'disabled':''}></div>
+    ${U.busy?'<div style="font-size:13px;color:var(--gray-500);margin-bottom:8px">Reading the BOQ… this can take up to a minute.</div>':''}
+    ${rows}
+    <div class="fld2" style="margin-bottom:8px;position:relative"><label>Customer <span style="color:var(--gray-500)">(must be in your Customer Master)</span></label>
+      <input id="pnCust" value="${esc(U.customer)}" autocomplete="off" placeholder="Search your Customer Master…" style="${U.custOk||!U.customer?'':'border-color:var(--red)'}" oninput="PRP.up.customer=this.value;PRP.up.custOk=false;pnCustSearch(this.value)">
+      <div id="pnCustList" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:5;background:#fff;border:1px solid var(--gray-200);border-radius:8px;max-height:180px;overflow:auto"></div>
+      ${U.custOk?'<div style="font-size:12px;color:var(--green);margin-top:3px">✓ In your Customer Master</div>':''}</div>
+    <div class="fld2" style="margin-bottom:8px"><label>Proposal title (optional)</label><input id="pnTitle" value="${esc(U.title)}" placeholder="e.g. Auditorium AV Systems" onchange="PRP.up.title=this.value"></div>
+    <div class="fld2" style="margin-bottom:8px"><label>Customer brief / guidance (optional)</label><textarea id="pnInstr" rows="3" style="width:100%;font-size:13px" placeholder="Paste requirements or design notes"></textarea></div>
+    <div id="pnMsg" style="font-size:12px;color:var(--red);margin-bottom:8px">${esc(U.msg||'')}</div>
+    <div class="modal-actions"><button class="btn" onclick="document.getElementById('propNewOverlay').remove()">Cancel</button><button class="btn btn-navy" id="pnCreate" onclick="pnCreateUpload()" ${U.lines&&!U.busy?'':'disabled'}>Create proposal</button></div>`;
+}
+function pnLine(i,f,v){const l=PRP.up.lines[i];if(f==='quantity')v=+v||1;if(f==='unit_price')v=v===''?null:+v;l[f]=v;}
+function pnLineDel(i){PRP.up.lines.splice(i,1);pnRender();}
+let _pcT=null;
+function pnCustSearch(v){
+  clearTimeout(_pcT);const q=(v||'').trim(),box=document.getElementById('pnCustList');
+  if(q.length<2){if(box)box.style.display='none';return;}
+  _pcT=setTimeout(async()=>{
+    const r=await api('GET','/api/customers?limit=8&search='+encodeURIComponent(q));
+    const el=document.getElementById('pnCustList');if(!el)return;
+    const list=r.customers||[];
+    el.innerHTML=list.length?list.map(c=>`<div class="cust-opt" style="padding:7px 10px;cursor:pointer;font-size:13px" onmousedown="pnCustPick('${esc(c.name).replace(/'/g,'&#39;')}')">${esc(c.name)}</div>`).join(''):'<div style="padding:8px 10px;font-size:12px;color:var(--gray-500)">Not in your Customer Master. Add the customer on the Customers page first.</div>';
+    el.style.display='block';
+  },250);
+}
+function pnCustPick(name){
+  const t=document.createElement('textarea');t.innerHTML=name;name=t.value;
+  PRP.up.customer=name;PRP.up.custOk=true;
+  const inp=document.getElementById('pnCust');if(inp){inp.value=name;inp.style.borderColor='';}
+  const box=document.getElementById('pnCustList');if(box)box.style.display='none';
+  pnRender();
+}
+function pnReadFile(inp){
+  const f=inp.files&&inp.files[0];if(!f)return;
+  const U=PRP.up;U.fileName=f.name;U.msg='';
+  if(f.size>3*1024*1024){U.msg='The file is larger than 3 MB. Please use a smaller file.';pnRender();return;}
+  const ext=(f.name.split('.').pop()||'').toLowerCase();
+  U.busy=true;U.lines=null;pnRender();
+  const send=async(body)=>{
+    const r=await api('POST','/api/proposals/extract-boq',{filename:f.name,...body});
+    U.busy=false;
+    if(r.error){U.msg=r.error;pnRender();return;}
+    U.lines=r.lines;U.truncated=!!r.truncated;
+    if(r.currency)U.currency=r.currency;
+    if(!U.title&&r.project)U.title=r.project;
+    if(!U.customer&&r.customer){U.customer=r.customer;U.custOk=false;pnCustSearch(r.customer);}
+    U.prices=false;pnRender();
+    if(U.customer&&!U.custOk){ // pre-check the name the file mentioned against the Customer Master
+      const c=await api('GET','/api/customers?limit=8&search='+encodeURIComponent(U.customer));
+      if((c.customers||[]).some(x=>(x.name||'').trim().toLowerCase()===U.customer.trim().toLowerCase())){U.custOk=true;pnRender();}
+    }
+  };
+  const rd=new FileReader();
+  rd.onerror=()=>{U.busy=false;U.msg='Could not read the file.';pnRender();};
+  if(ext==='xlsx'||ext==='xls'){
+    rd.onload=e=>{try{const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array'});
+      const text=wb.SheetNames.map(n=>'## Sheet: '+n+'\n'+XLSX.utils.sheet_to_csv(wb.Sheets[n])).join('\n\n');
+      send({text});}catch(err){U.busy=false;U.msg='Could not read the Excel file.';pnRender();}};
+    rd.readAsArrayBuffer(f);
+  }else if(ext==='csv'||ext==='txt'){
+    rd.onload=e=>send({text:String(e.target.result||'')});rd.readAsText(f);
+  }else{
+    rd.onload=e=>send({data:String(e.target.result||'').split(',')[1]||''});rd.readAsDataURL(f);
+  }
+}
+async function pnCreateUpload(){
+  const U=PRP.up,msg=document.getElementById('pnMsg');
+  const instr=document.getElementById('pnInstr')?.value||'';
+  if(!U.lines||!U.lines.length){U.msg='Upload a BOQ first.';pnRender();return;}
+  if(!U.custOk){U.msg='Select a valid customer from your Customer Master.';pnRender();return;}
+  const b=document.getElementById('pnCreate');if(b){b.disabled=true;b.textContent='Creating…';}
+  const r=await api('POST','/api/proposals',{source:{kind:'upload',lines:U.lines,use_prices:U.prices,currency:U.currency,vat_rate:U.vat},customer_name:U.customer,title:U.title,instruction:instr});
+  if(r.error){U.msg=r.error;pnRender();return;}
+  document.getElementById('propNewOverlay')?.remove();
+  openProposal(r.proposal.id);
 }
 let _pnT=null;
 function pnSearchQuotes(v){
@@ -10442,6 +10603,7 @@ async function sendInvite(){
 
 // ── Export the current option's BOQ to Excel (customer-facing: no cost/margin) ──
 function exportQuoteExcel(){
+  if(!requireCustomer())return;
   const q=A.activeQuote, opt=q&&q.quote_data&&q.quote_data[A.activeOpt];
   if(!opt||!(opt.sections||[]).length){alert('Nothing to export yet.');return;}
   const vatOn=opt.vatEnabled!==false, vatRate=+opt.vatRate||0;
@@ -10554,7 +10716,6 @@ function importExcel(event){
       if(!A.activeQuote.quote_data)A.activeQuote.quote_data=[];
       if(!A.activeQuote.quote_data[A.activeOpt])A.activeQuote.quote_data[A.activeOpt]=mkOption('Option 1');
       A.activeQuote.quote_data[A.activeOpt].sections=sections;
-      if(!A.activeQuote.customer)A.activeQuote.customer=file.name.replace(/\.xlsx?$/i,'').replace(/_/g,' ');
       schedSave();draw();
       const total=sections.reduce((s,sec)=>s+sec.items.length,0);
       setTimeout(()=>alert(`✅ Import successful!\n\n${sections.length} sections · ${total} line items`),100);
