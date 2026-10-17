@@ -9423,7 +9423,7 @@ async function propArchive(id,archive){
   if(r.error){alert(r.error);return;}
   loadProposals();
 }
-async function openProposal(id){PRP.detailId=id;PRP.detail=null;PRP.dr=null;PRP.im=null;PRP.loaded=false;PRP.step=1;PRP.msg='';PRP.docs=null;PRP.opts={show_prices:true,cover_note:''};clearTimeout(PRP.timer);A.page='proposalDetail';draw();}
+async function openProposal(id){PRP.detailId=id;PRP.detail=null;PRP.dr=null;PRP.im=null;PRP.loaded=false;PRP.step=1;PRP.msg='';PRP.docs=null;PRP.opts={show_prices:true,cover_note:''};PRP.undo=null;PRP.comments={};PRP.globalFb='';PRP.minPages='';clearTimeout(PRP.timer);A.page='proposalDetail';draw();}
 async function loadProposalDetail(){
   const r=await api('GET','/api/proposals/'+PRP.detailId);
   if(r.error){PRP.detail={error:r.error};}else PRP.detail=r;
@@ -9724,8 +9724,51 @@ function prpSecEditor(s,i){
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
       <div style="font-size:11px;color:var(--gray-500)">${PRP_TYPE_LABEL[s.type]||s.type}</div>
       <div style="display:flex;gap:6px;align-items:center">${prpChk(P+'.include','Include')}<button class="btn btn-sm" ${i?'':'disabled'} onclick="prpMoveSec(${i},-1)">↑</button><button class="btn btn-sm" ${i<n-1?'':'disabled'} onclick="prpMoveSec(${i},1)">↓</button><button class="btn btn-sm" onclick="prpDelSec(${i})">Delete section</button></div></div>
-    ${prpIn(P+'.title','Section title')}${on?inner:'<div style="font-size:12px;color:var(--gray-500)">Hidden from the proposal. Tick “Include” to bring it back.</div>'}</div>`;
+    ${prpIn(P+'.title','Section title')}${on?inner:'<div style="font-size:12px;color:var(--gray-500)">Hidden from the proposal. Tick “Include” to bring it back.</div>'}${on&&prpRevisable(s)?prpReviseBox(s.id):''}</div>`;
 }
+const PRP_NOREV=['boq','investment','payment','diagram'];
+function prpRevisable(s){return !PRP_NOREV.includes(s.type)&&!['terms','about','why'].includes(s.id);}
+function prpReviseBox(k){
+  const busy=PRP.revBusy&&PRP.revBusy[k];
+  return `<div style="margin-top:8px;border-top:1px dashed var(--gray-200);padding-top:8px"><textarea rows="2" style="width:100%;box-sizing:border-box;font-size:12px" oninput="PRP.comments=PRP.comments||{};PRP.comments['${k}']=this.value" placeholder="Comment on this section, e.g. make it shorter, mention the power requirement, drop the second paragraph…">${esc((PRP.comments&&PRP.comments[k])||'')}</textarea><button class="btn btn-sm" ${busy||PRP.revAll?'disabled':''} onclick="prpRevise('${k}')">${busy?'Revising…':'Revise this section'}</button></div>`;
+}
+async function prpReviseCall(k,fb,glob){
+  const c=PRP.dr.content;
+  const sec=k==='cover'?{id:'cover',type:'cover',title:c.cover.title,subtitle:c.cover.subtitle,scope_line:c.cover.scope_line}:(c.sections||[]).find(s=>s.id===k);
+  if(!sec)return {error:'Section not found.'};
+  const r=await api('POST','/api/proposals/'+PRP.detailId+'/draft/revise-section',{section:sec,feedback:fb,global_feedback:glob});
+  if(r.error)return r;
+  const c2=PRP.dr.content;
+  if(k==='cover'){c2.cover={...c2.cover,title:r.section.title,subtitle:r.section.subtitle,scope_line:r.section.scope_line};}
+  else{const i=c2.sections.findIndex(s=>s.id===k);if(i>=0)c2.sections[i]=r.section;}
+  return {ok:1};
+}
+async function prpRevise(k){
+  const fb=((PRP.comments&&PRP.comments[k])||'').trim();
+  if(!fb){alert('Write your comment first.');return;}
+  PRP.undo=JSON.stringify(PRP.dr.content);PRP.revBusy=PRP.revBusy||{};PRP.revBusy[k]=true;PRP.msg='';renderWizard();
+  const r=await prpReviseCall(k,fb,'');
+  delete PRP.revBusy[k];
+  if(r.error){PRP.msg=r.error;PRP.undo=null;}else{PRP.comments[k]='';prpDirty();}
+  renderWizard();
+}
+async function prpReviseAll(){
+  const fb=(document.getElementById('prpFb')?.value||PRP.globalFb||'').trim();PRP.globalFb=fb;
+  if(!fb){alert('Write your feedback first.');return;}
+  if(!confirm('The AI will revise every section your feedback applies to. You can undo afterwards. Continue?'))return;
+  const c=PRP.dr.content;PRP.undo=JSON.stringify(c);PRP.msg='';
+  const keys=['cover',...(c.sections||[]).filter(s=>s.include!==false&&prpRevisable(s)).map(s=>s.id)];
+  let done=0,failed=0,idx=0,lastErr='';PRP.revAll=true;
+  const show=()=>{const e=document.getElementById('prpRevMsg');if(e)e.textContent='Revising… '+done+'/'+keys.length+(failed?' ('+failed+' failed)':'');};
+  renderWizard();show();
+  const worker=async()=>{while(idx<keys.length){const k=keys[idx++];const r=await prpReviseCall(k,'',fb);done++;if(r.error){failed++;lastErr=r.error;}show();}};
+  await Promise.all([worker(),worker(),worker()]);
+  PRP.revAll=false;
+  if(failed===keys.length){PRP.undo=null;PRP.msg=lastErr||'The revision failed.';}
+  else{PRP.msg=failed?failed+' section(s) could not be revised; the others were updated.':'';prpDirty();}
+  renderWizard();
+}
+function prpUndo(){if(!PRP.undo)return;PRP.dr.content=JSON.parse(PRP.undo);PRP.undo=null;prpDirty();renderWizard();}
 function prpStep1(){
   const dr=PRP.dr,active=PRP.detail.proposal.lifecycle==='active';
   if(!dr||dr.status==='failed'||(dr.status!=='ready'&&dr.status!=='queued'&&dr.status!=='running')){
@@ -9743,7 +9786,8 @@ function prpStep1(){
   const c=dr.content;
   if(!c||c.v!==3)return `<div class="auth-err" style="margin-bottom:10px">This draft was made with an older fixed layout. Regenerate it to get the new flexible structure.</div>${active?'<button class="btn btn-navy" onclick="prpGenerateContent()">Regenerate content</button>':''}`;
   let h=(c.warn?`<div class="auth-err" style="margin-bottom:10px">${esc(c.warn)}</div>`:'')+`<div style="font-size:13px;color:var(--gray-500);margin-bottom:12px">Read through the content. Edit any text, move sections with ↑ ↓, delete or hide what you don't want, or add your own sections. Changes save automatically.</div>`;
-  h+=prpBox('Cover',null,prpIn('cover.title','Document title')+prpIn('cover.subtitle','Subtitle (project / site)')+prpIn('cover.scope_line','Scope line',{area:1,rows:2}));
+  h+=`<div style="border:1px solid #1e3a5f;border-radius:10px;padding:12px;margin-bottom:12px;background:#f5f8fc"><strong style="font-size:14px">Feedback to the AI</strong><div style="font-size:12px;color:var(--gray-500);margin:3px 0 6px">Tell the AI what to change across the whole proposal: tone, length, focus, things to add or remove. It revises the sections your feedback applies to and leaves the rest alone. You can also comment on a single section below. You can undo a revision afterwards.</div><textarea id="prpFb" rows="3" style="width:100%;box-sizing:border-box;font-size:13px" oninput="PRP.globalFb=this.value" placeholder="e.g. Make it more concise. Emphasise ease of use for teachers. HCT's IT team manages the network, so say that. Remove the sales tone.">${esc(PRP.globalFb||'')}</textarea><div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap"><button class="btn btn-navy" ${PRP.revAll||!active?'disabled':''} onclick="prpReviseAll()">${PRP.revAll?'Revising…':'Revise content with this feedback'}</button>${PRP.undo?'<button class="btn" onclick="prpUndo()">Undo last revision</button>':''}<span id="prpRevMsg" style="font-size:12px;color:var(--gray-500)"></span></div></div>`;
+  h+=prpBox('Cover',null,prpIn('cover.title','Document title')+prpIn('cover.subtitle','Subtitle (project / site)')+prpIn('cover.scope_line','Scope line',{area:1,rows:2})+prpReviseBox('cover'));
   h+=(c.sections||[]).map((s,i)=>prpSecEditor(s,i)).join('');
   h+=`<div style="display:flex;gap:8px;align-items:center;margin:4px 0 14px"><select id="prpAddType">${['text','columns','points','kpis','list','table'].map(t=>`<option value="${t}">${PRP_TYPE_LABEL[t]}</option>`).join('')}</select><button class="btn btn-sm" onclick="prpAddSec()">+ Add section</button></div>`;
   if(PRP.minPages==null||PRP.minPages==='')PRP.minPages=c.min_pages||'';

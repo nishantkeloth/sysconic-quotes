@@ -574,6 +574,120 @@ OUTPUT:
         r = sb.table('proposal_images').select('*').eq('proposal_id', pid).eq('slot_key', key).eq('company_id', claims['company_id']).execute().data
         return r[0] if r else None
 
+    # ── Reviewer feedback: revise one section (client applies the result, then autosaves) ──
+    REVISE_SYSTEM = """You revise ONE section of a customer-facing proposal using a reviewer's feedback.
+Return ONLY the revised section as one JSON object with EXACTLY the same structure as the input "section": same keys, same "id", same "type", same group "id"s, same number of groups and, for equipment sections, the same items in the same order with the same "line_ids". Change only the wording and the content of text fields (and add/remove paragraphs, bullet items, table rows or exclusions where the feedback asks for it).
+- Apply "feedback_for_this_section" fully. Apply "overall_feedback" only where it is relevant to this section; if it does not concern this section, leave the section unchanged.
+- Keep everything that the feedback does not ask you to change.
+- Never invent products, quantities, specifications, certifications, prices, dates, delivery, warranty or company policies. Only use facts present in the "boq", "quote_terms", "company_facts" or the reviewer's feedback itself (treat facts the reviewer states as true).
+- Never mention cost, margin, discounts or prices. Plain professional English, no marketing hype.
+- Output ONLY the JSON object, no markdown fences, no commentary."""
+
+    NOREV = ('boq', 'investment', 'payment', 'diagram')
+
+    def clean_revised(orig, new):
+        import copy
+        if not isinstance(new, dict): raise ValueError('The model did not return a section.')
+        out = copy.deepcopy(orig); ty = orig.get('type')
+        if ty == 'cover':
+            for k, n in (('title', 140), ('subtitle', 200), ('scope_line', 500)):
+                if clip(new.get(k), 1): out[k] = clip(new.get(k), n)
+            return out
+        if clip(new.get('title'), 1): out['title'] = clip(new.get('title'), 100)
+
+        def items(lst, n, fields):
+            res = []
+            for x in (lst or [])[:n]:
+                if isinstance(x, dict):
+                    d = {k: clip(x.get(k), lim) for k, lim in fields.items()}
+                    if any(d.values()): d['include'] = True; res.append(d)
+            return res
+        if ty == 'text':
+            ps = [clip(x, 2000) for x in (new.get('paragraphs') or [])[:10] if clip(x, 1)]
+            if ps: out['paragraphs'] = ps
+        elif ty == 'kpis':
+            its = [i for i in items(new.get('items'), 8, {'value': 24, 'label': 60, 'sub': 80}) if i['value']]
+            if its: out['items'] = its
+        elif ty in ('columns', 'points'):
+            its = items(new.get('items'), 12, {'title': 100, 'body': 700})
+            if its: out['items'] = its
+            if 'intro' in new: out['intro'] = clip(new.get('intro'), 900)
+        elif ty == 'list':
+            its = []
+            for x in (new.get('items') or [])[:14]:
+                tx = clip(x.get('text') if isinstance(x, dict) else x, 400)
+                if tx: its.append({'text': tx, 'include': True})
+            if its: out['items'] = its
+            if 'intro' in new: out['intro'] = clip(new.get('intro'), 700)
+        elif ty == 'table':
+            ncol = len(orig.get('columns') or [])
+            rows = []
+            for r in (new.get('rows') or [])[:14]:
+                cells = r.get('cells') if isinstance(r, dict) else r
+                if isinstance(cells, list):
+                    cells = [clip(c, 400) for c in cells[:ncol]]; cells += [''] * (ncol - len(cells))
+                    if any(cells): rows.append({'cells': cells, 'include': True})
+            if rows: out['rows'] = rows
+            if 'intro' in new: out['intro'] = clip(new.get('intro'), 700)
+        elif ty == 'scope':
+            ex = []
+            for x in (new.get('excluded') or [])[:10]:
+                tx = clip(x.get('text') if isinstance(x, dict) else x, 300)
+                if tx: ex.append({'text': tx, 'include': True})
+            out['excluded'] = ex
+            if 'intro' in new: out['intro'] = clip(new.get('intro'), 600)
+            if 'note' in new: out['note'] = clip(new.get('note'), 500)
+        elif ty == 'systems':
+            if 'intro' in new: out['intro'] = clip(new.get('intro'), 900)
+            ng = {clip(g_.get('id'), 40): g_ for g_ in (new.get('groups') or []) if isinstance(g_, dict)}
+            for og in out.get('groups') or []:
+                g_ = ng.get(og.get('id'))
+                if not g_: continue
+                if clip(g_.get('title'), 1): og['title'] = clip(g_.get('title'), 100)
+                if 'intro' in g_: og['intro'] = clip(g_.get('intro'), 900)
+                nit = g_.get('items') or []
+                for k, oi in enumerate(og.get('items') or []):
+                    if k < len(nit) and isinstance(nit[k], dict) and clip(nit[k].get('does'), 1):
+                        oi['does'] = clip(nit[k].get('does'), 700)
+        return out
+
+    app.extensions['proposals_clean_revised'] = clean_revised  # exposed for tests
+
+    @app.route('/api/proposals/<pid>/draft/revise-section', methods=['POST'])
+    def revise_section(pid):
+        sb, claims = get_sb(), g.claims
+        p = H['_load'](sb, claims, pid)
+        if not p: return jsonify({'error': 'Not found'}), 404
+        if p['lifecycle'] != 'active': return jsonify({'error': 'Restore this proposal first.'}), 409
+        s = H['_active_settings'](sb, claims['company_id'])
+        if H['_status'](s)['text'] != 'ready':
+            return jsonify({'error': 'Proposal AI text model is not ready. An administrator must finish Settings → Proposal AI.', 'code': 'PROPOSAL_AI_NOT_CONFIGURED'}), 503
+        d = request.json or {}
+        sec = d.get('section')
+        fb, gfb = clip(d.get('feedback'), 3000), clip(d.get('global_feedback'), 3000)
+        if not isinstance(sec, dict) or not (fb or gfb): return jsonify({'error': 'Write some feedback first.'}), 422
+        if sec.get('type') in NOREV: return jsonify({'error': 'This section is generated automatically and cannot be revised.'}), 422
+        if len(json.dumps(sec, ensure_ascii=False)) > 60000: return jsonify({'error': 'Section is too large.'}), 422
+        snap = latest_snapshot(sb, pid)
+        lines = []
+        for i, l in enumerate(((snap or {}).get('safe_source') or {}).get('lines') or [], 1):
+            lines.append({'line_id': l.get('source_line_id'), 'boq_no': i, 'brand': l.get('manufacturer'), 'model': l.get('model'),
+                          'description': clip(l.get('description'), 250), 'qty': l.get('quantity'), 'unit': l.get('unit')})
+        co = company_facts(sb, claims['company_id'])
+        terms = list(((snap or {}).get('safe_source') or {}).get('terms') or [])
+        user = 'Revise this proposal section. Input (JSON):\n' + json.dumps({
+            'customer': p.get('customer_name'), 'project': p.get('title'), 'feedback_for_this_section': fb or '(none)',
+            'overall_feedback': gfb or '(none)', 'quote_terms': terms, 'company_facts': co, 'boq': lines[:120], 'section': sec}, ensure_ascii=False)
+        last = None
+        for prof in (s.get('text_profile'), s.get('text_fallback')):
+            if not prof: continue
+            try:
+                raw = H['_extract_json'](llm(prof, REVISE_SYSTEM, user, 6000, 150))
+                return jsonify({'section': clean_revised(sec, raw)})
+            except (GenError, ValueError) as e:
+                last = str(e)
+        return jsonify({'error': 'Revision failed: ' + (last or 'unknown error')[:200]}), 502
+
     @app.route('/api/proposals/<pid>/draft/images/<key>', methods=['PATCH'])
     def patch_image(pid, key):
         sb, claims = get_sb(), g.claims
