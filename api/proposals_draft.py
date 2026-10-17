@@ -64,6 +64,14 @@ def register(app, H):
     def image_public(row):
         out = {k: row.get(k) for k in ('slot_key', 'title', 'caption', 'prompt', 'model_refs', 'status', 'include', 'sort',
                                          'image_model', 'error', 'updated_at', 'started_at')}
+        out['kind'] = row.get('kind') or 'generated'
+        out['source_url'] = None
+        if row.get('source_path'):
+            try:
+                from api.auth import _signed_url
+                out['source_url'] = _signed_url(H['PREVIEW_BUCKET'], row['source_path'], 3600)
+            except Exception:
+                pass
         out['url'] = None
         if row.get('image_path'):
             try:
@@ -90,37 +98,78 @@ def register(app, H):
             return (((r.get('choices') or [{}])[0]).get('message') or {}).get('content') or ''
         raise GenError('text generation supports Anthropic or OpenAI profiles')
 
-    CONTENT_SYSTEM = """You are a senior pre-sales engineer at an audio-visual systems integrator writing a customer-facing technical proposal narrative from a bill of quantities (BOQ).
-
-THE STRUCTURE IS YOURS TO DESIGN. Do not follow a template. Plan the sections that suit THIS project, and scale the depth to the BOQ: a handful of lines needs a short proposal (about 3-5 sections); a large multi-room system can have up to 12. Name sections to fit the project (not stock headings). Leave out anything that would be filler. Vary wording; never reuse boilerplate.
-
-Section types you may use (each section: {"type", "title", ...}):
-- "text":    {"paragraphs": [str]}                                   narrative (e.g. summary, understanding, how it works)
-- "kpis":    {"items": [{"value": str, "label": str, "sub": str}]}   headline figures, ONLY if they genuinely help; derived from BOQ quantities/descriptions
-- "columns": {"intro": str, "items": [{"title": str, "body": str}]} 2-4 side-by-side ideas (use only if it fits)
-- "points":  {"intro": str, "items": [{"title": str, "body": str}]} numbered points (e.g. points to confirm / assumptions); ONLY real gaps or assumptions, zero is fine
-- "systems": {"intro": str, "groups": [{"id": str, "title": str, "intro": str, "items": [{"line_ids": [str], "does": str}]}]}  the equipment narrative: EXACTLY ONE section of this type, covering EVERY BOQ line in exactly one group item
-Put the sections in the order that reads best for this customer.
-
-STRICT RULES
-- Use ONLY equipment, quantities and descriptions in the BOQ. Never invent products, quantities, sizes, performance figures, certifications, standards, dates, prices or company policies. You may explain in general terms what a product CLASS does but add no numeric specification that is not in the BOQ description.
-- Never mention cost, margin, discounts or prices.
+    COMMON_RULES = """STRICT RULES
+- Use ONLY equipment, quantities and descriptions in the BOQ. Never invent products, quantities, sizes, performance figures, certifications, standards, prices, or company policies. You may explain in general terms what a product CLASS does, but add no numeric specification that is not in the BOQ description.
+- Never mention cost, margin, discounts or prices (prices are added by the system).
 - Refer to BOQ lines only by line_id; quantities are added by the system.
-- Anything uncertain or site-dependent belongs in a "points" section, not stated as fact.
-- Use the customer brief/guidance if given as the source for requirements and context; without one, write from the BOQ only and do not invent a site description.
-- Use company facts only as given.
-- Plain professional English, no marketing hype. Concise but specific.
+- Delivery time, warranty, payment and validity may be quoted ONLY from "quote_terms" or "company_facts" when present. If a fact is not given, do not state it.
+- Anything uncertain or site-dependent is an assumption or a point to confirm, never stated as fact.
+- Use the customer brief/guidance, if given, as the source for requirements and site context; without one, do not invent a site description.
+- Write like a senior pre-sales engineer: specific to THIS customer and THIS equipment, plain professional English, no marketing hype, no filler. Vary wording; do not reuse stock sentences.
+- LENGTH: if "min_pages" is given and above 0, the finished document (cover, contents, bill of quantities and acceptance take about 4 pages by themselves) must reach at least that many A4 pages at roughly 330 words per page. "depth_target_words" is YOUR share of the words: reach it with real substance (how each item is used, benefits for this customer, installation considerations, operation and maintenance, training, interoperability, risks and how they are mitigated, future expansion), never with repetition, filler or invented facts.
+- Output ONLY one JSON object. No markdown fences, no commentary."""
 
-OUTPUT: ONLY one JSON object, no markdown fences:
+    SYSTEM_A = """You write the NARRATIVE half of a detailed, customer-facing technical and commercial proposal for an audio-visual systems integrator, from a bill of quantities (BOQ). It will run to many pages, so be thorough: this is a full proposal, not a summary.
+
+Plan the sections yourself for THIS project (do not follow a rigid template) but a complete proposal normally contains, in this order:
+ 1. an executive summary (2-3 substantial paragraphs; what is being delivered, for whom, why it fits; then a "kpis" block of 3-5 headline figures taken from BOQ quantities/sizes and, if given, quoted warranty/delivery),
+ 2. understanding of the requirement (what the customer needs, as objectives, and the key assumptions): use "text" then "points" for assumptions,
+ 3. the proposed solution: EXACTLY ONE "systems" section covering EVERY BOQ line, grouped sensibly.
+For a multi-room or multi-system project add a section per room/system family where it helps. Scale depth to the BOQ: a handful of lines still deserves a full, well-argued proposal; a large system deserves proportionally more.
+
+Section types: each is {"type","title",...}
+- "text":    {"paragraphs": [str]}   each paragraph 50-120 words
+- "kpis":    {"items": [{"value","label","sub"}]}
+- "columns": {"intro", "items": [{"title","body"}]}  2-4 side-by-side ideas
+- "points":  {"intro", "items": [{"title","body"}]}  numbered points (objectives, assumptions, points to confirm)
+- "systems": {"intro", "groups": [{"id","title","intro","items": [{"line_ids": [str], "does": str}]}]}  "does" = 40-90 words: what this item does for this customer and how it is used
+Use "columns"/"points" only where they fit.
+
+""" + COMMON_RULES + """
+
+OUTPUT:
 {
- "cover": {"title": str, "subtitle": str, "scope_line": str (1-2 sentences)},
- "sections": [ ... as above ... ],
- "images": [{"key": str, "title": str, "caption": str, "system_id": str (a group id, or "" for the main image), "line_ids": [str],
-             "prompt": str (<=130 words: photorealistic architectural visualisation showing ONLY the equipment in line_ids, plausible positions, exact counts; screens blank/abstract; no readable text, logos or faces)}]
+ "cover": {"title","subtitle","scope_line"},
+ "sections": [ ... ],
+ "images": [{"key","title","caption","system_id" (a group id or "" for the main image),"line_ids": [str],
+             "prompt": (<=130 words: photorealistic architectural visualisation showing ONLY the equipment in line_ids, plausible positions, exact counts; screens blank/abstract; no readable text, logos or faces)}]
 }
-The first image must have key "hero" (main space with the principal equipment). Add further images only where they help, up to the maximum given."""
+The first image must have key "hero". Add further images only where they help, up to max_images."""
 
-    def build_user_prompt(p, snap, instr, co, max_images):
+    SYSTEM_B = """You write the DESIGN and DELIVERY half of a detailed customer-facing technical proposal for an audio-visual systems integrator, from a bill of quantities (BOQ). Another writer covers the executive summary, requirements and equipment narrative; you cover how it is designed, installed, tested and supported. Be concrete and specific to THIS equipment.
+
+Return two lists of sections.
+
+"design_sections" (appear after the equipment narrative, before the bill of quantities). Normally:
+ - mounting / installation design (text + a short "points" or "list" of what the customer must provide, general practice only),
+ - a system architecture "diagram" (kind "architecture") plus a "table" explaining the layers,
+ - a typical room layout "diagram" (kind "layout") plus a short "list" of design considerations (only if there are displays/speakers/mics/cameras/seating-related equipment in the BOQ),
+ - a "scope" section (what is excluded and change control).
+"delivery_sections" (appear after the bill of quantities). Normally:
+ - implementation methodology: a "table" with columns ["Step","Activity","Output"] (5-7 steps),
+ - project schedule: a "diagram" (kind "schedule"): ONLY if a delivery time is stated in quote_terms or company_facts; total weeks must fit within it (use the upper figure of a range),
+ - testing, commissioning and handover: a "table" with columns ["Check","What is verified"] (6-9 checks specific to the equipment), plus a "list" of handover deliverables,
+ - support: a "table" (columns ["Step","What happens"]) describing the support process; mention warranty only as given.
+ - when "min_pages" calls for more depth, also add: operation and maintenance (text + list), training and handover plan (table), risks and mitigation (table with columns ["Risk","Mitigation"]), and future expansion (text) as they genuinely apply.
+Skip any section that would be generic filler for this BOQ, but a full proposal normally has most of them.
+
+Section types (each {"type","title",...}):
+- "text":    {"paragraphs": [str]}
+- "list":    {"intro": str, "items": [{"text": str}]}
+- "points":  {"intro": str, "items": [{"title","body"}]}
+- "table":   {"intro": str, "columns": [str] (2-4), "rows": [[str,...]] (cells per row = number of columns)}
+- "scope":   {"intro": str, "excluded": [str], "note": str}   included items are generated by the system from the BOQ; "note" = change-control wording
+- "diagram": {"kind","caption","spec"} where spec depends on kind:
+    architecture: {"cols": [str] (2-4 column headings, e.g. "Users","Network","Room systems"), "nodes": [{"id","label","sub","col": int (0-based),"tone": "sysconic"|"client"|"neutral"}] (4-10 nodes; tone "sysconic" = supplied/installed by us, "client" = provided by the customer), "edges": [{"from","to","label"}]}
+    layout: {"label": str, "front": [str] (items on the front wall), "ceiling": [str], "table": [str] (items on the table/furniture), "seats": int, "rear": [str]}   a schematic room; leave a list empty if it does not apply; use short labels (<=24 chars); seats only if stated or clearly implied, else 0
+    schedule: {"weeks": int (1-26), "tasks": [{"name","start": int (1-based week),"end": int}]} (5-8 tasks, in order, end>=start, end<=weeks)
+
+""" + COMMON_RULES + """
+
+OUTPUT:
+{"design_sections": [ ... ], "delivery_sections": [ ... ]}"""
+
+    def build_user_prompt(p, snap, instr, co, max_images, terms=None, half='A', min_pages=0):
         lines = []
         for i, l in enumerate((snap['safe_source'].get('lines') or []), 1):
             lines.append({'line_id': l.get('source_line_id'), 'boq_no': i, 'section': l.get('section'),
@@ -128,15 +177,39 @@ The first image must have key "hero" (main space with the principal equipment). 
                           'qty': l.get('quantity'), 'unit': l.get('unit')})
         brief = {'customer': p.get('customer_name'), 'project': p.get('title'), 'quotation_ref': p.get('quote_ref'),
                  'customer_brief_and_guidance': ' '.join(x for x in (p.get('instruction'), instr) if x) or '(none)',
-                 'max_images': max_images, 'company_facts': co, 'boq': lines[:120]}
-        return 'Write the full proposal content for this project. Input (JSON):\n' + json.dumps(brief, ensure_ascii=False)
+                 'quote_terms': terms or [], 'company_facts': co, 'boq': lines[:120]}
+        if half == 'A': brief['max_images'] = max_images
+        if min_pages:
+            need = max(0, (min_pages - 4) * 330)
+            brief['min_pages'] = min_pages
+            brief['depth_target_words'] = int(need * (0.55 if half == 'A' else 0.45))
+        return 'Write the proposal content for this project. Input (JSON):\n' + json.dumps(brief, ensure_ascii=False)
 
-    def normalise(raw, snap, co, p, max_images):
+    def _int(x, lo, hi, d):
+        try: v = int(float(x))
+        except Exception: return d
+        return max(lo, min(hi, v))
+
+    def parse_terms(terms):
+        """Facts pulled from the quotation's own terms lines (code, not AI)."""
+        f = {'payment': '', 'delivery': '', 'warranty': '', 'validity': ''}
+        for t in terms or []:
+            m = re.match(r'\s*(payment|delivery|warranty|validity)\b[^:]*:\s*(.+)$', t, re.I)
+            if m and not f[m.group(1).lower()]: f[m.group(1).lower()] = clip(m.group(2), 200)
+        miles = []
+        for m in re.finditer(r'(\d{1,3}(?:\.\d+)?)\s*%\s*([^,;.\n]{2,60})', f['payment']):
+            miles.append({'pct': float(m.group(1)), 'label': clip(m.group(2).strip(' .'), 60)})
+        f['milestones'] = miles if miles and abs(sum(x['pct'] for x in miles) - 100) < 0.51 else []
+        return f
+
+    def normalise(raw, snap, co, p, max_images, terms=None, raw_b=None):
         """Model output -> editable document model (v3: a free-form list of sections).
         Every BOQ reference is validated; quantities/models come from the BOQ, never the model."""
         lines = snap['safe_source'].get('lines') or []
         by_id = {l.get('source_line_id'): (i + 1, l) for i, l in enumerate(lines)}
         used, seen_ids = set(), set()
+        priced = snap.get('visibility') == 'commercial' and bool((snap['safe_source'] or {}).get('commercials'))
+        facts = parse_terms(terms)
 
         def slug(x, fallback):
             v = re.sub(r'[^a-z0-9]+', '-', clip(x, 40).lower()).strip('-') or fallback
@@ -155,26 +228,89 @@ The first image must have key "hero" (main space with the principal equipment). 
                         d['include'] = True; out.append(d)
             return out
 
-        groups_all, sections, systems_done = [], [], False
-        for si, sec in enumerate((raw.get('sections') or [])[:14]):
-            if not isinstance(sec, dict): continue
+        def diagram(sec, base):
+            kind, sp = sec.get('kind'), (sec.get('spec') or {})
+            if not isinstance(sp, dict): return None
+            if kind == 'architecture':
+                cols = [clip(c, 30) for c in (sp.get('cols') or [])[:4] if clip(c, 1)]
+                ncol = max(len(cols), 1)
+                nodes, ids = [], set()
+                for n in (sp.get('nodes') or [])[:10]:
+                    if not isinstance(n, dict) or not clip(n.get('label'), 1): continue
+                    nid = clip(n.get('id'), 20) or f'n{len(nodes)+1}'
+                    if nid in ids: continue
+                    ids.add(nid)
+                    tone = n.get('tone') if n.get('tone') in ('sysconic', 'client', 'neutral') else 'neutral'
+                    nodes.append({'id': nid, 'label': clip(n.get('label'), 40), 'sub': clip(n.get('sub'), 50),
+                                  'col': _int(n.get('col'), 0, ncol - 1, 0), 'tone': tone})
+                edges = []
+                for e in (sp.get('edges') or [])[:14]:
+                    if isinstance(e, dict) and clip(e.get('from'), 20) in ids and clip(e.get('to'), 20) in ids:
+                        edges.append({'from': clip(e.get('from'), 20), 'to': clip(e.get('to'), 20), 'label': clip(e.get('label'), 30)})
+                if len(nodes) < 2: return None
+                return {**base, 'type': 'diagram', 'kind': kind, 'caption': clip(sec.get('caption'), 200),
+                        'spec': {'cols': cols, 'nodes': nodes, 'edges': edges}}
+            if kind == 'layout':
+                def lab(k, n): return [clip(x, 28) for x in (sp.get(k) or [])[:n] if clip(x, 1)]
+                spec = {'label': clip(sp.get('label'), 50), 'front': lab('front', 6), 'ceiling': lab('ceiling', 6),
+                        'table': lab('table', 6), 'rear': lab('rear', 4), 'seats': _int(sp.get('seats'), 0, 40, 0)}
+                if not (spec['front'] or spec['ceiling'] or spec['table'] or spec['rear']): return None
+                return {**base, 'type': 'diagram', 'kind': kind, 'caption': clip(sec.get('caption'), 200), 'spec': spec}
+            if kind == 'schedule':
+                weeks = _int(sp.get('weeks'), 1, 26, 0)
+                tasks = []
+                for t in (sp.get('tasks') or [])[:10]:
+                    if not isinstance(t, dict) or not clip(t.get('name'), 1): continue
+                    s0 = _int(t.get('start'), 1, 26, 1); e0 = _int(t.get('end'), 1, 26, s0)
+                    tasks.append({'name': clip(t.get('name'), 60), 'start': s0, 'end': max(s0, e0)})
+                if tasks and not weeks: weeks = max(t['end'] for t in tasks)
+                weeks = max(weeks, max((t['end'] for t in tasks), default=0))
+                if not tasks or not weeks: return None
+                return {**base, 'type': 'diagram', 'kind': kind, 'caption': clip(sec.get('caption'), 200), 'spec': {'weeks': weeks, 'tasks': tasks}}
+            return None
+
+        def parse_section(sec, si, allow_systems=False):
+            """Returns a normalised section dict or None."""
+            nonlocal systems_done
+            if not isinstance(sec, dict): return None
             t = sec.get('type')
             title = clip(sec.get('title'), 100)
             base = {'id': slug(title or t, f'sec-{si+1}'), 'type': t, 'title': title, 'include': True}
             if t == 'text':
-                paras = [clip(x, 1800) for x in (sec.get('paragraphs') or [])[:6] if clip(x, 1)]
-                if paras: sections.append({**base, 'paragraphs': paras})
-            elif t == 'kpis':
-                its = items_of(sec.get('items'), 8, {'value': 24, 'label': 60, 'sub': 80})
-                its = [i for i in its if i['value']]
-                if its: sections.append({**base, 'items': its})
-            elif t == 'columns':
+                paras = [clip(x, 2000) for x in (sec.get('paragraphs') or [])[:10] if clip(x, 1)]
+                return {**base, 'paragraphs': paras} if paras else None
+            if t == 'kpis':
+                its = [i for i in items_of(sec.get('items'), 8, {'value': 24, 'label': 60, 'sub': 80}) if i['value']]
+                return {**base, 'items': its} if its else None
+            if t == 'columns':
                 its = items_of(sec.get('items'), 6, {'title': 60, 'body': 400})
-                if its: sections.append({**base, 'intro': clip(sec.get('intro'), 900), 'items': its})
-            elif t == 'points':
+                return {**base, 'intro': clip(sec.get('intro'), 900), 'items': its} if its else None
+            if t == 'points':
                 its = items_of(sec.get('items'), 12, {'title': 100, 'body': 700})
-                if its: sections.append({**base, 'intro': clip(sec.get('intro'), 700), 'items': its})
-            elif t == 'systems' and not systems_done:
+                return {**base, 'intro': clip(sec.get('intro'), 700), 'items': its} if its else None
+            if t == 'list':
+                its = []
+                for x in (sec.get('items') or [])[:14]:
+                    tx = clip(x.get('text') if isinstance(x, dict) else x, 400)
+                    if tx: its.append({'text': tx, 'include': True})
+                return {**base, 'intro': clip(sec.get('intro'), 700), 'items': its} if its else None
+            if t == 'table':
+                cols = [clip(c, 40) for c in (sec.get('columns') or [])[:4] if clip(c, 1)]
+                if len(cols) < 2: return None
+                rows = []
+                for r in (sec.get('rows') or [])[:14]:
+                    if isinstance(r, list):
+                        cells = [clip(c, 400) for c in r[:len(cols)]]
+                        cells += [''] * (len(cols) - len(cells))
+                        if any(cells): rows.append({'cells': cells, 'include': True})
+                return {**base, 'intro': clip(sec.get('intro'), 700), 'columns': cols, 'rows': rows} if rows else None
+            if t == 'scope':
+                ex = [{'text': clip(x if not isinstance(x, dict) else x.get('text'), 300), 'include': True} for x in (sec.get('excluded') or [])[:10]]
+                ex = [x for x in ex if x['text']]
+                return {**base, 'type': 'scope', 'intro': clip(sec.get('intro'), 600), 'excluded': ex, 'note': clip(sec.get('note'), 500)}
+            if t == 'diagram':
+                return diagram(sec, base)
+            if t == 'systems' and allow_systems and not systems_done:
                 groups = []
                 for gi, gr in enumerate((sec.get('groups') or [])[:10]):
                     if not isinstance(gr, dict): continue
@@ -184,16 +320,23 @@ The first image must have key "hero" (main space with the principal equipment). 
                         ids = [x for x in (it.get('line_ids') or []) if x in by_id and x not in used]
                         if not ids: continue
                         for x in ids: used.add(x)
-                        items.append({'line_ids': ids, 'does': clip(it.get('does'), 500), 'include': True})
+                        items.append({'line_ids': ids, 'does': clip(it.get('does'), 700), 'include': True})
                     if items:
                         groups.append({'id': slug(gr.get('id') or gr.get('title'), f'grp-{gi+1}'), 'title': clip(gr.get('title'), 100),
                                        'intro': clip(gr.get('intro'), 900), 'items': items, 'image': '', 'include': True})
                 systems_done = True
-                sections.append({**base, 'type': 'systems', 'intro': clip(sec.get('intro'), 900), 'groups': groups})
+                return {**base, 'type': 'systems', 'intro': clip(sec.get('intro'), 900), 'groups': groups}
+            return None
+
+        systems_done = False
+        sections = []
+        for si, sec in enumerate((raw.get('sections') or [])[:16]):
+            s = parse_section(sec, si, allow_systems=True)
+            if s: sections.append(s)
         rest = [l.get('source_line_id') for l in lines if l.get('source_line_id') not in used]
         sysec = next((s for s in sections if s['type'] == 'systems'), None)
         if sysec is None:
-            sysec = {'id': slug('systems', 'systems'), 'type': 'systems', 'title': 'The systems', 'include': True, 'intro': '', 'groups': []}
+            sysec = {'id': slug('systems', 'systems'), 'type': 'systems', 'title': 'Proposed solution', 'include': True, 'intro': '', 'groups': []}
             sections.append(sysec)
         if rest:
             sysec['groups'].append({'id': slug('other', 'other'), 'title': 'Other equipment and services', 'intro': '', 'image': '', 'include': True,
@@ -219,20 +362,66 @@ The first image must have key "hero" (main space with the principal equipment). 
             if im['system_id']:
                 for g_ in sysec['groups']:
                     if g_['id'] == im['system_id'] and not g_['image']: g_['image'] = im['key']
-        # terms: ONLY from the company's own saved facts (no stock sentences)
-        terms = []
-        if p.get('quote_ref'): terms.append(f"Items and quantities are as per quotation {p['quote_ref']}.")
-        for b in co.get('scope_client', []): terms.append(f'Client scope: {b}')
-        if co.get('payment_terms'): terms.append(f"Payment terms: {co['payment_terms']}")
-        if co.get('delivery_weeks'): terms.append(f"Delivery: {co['delivery_weeks']} weeks from order.")
-        if co.get('warranty'): terms.append(f"Warranty: {co['warranty']}")
-        if co.get('validity_days'): terms.append(f"Validity: {co['validity_days']} days from the date of the offer.")
+
+        # ── assemble in reading order ──
+        # 1) narrative (+ code-generated investment summary and About from the company profile)
+        pre = [s for s in sections if s is not sysec]
+        head_i = next((i for i, s in enumerate(pre) if s['type'] in ('text', 'kpis')), -1)
+        # executive summary = the leading text (+ kpis if it follows)
+        cut = 0
+        for s in pre:
+            if s['type'] in ('text', 'kpis') and cut < 2: cut += 1
+            else: break
+        lead, after_lead = pre[:cut], pre[cut:]
+        if priced:
+            lead.append({'id': 'investment', 'type': 'investment', 'title': 'Investment summary', 'include': True})
+        if co.get('about'):
+            ab = {'id': 'about', 'type': 'text', 'title': 'About ' + (co.get('name') or 'us'), 'include': True, 'paragraphs': [co['about']]}
+            lead.append(ab)
+            if co.get('why_us'):
+                lead.append({'id': 'why', 'type': 'list', 'title': 'Why ' + (co.get('name') or 'us'), 'include': True, 'intro': '',
+                             'items': [{'text': x, 'include': True} for x in co['why_us'][:8]]})
+        ordered = lead + after_lead + [sysec]
+        # 2) design, scope
+        braw = raw_b or {}
+        for si, sec in enumerate((braw.get('design_sections') or [])[:10]):
+            s = parse_section(sec, 100 + si)
+            if s: ordered.append(s)
+        if not any(s['type'] == 'scope' for s in ordered):
+            ordered.append({'id': 'scope', 'type': 'scope', 'title': 'Scope of work', 'include': True, 'intro': '',
+                            'excluded': [{'text': x, 'include': True} for x in (co.get('scope_client') or [])[:8]], 'note': ''})
+        else:
+            sc = next(s for s in ordered if s['type'] == 'scope')
+            if not sc['excluded'] and co.get('scope_client'):
+                sc['excluded'] = [{'text': x, 'include': True} for x in co['scope_client'][:8]]
+        # 3) bill of quantities (positioned here; rendered by the client from the frozen BOQ)
+        ordered.append({'id': 'boq', 'type': 'boq', 'title': 'Bill of quantities', 'include': True})
+        # 4) delivery
+        for si, sec in enumerate((braw.get('delivery_sections') or [])[:10]):
+            s = parse_section(sec, 200 + si)
+            if s: ordered.append(s)
+        # 5) commercial terms: the quotation's own terms win; else the company's saved facts
+        if facts['milestones']:
+            ordered.append({'id': 'payment', 'type': 'payment', 'title': 'Payment schedule', 'include': True,
+                            'milestones': [{'label': m['label'], 'pct': m['pct'], 'include': True} for m in facts['milestones']]})
+        tl = []
         if terms:
-            sections.append({'id': 'terms', 'type': 'list', 'title': 'Terms and conditions', 'include': True,
-                             'items': [{'text': t, 'include': True} for t in terms]})
+            tl = list(terms)
+        else:
+            if p.get('quote_ref'): tl.append(f"Items and quantities are as per quotation {p['quote_ref']}.")
+            for b in co.get('scope_client', []): tl.append(f'Client scope: {b}')
+            if co.get('payment_terms'): tl.append(f"Payment terms: {co['payment_terms']}")
+            if co.get('delivery_weeks'): tl.append(f"Delivery: {co['delivery_weeks']} weeks from order.")
+            if co.get('warranty'): tl.append(f"Warranty: {co['warranty']}")
+            if co.get('validity_days'): tl.append(f"Validity: {co['validity_days']} days from the date of the offer.")
+        if tl:
+            ordered.append({'id': 'terms', 'type': 'list', 'title': 'Terms and conditions', 'include': True,
+                            'items': [{'text': t, 'include': True} for t in tl]})
         cv = raw.get('cover') or {}
         content = {'v': 3, 'cover': {'title': clip(cv.get('title') or p.get('title'), 140), 'subtitle': clip(cv.get('subtitle'), 200),
-                                     'scope_line': clip(cv.get('scope_line'), 500)}, 'sections': sections}
+                                     'scope_line': clip(cv.get('scope_line'), 500)}, 'sections': ordered,
+                   'facts': {k: facts[k] for k in ('delivery', 'warranty', 'validity', 'payment')}}
+        if raw_b is None: content['warn'] = 'The design and delivery sections could not be generated this time. Click “Regenerate all content” to try again.'
         return content, images
 
     app.extensions['proposals_normalise'] = normalise  # exposed for tests
@@ -265,13 +454,18 @@ The first image must have key "hero" (main space with the principal equipment). 
         if cur and cur[0]['status'] in ('queued', 'running'):
             return jsonify({'error': 'Content is already being generated.'}), 409
         instr = clip((request.json or {}).get('instruction'), 6000) or None
-        row = {'company_id': claims['company_id'], 'proposal_id': pid, 'status': 'queued', 'instruction': instr, 'content': None,
+        try: min_pages = max(0, min(40, int(float((request.json or {}).get('min_pages') or 0))))
+        except Exception: min_pages = 0
+        row = {'company_id': claims['company_id'], 'proposal_id': pid, 'status': 'queued', 'instruction': instr, 'content': {'req': {'min_pages': min_pages}},
                'error': None, 'created_by': claims.get('user_id'), 'updated_at': now(), 'rev': 1}
         if cur:
             sb.table('proposal_drafts').update(row).eq('id', cur[0]['id']).execute()
         else:
             sb.table('proposal_drafts').insert(row).execute()
-        sb.table('proposal_images').delete().eq('proposal_id', pid).execute()
+        try:
+            sb.table('proposal_images').delete().eq('proposal_id', pid).neq('kind', 'site').execute()   # keep uploaded client site photos
+        except Exception:   # site-photo migration not applied yet
+            sb.table('proposal_images').delete().eq('proposal_id', pid).execute()
         return jsonify({'ok': True}), 201
 
     @app.route('/api/proposals/<pid>/draft/run', methods=['POST'])
@@ -295,17 +489,41 @@ The first image must have key "hero" (main space with the principal equipment). 
             lim = s.get('limits') or {}
             max_images = max(2, min(8, int(lim.get('max_images_per_package') or 4)))
             co = company_facts(sb, claims['company_id'])
-            user = build_user_prompt(p, snap, draft.get('instruction'), co, max_images)
-            raw, used, err = None, None, None
-            for prof in (s.get('text_profile'), s.get('text_fallback')):
-                if not prof: continue
+            terms = list((snap['safe_source'] or {}).get('terms') or [])
+            if not terms and p.get('quote_id'):  # older snapshots: read the quotation's own terms lines now
                 try:
-                    txt = llm(prof, CONTENT_SYSTEM, user, 9000, 200)
-                    raw = H['_extract_json'](txt); used = prof; break
-                except (GenError, ValueError) as e:
-                    err = str(e)
+                    qr = sb.table('quotes').select('terms_data').eq('id', p['quote_id']).eq('company_id', claims['company_id']).execute().data
+                    if qr: terms = H['_quote_terms'](qr[0])
+                except Exception:
+                    terms = []
+            instr = draft.get('instruction')
+            try: min_pages = max(0, min(40, int(((draft.get('content') or {}).get('req') or {}).get('min_pages') or 0)))
+            except Exception: min_pages = 0
+            user_a = build_user_prompt(p, snap, instr, co, max_images, terms, 'A', min_pages)
+            user_b = build_user_prompt(p, snap, instr, co, max_images, terms, 'B', min_pages)
+            budget = max(8000, min(12000, int((min_pages - 4) * 330 * 0.6 * 1.6))) if min_pages > 12 else 8000
+            t0 = time.time()
+
+            def gen(system, user, max_tokens):
+                last = None
+                for prof in (s.get('text_profile'), s.get('text_fallback')):
+                    if not prof: continue
+                    left = 250 - (time.time() - t0)
+                    if left < 40: break
+                    try:
+                        return H['_extract_json'](llm(prof, system, user, max_tokens, int(left))), prof, None
+                    except (GenError, ValueError) as e:
+                        last = str(e)
+                return None, None, last or 'no time left'
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=2) as ex:
+                fa = ex.submit(gen, SYSTEM_A, user_a, budget)
+                fb = ex.submit(gen, SYSTEM_B, user_b, budget)
+                raw, used, err = fa.result()
+                raw_b, _u, _e = fb.result()
             if raw is None: return fail(f'Content generation failed: {err}')
-            content, images = normalise(raw, snap, co, p, max_images)
+            content, images = normalise(raw, snap, co, p, max_images, terms, raw_b)
+            if min_pages: content['min_pages'] = min_pages
             if not any(sc['type'] == 'systems' and sc.get('groups') for sc in content['sections']): return fail('The model returned no usable content. Please try again.')
             for i, im in enumerate(images):
                 sb.table('proposal_images').insert({
@@ -371,6 +589,63 @@ The first image must have key "hero" (main space with the principal equipment). 
         r = sb.table('proposal_images').update(upd).eq('id', im['id']).execute().data
         return jsonify({'image': image_public(r[0])})
 
+    @app.route('/api/proposals/<pid>/draft/site-photo', methods=['POST'])
+    def upload_site_photo(pid):
+        """A photograph of the client's actual space. It becomes an image slot that re-renders the photo with the proposed equipment in it."""
+        sb, claims = get_sb(), g.claims
+        p = H['_load'](sb, claims, pid)
+        if not p: return jsonify({'error': 'Not found'}), 404
+        if p['lifecycle'] != 'active': return jsonify({'error': 'Restore this proposal first.'}), 409
+        d = request.json or {}
+        ct = str(d.get('content_type') or '').lower()
+        if ct not in ('image/jpeg', 'image/png', 'image/webp'): return jsonify({'error': 'Please upload a JPG, PNG or WebP photo.'}), 422
+        try: raw = base64.b64decode(d.get('image_b64') or '', validate=False)
+        except Exception: return jsonify({'error': 'The photo could not be read.'}), 422
+        if not raw or len(raw) > 3_500_000: return jsonify({'error': 'The photo is too large (limit about 3.5 MB). It is normally reduced automatically; try a smaller photo.'}), 422
+        if not (raw[:3] == b'\xff\xd8\xff' or raw[:8] == b'\x89PNG\r\n\x1a\n' or raw[:4] == b'RIFF'): return jsonify({'error': 'That file is not a valid image.'}), 422
+        snap = latest_snapshot(sb, pid)
+        lines = ((snap or {}).get('safe_source') or {}).get('lines') or []
+        co = company_facts(sb, claims['company_id'])
+        own = (co.get('name') or '').strip().lower()
+        vis = [l for l in lines if (l.get('model') or '').strip().lower() != 'service' and (l.get('manufacturer') or '').strip().lower() != own]
+        models, desc = [], []
+        for l in vis[:12]:
+            m = (l.get('model') or '').strip()
+            if m and m not in models: models.append(m)
+            desc.append(f"{l.get('quantity') or 1} x {clip(((l.get('manufacturer') or '') + ' ' + (l.get('model') or '')).strip(), 60)}"
+                        + (f" ({clip(l.get('description'), 80)})" if l.get('description') else ''))
+        existing = sb.table('proposal_images').select('slot_key,sort').eq('proposal_id', pid).execute().data or []
+        n = 1 + sum(1 for e in existing if str(e.get('slot_key', '')).startswith('site-'))
+        while any(e.get('slot_key') == f'site-{n}' for e in existing): n += 1
+        key = f'site-{n}'
+        ext = {'image/png': 'png', 'image/webp': 'webp'}.get(ct, 'jpg')
+        path = f"{claims['company_id']}/proposals/{pid}/site-{n}-{int(datetime.utcnow().timestamp())}.{ext}"
+        try:
+            sb.storage.from_(H['PREVIEW_BUCKET']).upload(path, raw, {'content-type': ct})
+        except Exception:
+            return jsonify({'error': 'The photo could not be saved.'}), 500
+        prompt = ('Show the proposed equipment installed in this space, in sensible positions and to scale: ' + '; '.join(desc[:10]) + '.') if desc else 'Show the proposed equipment installed in this space.'
+        row = sb.table('proposal_images').insert({
+            'company_id': claims['company_id'], 'proposal_id': pid, 'slot_key': key, 'title': clip(d.get('title'), 120) or f'Proposed installation at site ({n})',
+            'caption': 'Proposed equipment shown in the client\'s space (illustrative).', 'prompt': prompt, 'model_refs': models[:6], 'status': 'pending',
+            'sort': 100 + n, 'kind': 'site', 'source_path': path, 'include': True,
+        }).execute().data[0]
+        return jsonify({'image': image_public(row)}), 201
+
+    @app.route('/api/proposals/<pid>/draft/images/<key>', methods=['DELETE'])
+    def delete_image(pid, key):
+        sb, claims = get_sb(), g.claims
+        if not H['_load'](sb, claims, pid): return jsonify({'error': 'Not found'}), 404
+        im = load_image(sb, claims, pid, key)
+        if not im: return jsonify({'error': 'Not found'}), 404
+        if im.get('kind') != 'site': return jsonify({'error': 'Only uploaded site photos can be deleted. Untick Include to drop other images.'}), 409
+        for pth in (im.get('source_path'), im.get('image_path')):
+            if pth:
+                try: sb.storage.from_(H['PREVIEW_BUCKET']).remove([pth])
+                except Exception: pass
+        sb.table('proposal_images').delete().eq('id', im['id']).execute()
+        return jsonify({'ok': True})
+
     @app.route('/api/proposals/<pid>/draft/images/<key>/queue', methods=['POST'])
     def queue_image(pid, key):
         sb, claims = get_sb(), g.claims
@@ -416,19 +691,35 @@ The first image must have key "hero" (main space with the principal equipment). 
             prompt = (im.get('prompt') or im.get('title') or 'Meeting room') + style
             t0 = time.time()
             left = lambda: 275 - (time.time() - t0)   # Vercel limit is 300 s; keep a margin for upload + DB writes
-            refs = H['_refs_for_models'](sb, claims['company_id'], im.get('model_refs') or [])
+            refs = H['_refs_for_models'](sb, claims['company_id'], im.get('model_refs') or [], 3 if im.get('kind') == 'site' else 4)
+            site = im.get('kind') == 'site' and im.get('source_path')
+            if site:
+                try:
+                    sb_bytes = sb.storage.from_(H['PREVIEW_BUCKET']).download(im['source_path'])
+                except Exception:
+                    return fail('The uploaded site photo could not be read. Please upload it again.')
+                ext = im['source_path'].rsplit('.', 1)[-1].lower()
+                refs = [({'png': 'image/png', 'webp': 'image/webp'}.get(ext, 'image/jpeg'), sb_bytes)] + refs
+                prompt = ('The FIRST attached image is a photograph of the client\'s real space. Edit that photograph: keep the room exactly as photographed '
+                          '(walls, floor, ceiling, windows, existing furniture, lighting and camera angle) and add ONLY the proposed equipment described below, '
+                          'installed naturally and to scale in sensible positions. Any further attached images are product reference photos for the matching '
+                          'equipment (shape, colour, proportions). Photorealistic. Screens show blank or abstract content. No readable text, logos or brand names. '
+                          + (im.get('prompt') or 'Show the proposed equipment installed in this space.'))
             img, used, err = None, None, None
             for prof in (s.get('image_profile'), s.get('image_fallback')):
                 if not prof or not prof.get('model'): continue
                 if left() < 40: err = err or 'ran out of time'; break
+                if site and prof['provider'] != 'openai':
+                    err = 'Showing your site photo with the proposed equipment needs the OpenAI image model (gpt-image).'; continue
                 try:
                     if refs and prof['provider'] == 'openai':
                         try:
-                            img = H['_call_image_edit_openai'](prof, 'Use the attached product photos as the exact visual reference for the matching '
-                                                               'equipment (shape, colour, proportions). ' + prompt, refs, min(100, left() - 20))
-                        except GenError:
+                            img = H['_call_image_edit_openai'](prof, prompt if site else ('Use the attached product photos as the exact visual reference for the matching '
+                                                               'equipment (shape, colour, proportions). ' + prompt), refs, min(100 if not site else 150, left() - 20))
+                        except GenError as e:
+                            if site: raise
                             img = None
-                    if img is None:
+                    if img is None and not site:
                         img = H['_call_image'](prof, prompt, max(30, min(150, left() - 15)))
                     used = prof; break
                 except GenError as e:
@@ -572,7 +863,9 @@ Rules: copy only what the document says; never invent or guess items, quantities
             'v': (dr[0]['content'].get('v') or 2), 'reference': p['reference'], 'title': p.get('title') or '', 'customer': ss.get('customer') or p.get('customer_name') or '',
             'quote_ref': p.get('quote_ref') or '', 'project': ss.get('project') or '', 'date': datetime.utcnow().strftime('%Y-%m-%d'),
             'prepared_by': clip(d.get('prepared_by'), 120), 'doc': dr[0]['content'], 'lines': lines,
-            'images': {i['slot_key']: {'path': i['image_path'], 'title': i['title'] or '', 'caption': i['caption'] or ''} for i in imgs if i['include'] and i['status'] == 'ready'},
+            'images': {i['slot_key']: {'path': i['image_path'], 'title': i['title'] or '', 'caption': i['caption'] or '',
+                                       'kind': i.get('kind') or 'generated', 'source_path': i.get('source_path') or None}
+                       for i in imgs if i['include'] and i['status'] == 'ready'},
         }
         if show_prices and ss.get('commercials'): content['commercials'] = ss['commercials']
         last = sb.table('proposal_documents').select('version').eq('proposal_id', pid).order('version', desc=True).limit(1).execute().data

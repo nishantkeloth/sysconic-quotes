@@ -61,6 +61,22 @@ def _stable_hash(obj):
 # ── Customer-safe source projection from a quote ──────────────────────────────
 # Cost, margin, supplier discount and Reg-Cost are NEVER copied: the projection
 # is built field-by-field from an allowlist, not by deleting from a full row.
+def _quote_terms(quote):
+    """The quotation's own terms & conditions lines (payment, delivery, warranty, validity ...)."""
+    td = quote.get('terms_data') or []
+    if isinstance(td, str):
+        try: td = json.loads(td)
+        except Exception: td = []
+    out = []
+    for t in td if isinstance(td, list) else []:
+        if isinstance(t, dict):
+            if t.get('on') is False or t.get('include') is False: continue
+            t = t.get('text') or t.get('t') or ''
+        t = str(t or '').strip()
+        if t: out.append(t[:400])
+    return out[:30]
+
+
 def _safe_quote_projection(quote, option_idx, can_commercial):
     qd = quote.get('quote_data') or []
     opt = qd[option_idx] if 0 <= option_idx < len(qd) else (qd[0] if qd else {})
@@ -99,6 +115,7 @@ def _safe_quote_projection(quote, option_idx, can_commercial):
         'project': quote.get('title') or '',
         'lines': lines,
         'visibility': 'commercial' if can_commercial else 'technical',
+        'terms': _quote_terms(quote),
     }
     if can_commercial:
         sub = sum(l.get('line_total', 0) for l in lines)
@@ -290,7 +307,7 @@ def _source_changed(sb, claims, p, snap):
         ss = snap.get('safe_source') or {}
         # snapshot rows fetched in get_proposal omit the hash; recompute from the stored projection
         cur = _safe_quote_projection(qr[0], int(ss.get('option_index', 0) or 0), ss.get('visibility') == 'commercial')
-        a = {k: v for k, v in cur.items() if k != 'option_index'}
+        a = {k: v for k, v in cur.items() if k != 'option_index' and not (k == 'terms' and 'terms' not in ss)}
         b = {k: v for k, v in ss.items() if k != 'option_index'}
         return _stable_hash(a) != _stable_hash(b)
     except Exception:
@@ -824,6 +841,11 @@ def _doc_full(sb, claims, d):
                 im['url'] = _signed_url(PREVIEW_BUCKET, im['path'], 3600) if im.get('path') else None
             except Exception:
                 im['url'] = None
+            try:
+                from api.auth import _signed_url
+                im['source_url'] = _signed_url(PREVIEW_BUCKET, im['source_path'], 3600) if im.get('source_path') else None
+            except Exception:
+                im['source_url'] = None
     if not _can_commercial(claims):  # technical-only reader never gets prices
         c.pop('commercials', None)
         c['lines'] = [{k: v for k, v in l.items() if k not in ('unit_selling_price', 'line_total')} for l in c.get('lines', [])]

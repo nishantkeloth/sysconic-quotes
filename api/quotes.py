@@ -536,6 +536,27 @@ def _activate_project_performance(claims, quote, won_option_index):
 # pricing would get).
 CONTENT_FIELDS = ['title','customer','currency','exchange_rate','pricing_type','quote_data','terms_data','proposal_data','total_sell','total_gp','margin']
 
+# A quote may only move forward (be emailed, sent for review, marked Sent/Awarded)
+# once its customer is a real record in this company's Customer Master. The editor
+# enforces this in the UI too; this is the authoritative check.
+CUSTOMER_REQUIRED_MSG = 'Select a valid customer from your Customer Master before continuing (or add the customer first).'
+
+def _customer_in_master(claims, name):
+    name = (name or '').strip()
+    if not name:
+        return False
+    try:
+        safe = name.replace('%', '').replace(',', ' ').replace('(', ' ').replace(')', ' ').replace('*', ' ').strip()
+        if not safe:
+            return False
+        rows = sb.table('customers').select('name,company_name').eq('company_id', claims['company_id']) \
+            .or_(f'name.ilike.{safe},company_name.ilike.{safe}').limit(10).execute().data or []
+        want = name.lower()
+        return any((r.get('name') or '').strip().lower() == want or (r.get('company_name') or '').strip().lower() == want for r in rows)
+    except Exception as e:
+        print('customer master check failed (allowing):', e)
+        return True
+
 @app.route('/api/quotes/<qid>', methods=['PUT'])
 def update_quote(qid):
     claims = verify_token(request)
@@ -556,6 +577,8 @@ def update_quote(qid):
     old_status = existing.data[0].get('status')
     new_status = update.get('status', old_status)
     is_transitioning = new_status != old_status
+    if is_transitioning and new_status in ('sent', 'awarded') and not _customer_in_master(claims, update.get('customer', existing.data[0].get('customer'))):
+        return jsonify({'error': CUSTOMER_REQUIRED_MSG, 'code': 'CUSTOMER_REQUIRED'}), 422
     touches_content = any(f in update for f in CONTENT_FIELDS)
 
     if old_status != 'draft' and not is_transitioning and touches_content:
@@ -782,6 +805,9 @@ def submit_review(qid):
     # quote, so it needs the same edit permission as saving.
     if not _can_edit_quote(quote, claims):
         return jsonify({'error': 'You don\'t have permission to submit this quote for review — ask a Company Admin to enable "view all quotes" for your account, or have the quote creator submit it'}), 403
+
+    if not _customer_in_master(claims, quote.get('customer')):
+        return jsonify({'error': CUSTOMER_REQUIRED_MSG, 'code': 'CUSTOMER_REQUIRED'}), 422
 
     d = request.json or {}
     reviewer_ids = list({rid for rid in (d.get('reviewer_ids') or []) if rid})
@@ -1249,6 +1275,9 @@ def email_quote(qid):
     # saving does, so it requires the same edit permission as update_quote().
     if not _can_edit_quote(quote, claims):
         return jsonify({'error': 'You don\'t have permission to email this quote — ask a Company Admin to enable "view all quotes" for your account, or have the quote creator send it'}), 403
+
+    if not _customer_in_master(claims, quote.get('customer')):
+        return jsonify({'error': CUSTOMER_REQUIRED_MSG, 'code': 'CUSTOMER_REQUIRED'}), 422
 
     d = request.json or {}
     to_list, err = _parse_email_list(d.get('to'), 'To')
