@@ -9423,7 +9423,7 @@ async function propArchive(id,archive){
   if(r.error){alert(r.error);return;}
   loadProposals();
 }
-async function openProposal(id){PRP.detailId=id;PRP.detail=null;PRP.dr=null;PRP.im=null;PRP.loaded=false;PRP.step=1;PRP.msg='';PRP.docs=null;PRP.opts={show_prices:true,cover_note:''};PRP.undo=null;PRP.comments={};PRP.globalFb='';PRP.minPages='';clearTimeout(PRP.timer);A.page='proposalDetail';draw();}
+async function openProposal(id){PRP.detailId=id;PRP.detail=null;PRP.dr=null;PRP.im=null;PRP.loaded=false;PRP.step=1;PRP.msg='';PRP.docs=null;PRP.opts={show_prices:true,doc_type:'',cover_note:''};PRP.docType='';PRP.undo=null;PRP.comments={};PRP.globalFb='';PRP.minPages='';clearTimeout(PRP.timer);A.page='proposalDetail';draw();}
 async function loadProposalDetail(){
   const r=await api('GET','/api/proposals/'+PRP.detailId);
   if(r.error){PRP.detail={error:r.error};}else PRP.detail=r;
@@ -9481,8 +9481,10 @@ async function prpGenerateContent(){
   const instr=document.getElementById('prpInstr')?.value||(PRP.dr&&PRP.dr.instruction)||'';
   const mpEl=document.getElementById('prpMinPages');
   const minPages=Math.max(0,Math.min(40,mpEl?(parseInt(mpEl.value,10)||0):(parseInt(PRP.minPages,10)||0)));PRP.minPages=minPages||'';
+  const dtEl=document.getElementById('prpDocType');
+  const docType=dtEl?dtEl.value:(PRP.docType||prpDocType());PRP.docType=docType;PRP.opts.doc_type=docType;PRP.opts.show_prices=docType!=='technical';
   PRP.msg='';
-  const r=await api('POST','/api/proposals/'+PRP.detailId+'/draft/generate',{instruction:instr,min_pages:minPages});
+  const r=await api('POST','/api/proposals/'+PRP.detailId+'/draft/generate',{instruction:instr,min_pages:minPages,doc_type:docType});
   if(r.error){PRP.msg=r.error;renderWizard();return;}
   PRP.step=1;PRP.dr={status:'queued',instruction:instr};PRP.im=[];renderWizard();
   api('POST','/api/proposals/'+PRP.detailId+'/draft/run').then(()=>loadDraft(false)).catch(()=>loadDraft(false));
@@ -9545,7 +9547,7 @@ async function prpImageField(key,field,val){
 }
 async function prpConfirm(){
   await prpFlush();
-  const r=await api('POST','/api/proposals/'+PRP.detailId+'/draft/confirm',{options:PRP.opts,prepared_by:A.user?.name||''});
+  const r=await api('POST','/api/proposals/'+PRP.detailId+'/draft/confirm',{options:{...PRP.opts,doc_type:prpDocType(),show_prices:prpDocType()!=='technical'},prepared_by:A.user?.name||''});
   if(r.error){PRP.msg=r.error;renderWizard();return;}
   PRP.msg='';PRP.step=4;PRP.docs=null;await loadProposalDetail();
 }
@@ -9599,10 +9601,10 @@ function prpStep2(){
 }
 function prpPreviewDoc(){
   const d=PRP.detail,p=d.proposal,s=d.source&&d.source.safe_source||{};
-  const show=!!PRP.opts.show_prices&&!!s.commercials;
+  const mode=prpDocType(),show=mode!=='technical'&&!!s.commercials;
   let lines=prpLines();if(!show)lines=lines.map(l=>{const o={...l};delete o.unit_selling_price;delete o.line_total;return o;});
   const imgs={};(PRP.im||[]).forEach(i=>{if(i.include&&i.status==='ready'&&i.url)imgs[i.slot_key]={url:i.url,title:i.title||'',caption:i.caption||'',kind:i.kind||'generated',source_url:i.source_url||null};});
-  return {version:'draft',status:'draft',options:{show_prices:show,cover_note:PRP.opts.cover_note||''},
+  return {version:'draft',status:'draft',options:{show_prices:show,doc_type:mode,cover_note:PRP.opts.cover_note||''},
     content:{v:(PRP.dr.content&&PRP.dr.content.v)||3,reference:p.reference,title:p.title||'',customer:s.customer||p.customer_name||'',quote_ref:p.quote_ref||'',project:s.project||'',date:new Date().toISOString().slice(0,10),prepared_by:A.user?.name||'',doc:PRP.dr.content,lines,images:imgs,commercials:show?s.commercials:undefined}};
 }
 function prpStep3(){
@@ -9611,7 +9613,7 @@ function prpStep3(){
   const active=PRP.detail.proposal.lifecycle==='active';
   let h=`<div style="font-size:13px;color:var(--gray-500);margin-bottom:10px">This is the proposal as it will be issued. Go back to edit anything, then confirm to create the final document version.</div>
     <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">
-      ${canPrice?`<label style="font-size:13px;display:flex;gap:6px;align-items:center"><input type="checkbox" ${PRP.opts.show_prices?'checked':''} onchange="PRP.opts.show_prices=this.checked;renderWizard()"> Show prices</label>`:''}
+      <label style="font-size:13px;display:flex;gap:6px;align-items:center"><strong>Document type</strong> ${prpDocTypeSelect('',prpDocType(),canPrice)}</label>
       <div style="flex:1;min-width:240px"><label style="font-size:11px;color:var(--gray-500)">Cover note (optional, shown under the summary)</label><input style="width:100%;box-sizing:border-box" value="${esc(PRP.opts.cover_note||'')}" onchange="PRP.opts.cover_note=this.value;renderWizard()"></div></div>
     ${pend.length?`<div class="auth-err" style="margin-bottom:10px">${pend.length} included image(s) are not generated yet: ${pend.map(i=>esc(i.title||i.slot_key)).join(', ')}. Generate them or untick “Include” on the Images step.</div>`:''}
     ${PRP.msg?`<div class="auth-err" style="margin-bottom:10px">${esc(PRP.msg)}</div>`:''}
@@ -9726,6 +9728,24 @@ function prpSecEditor(s,i){
       <div style="display:flex;gap:6px;align-items:center">${prpChk(P+'.include','Include')}<button class="btn btn-sm" ${i?'':'disabled'} onclick="prpMoveSec(${i},-1)">↑</button><button class="btn btn-sm" ${i<n-1?'':'disabled'} onclick="prpMoveSec(${i},1)">↓</button><button class="btn btn-sm" onclick="prpDelSec(${i})">Delete section</button></div></div>
     ${prpIn(P+'.title','Section title')}${on?inner:'<div style="font-size:12px;color:var(--gray-500)">Hidden from the proposal. Tick “Include” to bring it back.</div>'}${on&&prpRevisable(s)?prpReviseBox(s.id):''}</div>`;
 }
+const PRP_DOC_LABEL={both:'Technical + commercial',technical:'Technical only',commercial:'Commercial only'};
+function prpCanPrice(){const s=PRP.detail&&PRP.detail.source;return hasPageAccess('quotes')&&!!s&&s.visibility==='commercial'&&!!(s.safe_source&&s.safe_source.commercials);}
+function prpDocType(){
+  let v=PRP.opts.doc_type||(PRP.dr&&PRP.dr.content&&PRP.dr.content.doc_type)||'both';
+  if(!prpCanPrice())v='technical';
+  return v;
+}
+function prpSetDocType(v){PRP.opts.doc_type=v;PRP.opts.show_prices=v!=='technical';renderWizard();}
+function prpModeFilter(secs,mode){
+  if(mode==='both'||!mode)return secs;
+  const si=secs.findIndex(s=>s.type==='systems');
+  const comm=s=>s.type==='investment'||s.type==='payment'||s.id==='terms';
+  if(mode==='technical')return secs.filter(s=>!comm(s));
+  return secs.filter((s,i)=>comm(s)||s.type==='boq'||s.type==='scope'||si<0||i<si);
+}
+function prpDocTypeSelect(idAttr,val,canPrice){
+  return `<select ${idAttr?`id="${idAttr}"`:''} onchange="${idAttr?"PRP.docType=this.value":"prpSetDocType(this.value)"}"><option value="both" ${val==='both'?'selected':''} ${canPrice?'':'disabled'}>Technical + commercial</option><option value="technical" ${val==='technical'?'selected':''}>Technical only (no prices or commercial terms)</option><option value="commercial" ${val==='commercial'?'selected':''} ${canPrice?'':'disabled'}>Commercial only (offer, prices, terms)</option></select>`;
+}
 const PRP_NOREV=['boq','investment','payment','diagram'];
 function prpRevisable(s){return !PRP_NOREV.includes(s.type)&&!['terms','about','why'].includes(s.id);}
 function prpReviseBox(k){
@@ -9776,6 +9796,7 @@ function prpStep1(){
       <div style="font-size:13px;margin-bottom:8px">QTCal reads the quotation and plans the proposal for <strong>this</strong> project: which sections it needs, how long each should be, and what every item does. The structure is different for every proposal. You can then edit, reorder, add or remove any section.</div>
       <label style="font-size:12px;color:var(--gray-500)">Customer requirements, design notes or guidance (optional, but the more you give, the more specific it gets)</label>
       <textarea id="prpInstr" rows="6" style="width:100%;box-sizing:border-box;font-size:13px" placeholder="Paste the customer's brief, room descriptions, design notes, special requirements…">${esc((dr&&dr.instruction)||PRP.detail.proposal.instruction||'')}</textarea>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0"><label style="font-size:12px;font-weight:700">Document type</label>${prpDocTypeSelect('prpDocType',prpDocType(),prpCanPrice())}<span style="font-size:12px;color:var(--gray-500)">Technical: no prices or commercial terms. Commercial: the offer, scope, prices and terms. Both: the full proposal.${prpCanPrice()?'':' Prices are not available for this source, so only technical applies.'}</span></div>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0"><label style="font-size:12px;font-weight:700">Minimum pages</label><input id="prpMinPages" type="number" min="0" max="40" value="${esc(String(PRP.minPages||''))}" placeholder="auto" style="width:80px" onchange="PRP.minPages=this.value"><span style="font-size:12px;color:var(--gray-500)">Leave empty for the natural length. The AI adds depth (not filler) to reach it. The cover, contents, bill of quantities and acceptance already take about 4 pages. Above 20 pages, generation takes longer.</span></div>
       <div style="font-size:12px;color:var(--gray-500);margin:6px 0 10px">Only the customer-safe equipment list and this text are sent to the AI. No cost, margin, supplier discount or prices.</div>
       ${active?'<button class="btn btn-navy" onclick="prpGenerateContent()">Generate full content</button>':'<div style="color:var(--gray-500);font-size:13px">Restore this proposal to generate content.</div>'}`;
@@ -9791,7 +9812,7 @@ function prpStep1(){
   h+=(c.sections||[]).map((s,i)=>prpSecEditor(s,i)).join('');
   h+=`<div style="display:flex;gap:8px;align-items:center;margin:4px 0 14px"><select id="prpAddType">${['text','columns','points','kpis','list','table'].map(t=>`<option value="${t}">${PRP_TYPE_LABEL[t]}</option>`).join('')}</select><button class="btn btn-sm" onclick="prpAddSec()">+ Add section</button></div>`;
   if(PRP.minPages==null||PRP.minPages==='')PRP.minPages=c.min_pages||'';
-  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;align-items:center"><button class="btn btn-navy" onclick="prpGo(2)">Next: Images →</button><button class="btn" onclick="prpGenerateContent()">Regenerate all content</button><label style="font-size:12px">Minimum pages <input id="prpMinPages" type="number" min="0" max="40" value="${esc(String(PRP.minPages||''))}" placeholder="auto" style="width:70px" onchange="PRP.minPages=this.value"></label></div>`;
+  h+=`<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;align-items:center"><button class="btn btn-navy" onclick="prpGo(2)">Next: Images →</button><button class="btn" onclick="prpGenerateContent()">Regenerate all content</button><label style="font-size:12px">Document type ${prpDocTypeSelect('prpDocType',prpDocType(),prpCanPrice())}</label><label style="font-size:12px">Minimum pages <input id="prpMinPages" type="number" min="0" max="40" value="${esc(String(PRP.minPages||''))}" placeholder="auto" style="width:70px" onchange="PRP.minPages=this.value"></label></div>`;
   return h;
 }
 // ── v3 diagrams: drawn by code from the AI's structured spec (never an image model) ──
@@ -9874,7 +9895,8 @@ function proposalPdfHTML3(doc){
   const qtyOf=ids=>{const ls=(ids||[]).map(id=>LM[id]).filter(Boolean);return {q:ls.reduce((a,x)=>a+(+x.l.quantity||0),0),u:ls[0]?ls[0].l.unit:'',ls};};
   let no=0,fig=0;const toc=[];const parts=[];
   const head=(t)=>{no++;toc.push([no,t]);return `<h2><span>${no}</span> ${esc(t)}</h2>`;};
-  const secs=(D.sections||[]).filter(on);
+  const mode=(doc.options&&doc.options.doc_type)||(priced?'both':'technical');
+  const secs=prpModeFilter((D.sections||[]).filter(on),mode);
   const hasBoq=secs.some(x=>x.type==='boq');
   const boq=(title)=>{
     const bySec={},order=[];lines.forEach((l,i)=>{const k=l.section||'Equipment';if(!bySec[k]){bySec[k]=[];order.push(k);}bySec[k].push({n:i+1,l});});
@@ -9929,7 +9951,7 @@ function proposalPdfHTML3(doc){
   });
   if(!boqDone)parts.push(boq());
   const F=D.facts||{};
-  const dc=[['Proposal reference',(C.reference||'')+(doc.version>1?' · v'+doc.version:'')],['Date',C.date||''],['Customer',C.customer||''],C.quote_ref?['Quotation',C.quote_ref]:null,['Prepared by',C.prepared_by||''],priced?['Currency',cur+(cm.vat_rate?`, VAT ${cm.vat_rate}% applicable`:'')]:null,F.validity?['Validity',F.validity]:null,F.delivery?['Delivery',F.delivery]:null,F.warranty?['Warranty',F.warranty]:null].filter(x=>x&&x[1]);
+  const dc=[['Proposal reference',(C.reference||'')+(doc.version>1?' · v'+doc.version:'')],['Date',C.date||''],['Customer',C.customer||''],C.quote_ref?['Quotation',C.quote_ref]:null,['Prepared by',C.prepared_by||''],priced?['Currency',cur+(cm.vat_rate?`, VAT ${cm.vat_rate}% applicable`:'')]:null,mode!=='technical'&&F.validity?['Validity',F.validity]:null,mode!=='technical'&&F.delivery?['Delivery',F.delivery]:null,mode!=='technical'&&F.warranty?['Warranty',F.warranty]:null].filter(x=>x&&x[1]);
   const tocHTML=`<section><h2 style="margin-top:6px">Contents</h2><div class="toc">${toc.map(([n,t])=>`<div><b>${n}</b> ${esc(t)}</div>`).join('')}</div>
     <h3>Document control</h3><table class="t dc"><tbody>${dc.map(([k,v])=>`<tr><td style="width:28%;font-weight:700;background:#f4f6fa">${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</tbody></table>${doc.options&&doc.options.cover_note?`<p style="margin-top:12px"><em>${p2(doc.options.cover_note)}</em></p>`:''}</section>`;
   const accept=`<section class="keep breakbefore"><h2 style="margin-top:0">Acceptance</h2><p>By signing below, ${esc(C.customer||'the customer')} accepts this proposal${C.quote_ref?` and quotation ${esc(C.quote_ref)}`:''}${priced?` (grand total ${esc(cur)} ${fmt(cm.total)} including VAT)`:''}${secs.some(x=>x.id==='terms')?' on the terms and conditions stated in this document':''}.</p>
@@ -9939,7 +9961,7 @@ function proposalPdfHTML3(doc){
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${PRP_CSS}</style></head><body>
     <div class="cover">
       <div class="lh"><div class="logobox">${logo||`<strong>${esc(printCoName())}</strong>`}</div><div class="addr">${addr}</div></div>
-      <div class="kind">${priced?'Technical &amp; commercial proposal':'Technical proposal'}</div>
+      <div class="kind">${mode==='commercial'?'Commercial proposal':mode==='technical'||!priced?'Technical proposal':'Technical &amp; commercial proposal'}</div>
       <div class="ct">${esc((D.cover&&D.cover.title)||C.title||'Proposal')}</div>
       <div class="cs">${esc((D.cover&&D.cover.subtitle)||C.project||'')}</div>
       <div class="csl">${p2(D.cover&&D.cover.scope_line)}</div>
@@ -10194,7 +10216,7 @@ function proposalDocsHTML(){
   if(docs==null)h+='<div style="color:var(--gray-500);font-size:13px">Loading…</div>';
   else if(!docs.length)h+='<div style="color:var(--gray-500);font-size:13px">No document versions yet.</div>';
   else h+=`<table style="width:100%;font-size:13px;border-collapse:collapse">${docs.map(d=>`<tr style="border-top:1px solid var(--gray-100)">
-      <td style="padding:7px 4px"><strong>v${d.version}</strong></td><td>${esc(propDocStatus(d.status))}${d.options&&d.options.show_prices?' · with prices':''}${d.decision_note?`<div style="font-size:12px;color:var(--gray-500)">${esc(d.decision_note)}</div>`:''}</td>
+      <td style="padding:7px 4px"><strong>v${d.version}</strong></td><td>${esc(propDocStatus(d.status))}${d.options&&d.options.doc_type?' · '+(PRP_DOC_LABEL[d.options.doc_type]||'').toLowerCase():(d.options&&d.options.show_prices?' · with prices':'')}${d.decision_note?`<div style="font-size:12px;color:var(--gray-500)">${esc(d.decision_note)}</div>`:''}</td>
       <td style="color:var(--gray-500);font-size:12px">${esc((d.created_at||'').slice(0,10))}</td>
       <td style="text-align:right;white-space:nowrap"><button class="btn btn-sm" onclick="downloadProposalPdf('${d.id}',this)">📄 PDF</button>
         ${active&&(d.status==='draft'||d.status==='rejected')?`<button class="btn btn-sm" onclick="docSubmit('${d.id}')">Submit for approval</button>`:''}

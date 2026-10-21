@@ -106,6 +106,7 @@ def register(app, H):
 - Anything uncertain or site-dependent is an assumption or a point to confirm, never stated as fact.
 - Use the customer brief/guidance, if given, as the source for requirements and site context; without one, do not invent a site description.
 - Write like a senior pre-sales engineer: specific to THIS customer and THIS equipment, plain professional English, no marketing hype, no filler. Vary wording; do not reuse stock sentences.
+- DOCUMENT TYPE: follow "document_type_rule" in the input when it is present.
 - LENGTH: if "min_pages" is given and above 0, the finished document (cover, contents, bill of quantities and acceptance take about 4 pages by themselves) must reach at least that many A4 pages at roughly 330 words per page. "depth_target_words" is YOUR share of the words: reach it with real substance (how each item is used, benefits for this customer, installation considerations, operation and maintenance, training, interoperability, risks and how they are mitigated, future expansion), never with repetition, filler or invented facts.
 - Output ONLY one JSON object. No markdown fences, no commentary."""
 
@@ -169,7 +170,12 @@ Section types (each {"type","title",...}):
 OUTPUT:
 {"design_sections": [ ... ], "delivery_sections": [ ... ]}"""
 
-    def build_user_prompt(p, snap, instr, co, max_images, terms=None, half='A', min_pages=0):
+    DOC_RULES = {
+        'technical': 'This is a TECHNICAL proposal. Do not mention prices, payment terms, warranty period, delivery time, validity or any other commercial term anywhere, and do not use such facts in key figures.',
+        'commercial': 'This is a COMMERCIAL offer. Keep the executive summary and the understanding of the requirement focused and concise (scope, value, what is included). Detailed technical design is not wanted.',
+    }
+
+    def build_user_prompt(p, snap, instr, co, max_images, terms=None, half='A', min_pages=0, doc_type='both'):
         lines = []
         for i, l in enumerate((snap['safe_source'].get('lines') or []), 1):
             lines.append({'line_id': l.get('source_line_id'), 'boq_no': i, 'section': l.get('section'),
@@ -179,6 +185,9 @@ OUTPUT:
                  'customer_brief_and_guidance': ' '.join(x for x in (p.get('instruction'), instr) if x) or '(none)',
                  'quote_terms': terms or [], 'company_facts': co, 'boq': lines[:120]}
         if half == 'A': brief['max_images'] = max_images
+        if doc_type in DOC_RULES:
+            brief['document_type'] = doc_type; brief['document_type_rule'] = DOC_RULES[doc_type]
+            if doc_type == 'technical': brief['quote_terms'] = []
         if min_pages:
             need = max(0, (min_pages - 4) * 330)
             brief['min_pages'] = min_pages
@@ -456,7 +465,9 @@ OUTPUT:
         instr = clip((request.json or {}).get('instruction'), 6000) or None
         try: min_pages = max(0, min(40, int(float((request.json or {}).get('min_pages') or 0))))
         except Exception: min_pages = 0
-        row = {'company_id': claims['company_id'], 'proposal_id': pid, 'status': 'queued', 'instruction': instr, 'content': {'req': {'min_pages': min_pages}},
+        doc_type = (request.json or {}).get('doc_type')
+        if doc_type not in ('both', 'technical', 'commercial'): doc_type = 'both'
+        row = {'company_id': claims['company_id'], 'proposal_id': pid, 'status': 'queued', 'instruction': instr, 'content': {'req': {'min_pages': min_pages, 'doc_type': doc_type}},
                'error': None, 'created_by': claims.get('user_id'), 'updated_at': now(), 'rev': 1}
         if cur:
             sb.table('proposal_drafts').update(row).eq('id', cur[0]['id']).execute()
@@ -499,8 +510,10 @@ OUTPUT:
             instr = draft.get('instruction')
             try: min_pages = max(0, min(40, int(((draft.get('content') or {}).get('req') or {}).get('min_pages') or 0)))
             except Exception: min_pages = 0
-            user_a = build_user_prompt(p, snap, instr, co, max_images, terms, 'A', min_pages)
-            user_b = build_user_prompt(p, snap, instr, co, max_images, terms, 'B', min_pages)
+            doc_type = ((draft.get('content') or {}).get('req') or {}).get('doc_type')
+            if doc_type not in ('both', 'technical', 'commercial'): doc_type = 'both'
+            user_a = build_user_prompt(p, snap, instr, co, max_images, terms, 'A', min_pages, doc_type)
+            user_b = build_user_prompt(p, snap, instr, co, max_images, terms, 'B', min_pages, doc_type)
             budget = max(8000, min(12000, int((min_pages - 4) * 330 * 0.6 * 1.6))) if min_pages > 12 else 8000
             t0 = time.time()
 
@@ -518,12 +531,13 @@ OUTPUT:
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=2) as ex:
                 fa = ex.submit(gen, SYSTEM_A, user_a, budget)
-                fb = ex.submit(gen, SYSTEM_B, user_b, budget)
+                fb = ex.submit(gen, SYSTEM_B, user_b, budget) if doc_type != 'commercial' else None
                 raw, used, err = fa.result()
-                raw_b, _u, _e = fb.result()
+                raw_b, _u, _e = fb.result() if fb else ({'design_sections': [], 'delivery_sections': []}, None, None)
             if raw is None: return fail(f'Content generation failed: {err}')
             content, images = normalise(raw, snap, co, p, max_images, terms, raw_b)
             if min_pages: content['min_pages'] = min_pages
+            content['doc_type'] = doc_type
             if not any(sc['type'] == 'systems' and sc.get('groups') for sc in content['sections']): return fail('The model returned no usable content. Please try again.')
             for i, im in enumerate(images):
                 sb.table('proposal_images').insert({
@@ -950,6 +964,19 @@ Rules: copy only what the document says; never invent or guess items, quantities
         return jsonify({'lines': lines, 'customer': clip(raw_j.get('customer'), 120), 'project': clip(raw_j.get('project'), 160),
                         'currency': clip(raw_j.get('currency'), 8), 'truncated': bool(raw_j.get('truncated'))})
 
+    def filter_doc(c, mode):
+        """Sections that belong to the chosen document type. Technical: no price/terms sections.
+        Commercial: opening sections, scope, bill of quantities and the commercial sections only."""
+        if mode == 'both': return c
+        secs = c.get('sections') or []
+        si = next((i for i, s in enumerate(secs) if s.get('type') == 'systems'), -1)
+        comm = lambda s: s.get('type') in ('investment', 'payment') or s.get('id') == 'terms'
+        if mode == 'technical': keep = [s for s in secs if not comm(s)]
+        else: keep = [s for i, s in enumerate(secs) if comm(s) or s.get('type') in ('boq', 'scope') or si < 0 or i < si]
+        out = dict(c, sections=keep)
+        if mode == 'technical': out['facts'] = {}
+        return out
+
     @app.route('/api/proposals/<pid>/draft/confirm', methods=['POST'])
     def confirm_draft(pid):
         """Step 3 -> 4: freeze the edited content + chosen images into an immutable document version."""
@@ -967,8 +994,13 @@ Rules: copy only what the document says; never invent or guess items, quantities
         if not snap: return jsonify({'error': 'Source snapshot missing.'}), 422
         d = request.json or {}
         opts_in = d.get('options') or {}
-        show_prices = bool(opts_in.get('show_prices')) and H['_can_commercial'](claims) and snap['visibility'] == 'commercial'
-        options = {'show_prices': show_prices, 'cover_note': clip(opts_in.get('cover_note'), 1500)}
+        can_price = H['_can_commercial'](claims) and snap['visibility'] == 'commercial'
+        doc_type = opts_in.get('doc_type')
+        if doc_type not in ('both', 'technical', 'commercial'): doc_type = 'both' if opts_in.get('show_prices') else 'technical'
+        if doc_type == 'commercial' and not can_price: return jsonify({'error': 'Prices are not available for this proposal, so a commercial document cannot be created. Choose technical only.'}), 422
+        if doc_type == 'both' and not can_price: doc_type = 'technical'
+        show_prices = doc_type != 'technical' and can_price
+        options = {'show_prices': show_prices, 'doc_type': doc_type, 'cover_note': clip(opts_in.get('cover_note'), 1500)}
         ss = snap['safe_source']
         lines = ss.get('lines') or []
         if not show_prices:
@@ -976,7 +1008,7 @@ Rules: copy only what the document says; never invent or guess items, quantities
         content = {
             'v': (dr[0]['content'].get('v') or 2), 'reference': p['reference'], 'title': p.get('title') or '', 'customer': ss.get('customer') or p.get('customer_name') or '',
             'quote_ref': p.get('quote_ref') or '', 'project': ss.get('project') or '', 'date': datetime.utcnow().strftime('%Y-%m-%d'),
-            'prepared_by': clip(d.get('prepared_by'), 120), 'doc': dr[0]['content'], 'lines': lines,
+            'prepared_by': clip(d.get('prepared_by'), 120), 'doc': filter_doc(dr[0]['content'], doc_type), 'lines': lines,
             'images': {i['slot_key']: {'path': i['image_path'], 'title': i['title'] or '', 'caption': i['caption'] or '',
                                        'kind': i.get('kind') or 'generated', 'source_path': i.get('source_path') or None}
                        for i in imgs if i['include'] and i['status'] == 'ready'},
