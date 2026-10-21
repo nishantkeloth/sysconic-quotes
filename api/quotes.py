@@ -658,17 +658,47 @@ def create_project_from_quote(qid):
     refreshed = sb.table('quotes').select('*').eq('id', qid).eq('company_id', claims['company_id']).execute()
     return jsonify({'ok': True, 'project_performance': pp_activation, 'quote': refreshed.data[0] if refreshed.data else None})
 
-# ── Delete quote (disabled by policy) ─────────────────────────────────────────
-# Once a quote is created it must never be deleted -- quote numbers are an
-# audit trail and are referenced by projects, invoices and vouchers. Kept as
-# an explicit 403 (rather than just removing the route) so a stale cached
-# client gets a clear message instead of a bare 405, and so no role --
-# admin included -- can delete through the API.
+# ── Delete quote (administrators only) ────────────────────────────────────────
+# Quote numbers are an audit trail, so deletion is deliberately narrow:
+#   - company administrators only;
+#   - refused while anything downstream depends on the quote (project, delivery
+#     challan, converted deal, proposal) - archive/remove those first;
+#   - every deletion is first written to quote_deletion_log with a full copy of
+#     the row (if that log cannot be written, nothing is deleted).
 @app.route('/api/quotes/<qid>', methods=['DELETE'])
 def delete_quote(qid):
     claims = verify_token(request)
     if not claims: return jsonify({'error': 'Unauthorized'}), 401
-    return jsonify({'error': 'Quotes cannot be deleted once created.'}), 403
+    if claims.get('role') != 'admin':
+        return jsonify({'error': 'Only an administrator can delete a quote.'}), 403
+    r = sb.table('quotes').select('*').eq('id', qid).eq('company_id', claims['company_id']).execute().data
+    if not r: return jsonify({'error': 'Not found'}), 404
+    quote = r[0]
+    checks = [('projects', 'quotation_id', 'a project'), ('delivery_challans', 'quote_id', 'a delivery challan'),
+              ('deals', 'converted_quote_id', 'a deal'), ('proposals', 'quote_id', 'an active proposal (archive it first)')]
+    blockers = []
+    for table, col, label in checks:
+        try:
+            qq = sb.table(table).select('id').eq(col, qid).eq('company_id', claims['company_id'])
+            if table == 'proposals': qq = qq.eq('lifecycle', 'active')   # archived proposals keep their own snapshot
+            if qq.limit(1).execute().data:
+                blockers.append(label)
+        except Exception:
+            traceback.print_exc()   # a module that is not installed simply cannot block
+    if blockers:
+        return jsonify({'error': 'This quote cannot be deleted because it is linked to ' + ', '.join(blockers) +
+                                 '. Remove or archive those first.', 'blockers': blockers}), 409
+    try:
+        sb.table('quote_deletion_log').insert({
+            'company_id': claims['company_id'], 'quote_id': qid, 'quote_ref': quote.get('quote_ref'), 'title': quote.get('title'),
+            'customer': quote.get('customer'), 'status': quote.get('status'), 'total_sell': quote.get('total_sell'),
+            'deleted_by': claims.get('user_id'), 'deleted_by_name': claims.get('name') or claims.get('email'), 'snapshot': quote,
+        }).execute()
+    except Exception:
+        traceback.print_exc()
+        return jsonify({'error': 'The deletion could not be recorded, so nothing was deleted. Ask your platform administrator to run migration-add-quote-deletion-log.sql.'}), 500
+    sb.table('quotes').delete().eq('id', qid).eq('company_id', claims['company_id']).execute()
+    return jsonify({'ok': True})
 
 # ── Duplicate quote ────────────────────────────────────────────────────────────
 @app.route('/api/quotes/<qid>/duplicate', methods=['POST'])

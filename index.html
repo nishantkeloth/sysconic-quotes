@@ -2189,6 +2189,20 @@ async function unlockForEditing(){
 function setStatus(s){A.saveStatus=s;const el=document.getElementById('saveStatus');if(!el)return;
   const m={saving:'<span class="save-pill save-ing">⏳ Saving…</span>',saved:'<span class="save-pill save-ok">✓ Saved</span>',error:'<span class="save-pill save-err">⚠ Failed</span>'};
   el.innerHTML=m[s]||'';}
+async function deleteQuote(id,e){
+  if(e)e.stopPropagation();
+  if(A.user?.role!=='admin'){alert('Only an administrator can delete a quote.');return;}
+  const q=(A.quotes||[]).find(x=>x.id===id)||(A.activeQuote&&A.activeQuote.id===id?A.activeQuote:{});
+  const ref=String(q.quote_ref||'DELETE');
+  const typed=prompt('Delete quote '+ref+(q.title?' ('+q.title+')':'')+' permanently?\n\nThis removes the quote, its versions and its activity log. A copy is kept in the deletion log. It is refused if the quote is linked to a project, delivery challan, deal or active proposal.\n\nType the quote number to confirm:');
+  if(typed===null)return;
+  if(typed.trim()!==ref){alert('That does not match the quote number. Nothing was deleted.');return;}
+  const r=await api('DELETE','/api/quotes/'+id);
+  if(r.error){alert(r.error);return;}
+  A.quotes=(A.quotes||[]).filter(x=>x.id!==id);
+  if(A.activeQuote&&A.activeQuote.id===id){A.activeQuote=null;A.page='dashboard';}
+  draw();
+}
 async function duplicateQuote(id,e){e.stopPropagation();const r=await api('POST','/api/quotes/'+id+'/duplicate');if(r.quote){A.quotes.unshift(r.quote);draw();}}
 // Same duplicate endpoint as the dashboard's ⧉ Copy, but used from inside an
 // open quote: jumps straight into the new copy instead of staying on the
@@ -3912,6 +3926,7 @@ function buildTopbarRight(){
         <button onclick="toggleImgOn()" title="Toggle product images & catalog assist for this quote">🖼 Images ${imgOn()?'ON':'OFF'}</button>
         <div class="mp-divider"></div>
         <button onclick="duplicateCurrentQuote()" title="Create an editable copy of this quote">⧉ Duplicate quote</button>
+        ${A.user?.role==='admin'&&A.activeQuote?.id?`<button style="color:#b42318" onclick="closeMoreMenu();deleteQuote('${A.activeQuote.id}')" title="Permanently delete this quote (administrators only)">🗑 Delete quote</button>`:''}
         <button onclick="closeMoreMenu();downloadPDF()" title="Export this quote as a PDF">⬇ Export PDF</button>
         <button onclick="closeMoreMenu();exportQuoteExcel()" title="Export the current option's BOQ to Excel (customer-facing: no cost or margin)">📊 Export Excel</button>
         ${hasFeature('delivery_challans')&&hasPageAccess('deliveryChallans')?`
@@ -5031,6 +5046,7 @@ function dashHTML(){
         <div class="qlist-actions" onclick="event.stopPropagation()">
           <button class="btn btn-sm" onclick="openQuote({id:'${q.id}'})">✏️</button>
           <button class="btn btn-sm" onclick="duplicateQuote('${q.id}',event)">⧉</button>
+          ${A.user?.role==='admin'?`<button class="btn btn-sm" title="Delete quote (administrators only)" style="color:#b42318" onclick="deleteQuote('${q.id}',event)">🗑</button>`:''}
         </div>
       </div>`;
     });
@@ -5051,6 +5067,7 @@ function dashHTML(){
         <div class="qcard-actions" onclick="event.stopPropagation()">
           <button class="btn btn-sm" onclick="openQuote({id:'${q.id}'})">✏️ Edit</button>
           <button class="btn btn-sm" onclick="duplicateQuote('${q.id}',event)">⧉ Copy</button>
+          ${A.user?.role==='admin'?`<button class="btn btn-sm" title="Delete quote (administrators only)" style="color:#b42318" onclick="deleteQuote('${q.id}',event)">🗑 Delete</button>`:''}
         </div>
       </div>`;
     });
