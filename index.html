@@ -522,7 +522,7 @@ const DEFAULT_TERMS=[
 let _n=1; const uid=()=>'i'+ _n++;
 const A={screen:'login',token:null,user:null,company:null,
   page:'dashboard',quotes:[],activeQuote:null,view:'internal',cur:'AED',rate:1,
-  activeOpt:0,saveStatus:'',searchQ:'',filterStatus:'all',sbOpen:false,
+  activeOpt:0,saveStatus:'',searchQ:'',filterStatus:'all',period:'all',pFrom:'',pTo:'',sbOpen:false,
   sbCollapsed:localStorage.getItem('sq_sidebar_collapsed')==='1',
   sbGroupOpen:JSON.parse(localStorage.getItem('sq_sidebar_groups')||'{}'),
   portfolio:null,ppFilters:{},ppDetail:null,ppDetailId:null,ppDetailTab:'overview'};
@@ -4998,8 +4998,30 @@ function insightsHTML(){
   </div>`;
 }
 
+const DASH_PERIODS=[['all','All time'],['today','Today'],['week','This week'],['last7','Last 7 days'],['month','This month'],['last30','Last 30 days'],['quarter','This quarter'],['year','This year'],['custom','Custom range']];
+function dashPeriodRange(){
+  const n=new Date(),sod=d=>new Date(d.getFullYear(),d.getMonth(),d.getDate()),t0=sod(n),day=86400000;
+  switch(A.period){
+    case 'today':return [t0,new Date(+t0+day)];
+    case 'week':{const dow=(t0.getDay()+6)%7;const s=new Date(+t0-dow*day);return [s,new Date(+s+7*day)];}
+    case 'last7':return [new Date(+t0-6*day),new Date(+t0+day)];
+    case 'month':return [new Date(n.getFullYear(),n.getMonth(),1),new Date(n.getFullYear(),n.getMonth()+1,1)];
+    case 'last30':return [new Date(+t0-29*day),new Date(+t0+day)];
+    case 'quarter':{const qm=Math.floor(n.getMonth()/3)*3;return [new Date(n.getFullYear(),qm,1),new Date(n.getFullYear(),qm+3,1)];}
+    case 'year':return [new Date(n.getFullYear(),0,1),new Date(n.getFullYear()+1,0,1)];
+    case 'custom':{
+      const f=A.pFrom?new Date(A.pFrom+'T00:00:00'):null,u=A.pTo?new Date(+new Date(A.pTo+'T00:00:00')+day):null;
+      return [f,u];}
+  }
+  return [null,null];
+}
 function dashHTML(){
-  const allQs=A.quotes;
+  const [pf,pt]=dashPeriodRange();
+  const allQs=A.quotes.filter(q=>{
+    if(!pf&&!pt)return true;
+    const d=new Date(q.updated_at);
+    return (!pf||d>=pf)&&(!pt||d<pt);
+  });
   // Cancelled quotes stay visible in the list (and filterable) but are left
   // out of every figure in the metric strip below.
   const qs=allQs.filter(q=>q.status!=='cancelled');
@@ -5019,6 +5041,10 @@ function dashHTML(){
   </div>
   <div class="filter-bar">
     <input id="quoteSearchInp" class="search-inp" placeholder="🔍 Search quotes..." value="${esc(A.searchQ)}" oninput="A.searchQ=this.value;draw()">
+    <select class="filter-sel" title="Filter by date" onchange="A.period=this.value;draw()">
+      ${DASH_PERIODS.map(([v,l])=>`<option value="${v}" ${A.period===v?'selected':''}>${l}</option>`).join('')}
+    </select>
+    ${A.period==='custom'?`<input type="date" class="filter-sel" value="${esc(A.pFrom)}" onchange="A.pFrom=this.value;draw()" title="From"><input type="date" class="filter-sel" value="${esc(A.pTo)}" onchange="A.pTo=this.value;draw()" title="To">`:''}
     <select class="filter-sel" onchange="A.filterStatus=this.value;draw()">
       <option value="all">All status</option>
       ${QUOTE_STATUSES.map(s=>`<option value="${s}" ${A.filterStatus===s?'selected':''}>${STATUS_LABELS[s]}</option>`).join('')}
