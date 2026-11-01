@@ -11949,7 +11949,7 @@ async function loadFSMPmSchedules(){
 async function fsmGeneratePmNow(){
   const r=await api('POST','/api/fsm_pm?resource=schedule&action=generate_now',{});
   if(r.error){alert(r.error);return;}
-  alert(`Generated ${r.count} ticket${r.count===1?'':'s'} from due PM schedules.`);
+  alert(`Generated ${r.count} ticket${r.count===1?'':'s'} from due PM schedules.`+((r.errors||[]).length?`\n\nCould not generate for:\n`+r.errors.map(e=>`- ${e.schedule}: ${e.error}`).join('\n'):''));
   A.fsmPmSchedules=null;loadFSMPmSchedules();
 }
 

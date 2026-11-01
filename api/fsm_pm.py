@@ -11,7 +11,7 @@ from flask import Flask, request, jsonify, g
 import os
 import uuid
 import calendar
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 from api.auth import verify_token, get_sb
 
@@ -181,10 +181,56 @@ def update_schedule():
     return jsonify(result.data[0])
 
 
-def _generate_for_company(sb, company_id, today):
+def _find_applicable_contract(sb, company_id, customer_id, site_id):
+    """Same rule as api/fsm_tickets.py: a contract for this exact site first,
+    then a customer-wide one; active and not past its end date."""
+    today = datetime.utcnow().date().isoformat()
+
+    def _query(site_filter):
+        q = (
+            sb.table("fsm_contracts").select("*")
+            .eq("company_id", company_id).eq("customer_id", customer_id).eq("is_active", True)
+        )
+        q = q.is_("site_id", "null") if site_filter is None else q.eq("site_id", site_filter)
+        return q.execute().data or []
+
+    cands = []
+    if site_id:
+        cands = [c for c in _query(site_id) if not c.get("end_date") or c["end_date"] >= today]
+    if not cands:
+        cands = [c for c in _query(None) if not c.get("end_date") or c["end_date"] >= today]
+    return cands[0] if cands else None
+
+
+def _contract_fields(contract):
+    """SLA deadlines + billing class from the covering contract, mirroring
+    manual ticket creation (api/fsm_tickets.py)."""
+    out = {}
+    now = datetime.utcnow()
+    if contract:
+        out["contract_id"] = contract["id"]
+        if contract.get("sla_response_hours") is not None:
+            out["sla_response_due_at"] = (now + timedelta(hours=float(contract["sla_response_hours"]))).isoformat()
+        if contract.get("sla_resolution_hours") is not None:
+            out["sla_resolution_due_at"] = (now + timedelta(hours=float(contract["sla_resolution_hours"]))).isoformat()
+    ctype = contract.get("contract_type") if contract else None
+    if ctype == "warranty":
+        out["billing_type"], out["billing_status"] = "warranty", "not_billable"
+    elif ctype in ("amc", "cmc", "fully_comprehensive"):
+        out["billing_type"], out["billing_status"] = "amc_included", "not_billable"
+    elif ctype in ("time_material", "labour_only", "parts_only"):
+        out["billing_type"], out["billing_status"] = "time_material", "pending"
+    else:
+        out["billing_type"], out["billing_status"] = "chargeable_visit", "pending"
+    return out
+
+
+def _generate_for_company(sb, company_id, today, errors=None):
     """Create tickets + work orders for every active, due schedule in one
     company. Shared by the manual 'Generate Now' button (JWT-gated, current
-    company only) and the cron endpoint (CRON_SECRET-gated, all companies)."""
+    company only) and the cron endpoint (CRON_SECRET-gated, all companies).
+    One bad schedule no longer aborts the rest: failures are collected in
+    `errors` (if given) as {schedule, error}."""
     due = (
         sb.table("fsm_pm_schedules")
         .select("*")
@@ -196,58 +242,80 @@ def _generate_for_company(sb, company_id, today):
     )
     generated = []
     for sched in due:
-        site = sb.table("fsm_sites").select("customer_id").eq("id", sched["site_id"]).single().execute().data
-        if not site:
-            continue
+        try:
+            rows = sb.table("fsm_sites").select("customer_id").eq("id", sched["site_id"]).limit(1).execute().data or []
+            if not rows:
+                raise ValueError("site not found for this schedule")
+            site = rows[0]
 
-        ticket_id = str(uuid.uuid4())
-        ticket = {
-            "id": ticket_id,
-            "company_id": company_id,
-            "ticket_number": _next_ticket_number(sb, company_id),
-            "site_id": sched["site_id"],
-            "asset_id": sched.get("asset_id"),
-            "customer_id": site["customer_id"],
-            "ticket_type": "preventive_maintenance",
-            "priority": "medium",
-            "status": "new",
-            "source": "pm_schedule",
-            "subject": f"Preventive Maintenance — {sched['name']}",
-            "description": f"Auto-generated from PM schedule ({sched['frequency'].replace('_',' ')}).",
-            "assigned_engineer_id": sched.get("assigned_engineer_id"),
-            "created_at": datetime.utcnow().isoformat(),
-        }
-        sb.table("fsm_tickets").insert(ticket).execute()
-        _log_activity(sb, ticket_id, company_id, "created", note="Ticket auto-created from PM schedule")
+            ticket_id = str(uuid.uuid4())
+            ticket = {
+                "id": ticket_id,
+                "company_id": company_id,
+                "ticket_number": _next_ticket_number(sb, company_id),
+                "site_id": sched["site_id"],
+                "asset_id": sched.get("asset_id"),
+                "customer_id": site["customer_id"],
+                "ticket_type": "preventive_maintenance",
+                "priority": "medium",
+                "status": "new",
+                "source": "pm_schedule",
+                "subject": f"Preventive Maintenance — {sched['name']}",
+                "description": f"Auto-generated from PM schedule ({sched['frequency'].replace('_',' ')}).",
+                "assigned_engineer_id": sched.get("assigned_engineer_id"),
+                "created_at": datetime.utcnow().isoformat(),
+            }
+            # SLA + billing class from the covering contract. Best effort: if the
+            # lookup or the SLA/billing columns are unavailable, still create the ticket.
+            try:
+                ticket.update(_contract_fields(_find_applicable_contract(sb, company_id, site["customer_id"], sched["site_id"])))
+            except Exception:
+                pass
+            try:
+                sb.table("fsm_tickets").insert(ticket).execute()
+            except Exception:
+                for k in ("contract_id", "sla_response_due_at", "sla_resolution_due_at", "billing_type", "billing_status"):
+                    ticket.pop(k, None)
+                sb.table("fsm_tickets").insert(ticket).execute()
+            _log_activity(sb, ticket_id, company_id, "created", note="Ticket auto-created from PM schedule")
 
-        sb.table("fsm_work_orders").insert({
-            "id": str(uuid.uuid4()),
-            "company_id": company_id,
-            "ticket_id": ticket_id,
-            "engineer_id": sched.get("assigned_engineer_id"),
-            "visit_date": sched["next_due_date"],
-            "checklist": sched.get("checklist", []),
-            "instructions": f"Preventive maintenance visit — {sched['name']}",
-            "created_at": datetime.utcnow().isoformat(),
-        }).execute()
+            sb.table("fsm_work_orders").insert({
+                "id": str(uuid.uuid4()),
+                "company_id": company_id,
+                "ticket_id": ticket_id,
+                "engineer_id": sched.get("assigned_engineer_id"),
+                "visit_date": sched["next_due_date"],
+                "checklist": sched.get("checklist") or [],
+                "instructions": f"Preventive maintenance visit — {sched['name']}",
+                "created_at": datetime.utcnow().isoformat(),
+            }).execute()
 
-        next_due = _advance_date(date.fromisoformat(sched["next_due_date"]), sched["frequency"])
-        sb.table("fsm_pm_schedules").update({
-            "next_due_date": next_due.isoformat(),
-            "last_generated_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
-        }).eq("id", sched["id"]).execute()
+            next_due = _advance_date(date.fromisoformat(sched["next_due_date"]), sched["frequency"])
+            sb.table("fsm_pm_schedules").update({
+                "next_due_date": next_due.isoformat(),
+                "last_generated_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat(),
+            }).eq("id", sched["id"]).execute()
 
-        generated.append({"schedule_id": sched["id"], "ticket_id": ticket_id, "ticket_number": ticket["ticket_number"]})
-
+            generated.append({"schedule_id": sched["id"], "ticket_id": ticket_id, "ticket_number": ticket["ticket_number"]})
+        except Exception as ex:
+            if errors is not None:
+                errors.append({"schedule": sched.get("name") or sched.get("id"), "error": str(ex)[:300]})
     return generated
 
 
 def generate_now():
-    company_id = g.claims['company_id']
+    company_id = g.claims["company_id"]
     sb = get_sb()
-    generated = _generate_for_company(sb, company_id, date.today())
-    return jsonify({"generated": generated, "count": len(generated)})
+    errors = []
+    try:
+        generated = _generate_for_company(sb, company_id, date.today(), errors)
+    except Exception as ex:
+        return jsonify({"error": f"Could not generate PM tickets: {str(ex)[:300]}"}), 500
+    out = {"generated": generated, "count": len(generated)}
+    if errors:
+        out["errors"] = errors
+    return jsonify(out)
 
 
 @app.route("/api/fsm_pm/run-auto-generate", methods=["GET", "POST"])
