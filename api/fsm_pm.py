@@ -271,12 +271,23 @@ def _generate_for_company(sb, company_id, today, errors=None):
                 ticket.update(_contract_fields(_find_applicable_contract(sb, company_id, site["customer_id"], sched["site_id"])))
             except Exception:
                 pass
-            try:
-                sb.table("fsm_tickets").insert(ticket).execute()
-            except Exception:
-                for k in ("contract_id", "sla_response_due_at", "sla_resolution_due_at", "billing_type", "billing_status"):
-                    ticket.pop(k, None)
-                sb.table("fsm_tickets").insert(ticket).execute()
+            # Some databases carry a CHECK constraint on fsm_tickets.source that does
+            # not list 'pm_schedule' (error 23514). Try progressively safer variants
+            # so a PM ticket is always created; the activity log still records that
+            # it came from a PM schedule.
+            optional = ("contract_id", "sla_response_due_at", "sla_resolution_due_at", "billing_type", "billing_status")
+            attempts = [dict(ticket), {**ticket, "source": "manual"}]
+            attempts.append({k: v for k, v in attempts[1].items() if k not in optional})
+            last_err = None
+            for cand in attempts:
+                try:
+                    sb.table("fsm_tickets").insert(cand).execute()
+                    last_err = None
+                    break
+                except Exception as ex_ins:
+                    last_err = ex_ins
+            if last_err is not None:
+                raise last_err
             _log_activity(sb, ticket_id, company_id, "created", note="Ticket auto-created from PM schedule")
 
             sb.table("fsm_work_orders").insert({
