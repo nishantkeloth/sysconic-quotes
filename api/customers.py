@@ -66,8 +66,12 @@ def list_customers():
 
     q = sb.table('customers').select('*', count='exact').eq('company_id', claims['company_id'])
     if search:
-        s = search.replace('%',' ').replace(',',' ')
-        q = q.or_(f'name.ilike.%{s}%,company_name.ilike.%{s}%,email.ilike.%{s}%,phone.ilike.%{s}%')
+        # PostgREST or() treats ( ) , . : " \ specially, so a name like
+        # "ACME LTD (Abu Dhabi - UAE)" broke the filter and returned an error.
+        # Wrap the pattern in double quotes (escaping \ and ") so it is literal.
+        s = search.replace('%',' ').replace('\\','\\\\').replace('"','\\"')
+        pat = f'"%{s}%"'
+        q = q.or_(f'name.ilike.{pat},company_name.ilike.{pat},email.ilike.{pat},phone.ilike.{pat}')
     rows = q.order('name').range(offset, offset + limit - 1).execute()
     return jsonify({'customers': rows.data, 'total': rows.count or 0})
 

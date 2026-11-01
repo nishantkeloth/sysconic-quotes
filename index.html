@@ -2969,7 +2969,7 @@ async function verifyQuoteCustomer(){
   const nm=q.customer.trim().toLowerCase();
   try{
     const r=await api('GET','/api/customers?limit=10&search='+encodeURIComponent(q.customer));
-    q._custOk=(r.customers||[]).some(c=>(c.name||'').trim().toLowerCase()===nm||(c.company_name||'').trim().toLowerCase()===nm);
+    q._custOk=!!r.error||(r.customers||[]).some(c=>(c.name||'').trim().toLowerCase()===nm||(c.company_name||'').trim().toLowerCase()===nm);
   }catch(e){q._custOk=true;} // a failed lookup must not lock people out
   const el=document.getElementById('custInput');if(el)el.style.borderColor=q._custOk?'':'var(--red,#d92d20)';
   if(!q._custOk)openCustModal();
