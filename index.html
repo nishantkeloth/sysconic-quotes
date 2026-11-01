@@ -11210,6 +11210,44 @@ async function fsmLoadCustomers(){
   }
   A.fsmCustomersCache=all;
 }
+// Type-ahead customer picker for Field Service forms (same Customer Master search
+// as the quote editor). The chosen customer id lives in a hidden input that keeps
+// the original element id, so the existing save functions keep working unchanged.
+const FCP={t:{},res:{}};
+function fsmCustField(id,selId,onpick){
+  const c=(A.fsmCustomersCache||[]).find(x=>x.id===selId);
+  const cb=onpick||'';
+  return `<div style="position:relative">
+    <input type="hidden" id="${id}" value="${esc(selId||'')}">
+    <input class="iinput" id="${id}_txt" autocomplete="off" placeholder="Start typing a customer name…" value="${esc(c?c.name:'')}" oninput="fsmCustType('${id}',this.value)" onfocus="fsmCustType('${id}',this.value)" onblur="setTimeout(()=>fsmCustHide('${id}'),180)">
+    <div id="${id}_dd" data-cb="${cb}" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:60;background:#fff;border:1px solid var(--gray-200);border-radius:8px;max-height:240px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.12)"></div>
+  </div>`;
+}
+function fsmCustHide(id){const d=document.getElementById(id+'_dd');if(d)d.style.display='none';}
+function fsmCustType(id,val){
+  const h=document.getElementById(id);if(h)h.value=''; // typing again clears the previous pick
+  clearTimeout(FCP.t[id]);
+  const q=(val||'').trim();
+  const dd=document.getElementById(id+'_dd');if(!dd)return;
+  dd.style.display='block';
+  dd.innerHTML='<div style="padding:10px 12px;font-size:13px;color:var(--gray-500)">Searching…</div>';
+  FCP.t[id]=setTimeout(async()=>{
+    const r=await api('GET','/api/customers?limit=20'+(q?'&search='+encodeURIComponent(q):''));
+    const d=document.getElementById(id+'_dd');if(!d)return;
+    if(!r||r.error){d.innerHTML=`<div class="auth-err" style="margin:8px">${esc((r&&r.error)||'Could not load customers.')}</div>`;return;}
+    const list=r.customers||[];FCP.res[id]=list;
+    d.innerHTML=list.length?list.map((c,i)=>`<div class="cust-opt" onmousedown="fsmCustPick('${id}',${i})"><div class="cust-name">${esc(c.name)}</div>${c.email?`<div class="cust-sub">${esc(c.email)}</div>`:''}</div>`).join('')
+      :'<div style="padding:10px 12px;font-size:13px;color:var(--gray-500)">No matching customer in your Customer Master. Add it from the Customers page first.</div>';
+  },q?250:0);
+}
+function fsmCustPick(id,i){
+  const c=(FCP.res[id]||[])[i];if(!c)return;
+  const h=document.getElementById(id),tx=document.getElementById(id+'_txt'),dd=document.getElementById(id+'_dd');
+  if(h)h.value=c.id;if(tx)tx.value=c.name;
+  if(!(A.fsmCustomersCache||[]).some(x=>x.id===c.id))(A.fsmCustomersCache=A.fsmCustomersCache||[]).push(c);
+  const cb=dd&&dd.dataset.cb;if(dd)dd.style.display='none';
+  if(cb&&typeof window[cb]==='function')window[cb]();
+}
 async function loadFSMSites(){
   if(A.fsmCustomersCache==null)await fsmLoadCustomers();
   const r=await api('GET','/api/fsm_assets?resource=site&action=list');
@@ -11227,10 +11265,7 @@ function showFsmSiteModal(siteId){
       <div class="modal-title">${isNew?'New Site':esc(s.name)}</div>
       <div id="fsmSiteError" class="auth-err" style="display:none"></div>
       <div class="fld"><label>Customer</label>
-        <select id="fsmSiteCustomer" class="iinput">
-          <option value="">— Select customer —</option>
-          ${customers.map(c=>`<option value="${c.id}" ${s?.customer_id===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}
-        </select>
+        ${fsmCustField('fsmSiteCustomer',s?.customer_id)}
       </div>
       <div class="fld"><label>Site Name</label><input id="fsmSiteName" class="iinput" value="${esc(s?.name||'')}" placeholder="e.g. HQ — Boardroom Level"></div>
       <div class="fld"><label>Address</label><input id="fsmSiteAddress" class="iinput" value="${esc(s?.address||'')}"></div>
@@ -11793,10 +11828,7 @@ function showFsmContractModal(contractId){
       <div id="fsmContractError" class="auth-err" style="display:none"></div>
       <div class="field-grid g2">
         <div class="fld"><label>Customer</label>
-          <select id="fsmContractCustomer" class="iinput">
-            <option value="">— Select customer —</option>
-            ${customers.map(cu=>`<option value="${cu.id}" ${c?.customer_id===cu.id?'selected':''}>${esc(cu.name)}</option>`).join('')}
-          </select>
+          ${fsmCustField('fsmContractCustomer',c?.customer_id)}
         </div>
         <div class="fld"><label>Site <span style="color:var(--gray-500);font-weight:400">(optional)</span></label>
           <select id="fsmContractSite" class="iinput">
@@ -12237,10 +12269,7 @@ async function showFsmTicketModal(){
       <div class="modal-title">New Service Ticket</div>
       <div id="fsmCreateError" class="auth-err" style="display:none"></div>
       <div class="fld"><label>Customer</label>
-        <select id="fsmNewCustomer" class="iinput" onchange="fsmTicketCustomerChanged()">
-          <option value="">— Select customer —</option>
-          ${customers.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')}
-        </select>
+        ${fsmCustField('fsmNewCustomer','','fsmTicketCustomerChanged')}
       </div>
       <div class="field-grid g2">
         <div class="fld"><label>Site <span style="color:var(--gray-500);font-weight:400">(optional)</span></label>
