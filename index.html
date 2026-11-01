@@ -11196,11 +11196,22 @@ function fsmSitesListHTML(){
     :`<div class="prod-hd" style="grid-template-columns:${cols}"><div>Site</div><div>Customer</div><div>Location</div><div>Contact</div></div>${rows}`;
 }
 
-async function loadFSMSites(){
-  if(A.fsmCustomersCache==null){
-    const cr=await api('GET','/api/customers?limit=500');
-    A.fsmCustomersCache=cr.customers||[];
+// The customers API caps a page at 100 rows, so a single ?limit=500 call only
+// returned the first 100 customers (alphabetically) and the rest never showed in
+// the Field Service dropdowns. Page through everything, and never cache a failed load.
+async function fsmLoadCustomers(){
+  const all=[];let off=0,total=null;
+  for(let i=0;i<50;i++){
+    const r=await api('GET','/api/customers?limit=100&offset='+off);
+    if(!r||r.error||!Array.isArray(r.customers))return A.fsmCustomersCache=null;
+    all.push(...r.customers);off+=r.customers.length;
+    total=r.total;
+    if(!r.customers.length||(total!=null&&all.length>=total))break;
   }
+  A.fsmCustomersCache=all;
+}
+async function loadFSMSites(){
+  if(A.fsmCustomersCache==null)await fsmLoadCustomers();
   const r=await api('GET','/api/fsm_assets?resource=site&action=list');
   if(r.error){A.fsmSites=[];alert(r.error);draw();return;}
   A.fsmSites=Array.isArray(r)?r:[];
@@ -11763,7 +11774,7 @@ function fsmContractsListHTML(){
 }
 
 async function loadFSMContracts(){
-  if(A.fsmCustomersCache==null){const cr=await api('GET','/api/customers?limit=500');A.fsmCustomersCache=cr.customers||[];}
+  if(A.fsmCustomersCache==null)await fsmLoadCustomers();
   if(A.fsmSites==null){const sr=await api('GET','/api/fsm_assets?resource=site&action=list');A.fsmSites=Array.isArray(sr)?sr:[];}
   const r=await api('GET','/api/fsm_contracts?resource=contract&action=list');
   if(r.error){A.fsmContracts=[];alert(r.error);draw();return;}
@@ -12219,10 +12230,7 @@ async function deactivateFsmEngineer(engineerId){
 }
 
 async function showFsmTicketModal(){
-  if(A.fsmCustomersCache==null){
-    const cr=await api('GET','/api/customers?limit=500');
-    A.fsmCustomersCache=cr.customers||[];
-  }
+  if(A.fsmCustomersCache==null)await fsmLoadCustomers();
   const customers=A.fsmCustomersCache||[];
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmModalOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmTicketModal()">
     <div class="modal" style="max-width:520px;max-height:88vh;overflow-y:auto">
@@ -13110,7 +13118,7 @@ async function downloadFsmPMReport(woId){
   if(btn){btn.disabled=true;btn.textContent='⏳ Generating…';}
   try{
     await ensurePrintCompany();
-    if(A.fsmCustomersCache==null){const cr=await api('GET','/api/customers?limit=500');A.fsmCustomersCache=cr.customers||[];}
+    if(A.fsmCustomersCache==null)await fsmLoadCustomers();
     const customer=(A.fsmCustomersCache||[]).find(c=>c.id===t.customer_id);
     const [site,assets]=await Promise.all([
       t.site_id?api('GET','/api/fsm_assets?resource=site&action=get&id='+t.site_id):Promise.resolve(null),
