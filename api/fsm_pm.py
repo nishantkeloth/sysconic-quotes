@@ -267,15 +267,22 @@ def _generate_for_company(sb, company_id, today, errors=None):
             }
             # SLA + billing class from the covering contract. Best effort: if the
             # lookup or the SLA/billing columns are unavailable, still create the ticket.
+            gap = False
             try:
-                ticket.update(_contract_fields(_find_applicable_contract(sb, company_id, site["customer_id"], sched["site_id"])))
+                contract = _find_applicable_contract(sb, company_id, site["customer_id"], sched["site_id"])
+                ticket.update(_contract_fields(contract))
+                # Coverage-gap guard: a scheduled PM visit with no active contract
+                # would silently become billable, so flag it for follow-up.
+                if not contract:
+                    ticket["coverage_gap"] = True
+                    gap = True
             except Exception:
                 pass
             # Some databases carry a CHECK constraint on fsm_tickets.source that does
             # not list 'pm_schedule' (error 23514). Try progressively safer variants
             # so a PM ticket is always created; the activity log still records that
             # it came from a PM schedule.
-            optional = ("contract_id", "sla_response_due_at", "sla_resolution_due_at", "billing_type", "billing_status")
+            optional = ("contract_id", "sla_response_due_at", "sla_resolution_due_at", "billing_type", "billing_status", "coverage_gap")
             attempts = [dict(ticket), {**ticket, "source": "manual"}]
             attempts.append({k: v for k, v in attempts[1].items() if k not in optional})
             last_err = None
@@ -288,7 +295,8 @@ def _generate_for_company(sb, company_id, today, errors=None):
                     last_err = ex_ins
             if last_err is not None:
                 raise last_err
-            _log_activity(sb, ticket_id, company_id, "created", note="Ticket auto-created from PM schedule")
+            _log_activity(sb, ticket_id, company_id, "created",
+                          note="Ticket auto-created from PM schedule" + (" - NO ACTIVE CONTRACT covers this site (renew the AMC or the visit is billed as chargeable)" if gap else ""))
 
             sb.table("fsm_work_orders").insert({
                 "id": str(uuid.uuid4()),

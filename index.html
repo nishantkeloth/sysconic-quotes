@@ -11108,7 +11108,10 @@ function fsmHTML(){
           </div>
         </div>
       </div>
-      ${newBtn?`<button class="btn btn-navy" onclick="${newBtn[1]}">${newBtn[0]}</button>`:''}
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button class="btn" title="Create site, contract and PM schedule for a new AMC customer in one form" onclick="showAmcWizard()">⚡ New AMC customer</button>
+        ${newBtn?`<button class="btn btn-navy" onclick="${newBtn[1]}">${newBtn[0]}</button>`:''}
+      </div>
     </div>
     ${view==='reports'?fsmReportsHTML():view==='tickets'?fsmTicketsListHTML():view==='schedule'?fsmScheduleHTML():view==='maintenance'?fsmPmListHTML():view==='contracts'?fsmContractsListHTML():view==='billing'?fsmBillingListHTML():view==='parts'?fsmPartsListHTML():view==='sites'?fsmSitesListHTML():view==='assets'?fsmAssetsListHTML():view==='kb'?fsmKbListHTML():fsmEngineersListHTML()}
   </div>`;
@@ -11166,7 +11169,7 @@ function fsmTicketsListHTML(){
   </div>`;
   const rows=(list||[]).map(t=>`<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="A.page='fsmDetail';A.fsmDetailId='${t.id}';A.fsmDetail=null;A.fsmActivity=null;draw();loadFSMDetail('${t.id}')">
     <div data-label="Ticket #"><strong>${esc(t.ticket_number)}</strong></div>
-    <div data-label="Subject">${esc(t.subject)}</div>
+    <div data-label="Subject">${esc(t.subject)}${t.coverage_gap?` <span class="sbadge s-waiting" title="No active contract covered this ticket when it was raised">⚠ no contract</span>`:''}</div>
     <div data-label="Type" style="color:var(--gray-500);font-size:13px">${esc((t.ticket_type||'').replace(/_/g,' '))}</div>
     <div data-label="Priority">${fsmBadge(t.priority,FSM_PRIORITY_CLASS)}</div>
     <div data-label="Status">${fsmBadge(t.status,FSM_STATUS_CLASS)}</div>
@@ -11415,6 +11418,145 @@ async function saveFsmAsset(assetId){
   if(r.error){if(errEl){errEl.textContent=r.error;errEl.style.display='block';}return;}
   closeFsmAssetModal();
   A.fsmAssets=null;loadFSMAssets();
+}
+
+// ── New AMC customer wizard: site + contract + PM schedule in one form ─────
+// Runs the same three create calls the individual screens use, one after the
+// other. If a later step fails, the earlier ones are kept and a retry resumes
+// from the failed step (AMCW remembers the ids), so nothing is created twice.
+let AMCW={siteId:null,contractId:null,pmId:null};
+const AMC_FREQ_MONTHS={monthly:1,quarterly:3,half_yearly:6,yearly:12};
+function amcAddMonths(iso,m){
+  const d=new Date(iso+'T00:00:00');if(isNaN(d))return '';
+  const day=d.getDate();d.setDate(1);d.setMonth(d.getMonth()+m);
+  const last=new Date(d.getFullYear(),d.getMonth()+1,0).getDate();d.setDate(Math.min(day,last));
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+async function showAmcWizard(){
+  AMCW={siteId:null,contractId:null,pmId:null};
+  if(A.fsmEngineers==null)await loadFSMEngineers();
+  closeAmcWizard();
+  const today=new Date();
+  const start=today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0');
+  const engineers=A.fsmEngineers||[];
+  const sec=(n,t,sub)=>`<div style="display:flex;align-items:baseline;gap:8px;margin:18px 0 8px;padding-top:12px;border-top:1px solid var(--gray-100)"><span style="background:var(--navy,#0f2a4a);color:#fff;border-radius:50%;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700">${n}</span><strong style="font-size:14px">${t}</strong><span style="font-size:12px;color:var(--gray-500)">${sub||''}</span></div>`;
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="amcOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeAmcWizard()">
+    <div class="modal" style="max-width:640px;max-height:92vh;overflow-y:auto">
+      <div class="modal-title">New AMC customer</div>
+      <div class="modal-sub">Creates the site, the contract and the recurring PM schedule in one go.</div>
+      <div id="amcError" class="auth-err" style="display:none"></div>
+      <div id="amcBody">
+      ${sec(1,'Customer and site')}
+      <div class="fld"><label>Customer</label>${fsmCustField('amcCust','','amcCustPicked')}</div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Site name</label><input id="amcSiteName" class="iinput" placeholder="e.g. HQ — Boardroom Level"></div>
+        <div class="fld"><label>Address <span style="color:var(--gray-500);font-weight:400">(optional)</span></label><input id="amcSiteAddress" class="iinput"></div>
+      </div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Site contact name <span style="color:var(--gray-500);font-weight:400">(optional)</span></label><input id="amcContactName" class="iinput"></div>
+        <div class="fld"><label>Contact phone <span style="color:var(--gray-500);font-weight:400">(optional)</span></label><input id="amcContactPhone" class="iinput"></div>
+      </div>
+      ${sec(2,'AMC contract','Gives tickets their SLA and sets billing to "included"')}
+      <div class="field-grid g2">
+        <div class="fld"><label>Contract type</label><select id="amcType" class="iinput"><option value="amc">AMC</option><option value="cmc">CMC</option><option value="fully_comprehensive">Fully Comprehensive</option></select></div>
+        <div class="fld"><label>Contract number <span style="color:var(--gray-500);font-weight:400">(optional)</span></label><input id="amcNumber" class="iinput" placeholder="e.g. AMC-2026-004"></div>
+      </div>
+      <div class="field-grid g2">
+        <div class="fld"><label>Start date</label><input id="amcStart" type="date" class="iinput" value="${start}" onchange="amcDatesChanged('start')"></div>
+        <div class="fld"><label>End date / renewal</label><input id="amcEnd" type="date" class="iinput" value="${amcAddMonths(start,12)}"></div>
+      </div>
+      <div class="fld"><label>Coverage</label><textarea id="amcCoverage" class="iinput" rows="2" placeholder="What is covered — e.g. LED wall, DSP, control system"></textarea></div>
+      <div class="field-grid g2">
+        <div class="fld"><label>SLA response (hours)</label><input id="amcSlaResp" type="number" class="iinput" value="4"></div>
+        <div class="fld"><label>SLA resolution (hours)</label><input id="amcSlaRes" type="number" class="iinput" value="24"></div>
+      </div>
+      ${sec(3,'Preventive maintenance schedule','Creates a visit ticket automatically each cycle')}
+      <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:8px"><input type="checkbox" id="amcPmOn" checked onchange="document.getElementById('amcPmBox').style.display=this.checked?'block':'none'"> Create a PM schedule for this site</label>
+      <div id="amcPmBox">
+        <div class="field-grid g2">
+          <div class="fld"><label>Frequency</label><select id="amcFreq" class="iinput" onchange="amcDatesChanged('freq')">${Object.keys(FSM_FREQUENCY_LABEL).map(f=>`<option value="${f}" ${f==='quarterly'?'selected':''}>${FSM_FREQUENCY_LABEL[f]}</option>`).join('')}</select></div>
+          <div class="fld"><label>First visit due</label><input id="amcFirstDue" type="date" class="iinput" value="${amcAddMonths(start,3)}"></div>
+        </div>
+        <div class="fld"><label>Default engineer <span style="color:var(--gray-500);font-weight:400">(optional)</span></label>
+          <select id="amcEngineer" class="iinput"><option value="">— Unassigned —</option>${engineers.map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join('')}</select></div>
+        <div class="fld"><label>Checklist <span style="color:var(--gray-500);font-weight:400">(one item per line — the engineer ticks these on every visit)</span></label>
+          <textarea id="amcChecklist" class="iinput" rows="5">${esc(FSM_PM_CHECKLIST_SUGGESTIONS.slice(0,5).join('\n'))}</textarea></div>
+      </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeAmcWizard()" id="amcCancel">Cancel</button>
+        <button class="btn btn-navy" id="amcSave" onclick="amcWizardSave()">Create site, contract and schedule</button>
+      </div>
+    </div></div>`);
+}
+function closeAmcWizard(){const el=document.getElementById('amcOverlay');if(el)el.remove();}
+function amcCustPicked(){
+  const nm=document.getElementById('amcSiteName'),tx=document.getElementById('amcCust_txt');
+  if(nm&&!nm.value.trim()&&tx&&tx.value)nm.value=tx.value+' — Main site';
+}
+function amcDatesChanged(src){
+  const start=document.getElementById('amcStart')?.value;if(!start)return;
+  if(src==='start'){const e=document.getElementById('amcEnd');if(e)e.value=amcAddMonths(start,12);}
+  const f=document.getElementById('amcFreq')?.value||'quarterly';
+  const d=document.getElementById('amcFirstDue');if(d)d.value=amcAddMonths(start,AMC_FREQ_MONTHS[f]||3);
+}
+async function amcWizardSave(){
+  const g=id=>(document.getElementById(id)?.value||'').trim();
+  const errEl=document.getElementById('amcError'),btn=document.getElementById('amcSave');
+  const fail=m=>{errEl.textContent=m;errEl.style.display='block';};
+  errEl.style.display='none';
+  const customer_id=g('amcCust'),siteName=g('amcSiteName');
+  const pmOn=document.getElementById('amcPmOn').checked;
+  if(!customer_id)return fail('Pick the customer from the list (type a few letters, then click the match).');
+  if(!siteName)return fail('Site name is required.');
+  if(!g('amcStart')||!g('amcEnd'))return fail('Contract start and end dates are required.');
+  if(g('amcEnd')<g('amcStart'))return fail('The contract end date is before the start date.');
+  if(pmOn&&!g('amcFirstDue'))return fail('First visit due date is required for the PM schedule.');
+  btn.disabled=true;
+  const num=id=>{const v=g(id);return v?Number(v):null;};
+  const done=[];
+  try{
+    if(!AMCW.siteId){
+      btn.textContent='Creating site…';
+      const r=await api('POST','/api/fsm_assets?resource=site&action=create',{customer_id,name:siteName,address:g('amcSiteAddress'),contact_name:g('amcContactName'),contact_phone:g('amcContactPhone')});
+      if(r.error||!r.id)throw new Error('Site: '+(r.error||'could not be created'));
+      AMCW.siteId=r.id;
+    }
+    done.push('site');
+    if(!AMCW.contractId){
+      btn.textContent='Creating contract…';
+      const r=await api('POST','/api/fsm_contracts?resource=contract&action=create',{customer_id,site_id:AMCW.siteId,contract_type:g('amcType'),contract_number:g('amcNumber'),start_date:g('amcStart'),end_date:g('amcEnd'),coverage_notes:g('amcCoverage'),sla_response_hours:num('amcSlaResp'),sla_resolution_hours:num('amcSlaRes')});
+      if(r.error||!r.id)throw new Error('Contract: '+(r.error||'could not be created'));
+      AMCW.contractId=r.id;
+    }
+    done.push('contract');
+    if(pmOn&&!AMCW.pmId){
+      btn.textContent='Creating PM schedule…';
+      const freq=g('amcFreq')||'quarterly';
+      const checklist=g('amcChecklist').split('\n').map(s=>s.trim()).filter(Boolean).map(text=>({text,done:false}));
+      const r=await api('POST','/api/fsm_pm?resource=schedule&action=create',{name:`${FSM_FREQUENCY_LABEL[freq]} PM - ${siteName}`,site_id:AMCW.siteId,frequency:freq,next_due_date:g('amcFirstDue'),assigned_engineer_id:g('amcEngineer')||null,checklist});
+      if(r.error||!r.id)throw new Error('PM schedule: '+(r.error||'could not be created'));
+      AMCW.pmId=r.id;
+    }
+  }catch(e){
+    const parts=[];if(AMCW.siteId)parts.push('site');if(AMCW.contractId)parts.push('contract');
+    fail((e.message||String(e))+(parts.length?` — already created: ${parts.join(' and ')}. Fix the problem and click again to continue; nothing will be created twice.`:''));
+    btn.disabled=false;btn.textContent=AMCW.siteId?'Retry remaining steps':'Create site, contract and schedule';
+    return;
+  }
+  A.fsmSites=null;A.fsmContracts=null;A.fsmPmSchedules=null;
+  const body=document.getElementById('amcBody');
+  const first=g('amcFirstDue');
+  body.innerHTML=`<div style="padding:8px 0 4px"><div style="font-size:15px;font-weight:700;color:var(--green,#067647);margin-bottom:10px">✓ AMC customer set up</div>
+    <ul style="margin:0 0 8px 18px;font-size:14px;line-height:1.8">
+      <li>Site <strong>${esc(siteName)}</strong></li>
+      <li>${esc(({amc:'AMC',cmc:'CMC',fully_comprehensive:'Fully Comprehensive'})[g('amcType')]||'Contract')} contract, ${esc(g('amcStart'))} to ${esc(g('amcEnd'))}, SLA ${esc(g('amcSlaResp')||'–')}h / ${esc(g('amcSlaRes')||'–')}h</li>
+      ${AMCW.pmId?`<li>PM schedule, first visit due <strong>${esc(first)}</strong>. A ticket and work order are created automatically on that date.</li>`:'<li>No PM schedule (you can add one from the Maintenance tab).</li>'}
+    </ul>
+    <div style="font-size:13px;color:var(--gray-500)">Next: register the equipment at this site under Setup &gt; Assets so engineers can mark each device on the PM report.</div></div>`;
+  document.getElementById('amcCancel').textContent='Close';
+  btn.textContent='Go to Assets';btn.disabled=false;
+  btn.onclick=()=>{closeAmcWizard();fsmSwitchView('assets');};
 }
 
 function fsmSwitchView(view){
@@ -11782,6 +11924,104 @@ async function saveFsmPart(partId){
   closeFsmPartModal();
   A.fsmParts=null;loadFSMParts();
 }
+// ── Contract renewal, renewal quote, coverage-gap helpers ────────────────
+function fsmContractNumOf(id){const x=(A.fsmContracts||[]).find(y=>y.id===id);return x?(x.contract_number||'earlier contract'):'';}
+function fsmContractRenewBoxHTML(c){
+  const from=c.renewed_from_id?`<div style="font-size:12px;color:var(--gray-600,#475467)">↻ Renewal of <a href="#" onclick="event.preventDefault();closeFsmContractModal();showFsmContractModal('${c.renewed_from_id}')">${esc(fsmContractNumOf(c.renewed_from_id))}</a></div>`:'';
+  const to=c.renewed_to_id?`<div style="font-size:12px;color:var(--gray-600,#475467)">✓ Renewed on ${esc((c.renewed_at||'').slice(0,10))} — replaced by <a href="#" onclick="event.preventDefault();closeFsmContractModal();showFsmContractModal('${c.renewed_to_id}')">${esc(fsmContractNumOf(c.renewed_to_id))}</a></div>`:'';
+  return `<div style="border:1px solid var(--gray-200);border-radius:8px;padding:10px 12px;margin:6px 0 12px;background:var(--gray-50,#f8fafc)">
+    <div style="font-weight:700;font-size:13px;margin-bottom:4px">Renewal</div>
+    ${from}${to}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      ${c.renewed_to_id?'':`<button class="btn btn-sm btn-navy" onclick="closeFsmContractModal();showFsmRenewModal('${c.id}')">↻ Renew contract</button>`}
+      ${hasPageAccess('quotes')?`<button class="btn btn-sm" onclick="fsmRenewalQuote('${c.id}')">Create renewal quote</button>`:''}
+    </div>
+  </div>`;
+}
+function amcAddDays(iso,n){const d=new Date(iso+'T00:00:00');d.setDate(d.getDate()+n);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+function fsmNextContractNo(n){if(!n)return '';const m=n.match(/^(.*?)(?:-R(\d+))?$/);return m[1]+'-R'+(m[2]?(+m[2]+1):1);}
+function closeFsmRenewModal(){const el=document.getElementById('fsmRenewOverlay');if(el)el.remove();}
+function showFsmRenewModal(id){
+  const c=(A.fsmContracts||[]).find(x=>x.id===id);if(!c)return;
+  closeFsmRenewModal();
+  let months=12;
+  if(c.start_date&&c.end_date){const d=(new Date(c.end_date)-new Date(c.start_date))/86400000+1;months=Math.max(1,Math.round(d/30.4375));}
+  const ns=c.end_date?amcAddDays(c.end_date,1):new Date().toISOString().slice(0,10);
+  const ne=amcAddDays(amcAddMonths(ns,months),-1);
+  const cust=(A.fsmCustomersCache||[]).find(x=>x.id===c.customer_id);
+  const site=(A.fsmSites||[]).find(x=>x.id===c.site_id);
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmRenewOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmRenewModal()">
+    <div class="modal" style="max-width:560px;max-height:90vh;overflow-y:auto">
+      <div class="modal-title">Renew contract</div>
+      <div class="modal-sub">${esc(c.contract_number||'Contract')} · ${esc(cust?cust.name:'')}${site?' · '+esc(site.name):''}</div>
+      <div id="fsmRenewError" class="auth-err" style="display:none"></div>
+      <div id="fsmRenewBody">
+        <div style="font-size:13px;color:var(--gray-500);margin-bottom:10px">A copy is created for the new term. The current contract (ends ${esc(c.end_date||'no end date')}) is marked <strong>Inactive</strong> and linked to the renewal. Previous term: ${months} month${months===1?'':'s'}.</div>
+        <div class="field-grid g2">
+          <div class="fld"><label>New contract number</label><input id="rnNumber" class="iinput" value="${esc(fsmNextContractNo(c.contract_number))}"></div>
+          <div class="fld"><label>Type</label><input class="iinput" value="${esc(FSM_CONTRACT_TYPE_LABEL[c.contract_type]||c.contract_type)}" disabled></div>
+        </div>
+        <div class="field-grid g2">
+          <div class="fld"><label>New start date</label><input id="rnStart" type="date" class="iinput" value="${ns}" onchange="document.getElementById('rnEnd').value=amcAddDays(amcAddMonths(this.value,${months}),-1)"></div>
+          <div class="fld"><label>New end date</label><input id="rnEnd" type="date" class="iinput" value="${ne}"></div>
+        </div>
+        <div class="field-grid g2">
+          <div class="fld"><label>SLA response (hours)</label><input id="rnSlaResp" type="number" class="iinput" value="${c.sla_response_hours??''}"></div>
+          <div class="fld"><label>SLA resolution (hours)</label><input id="rnSlaRes" type="number" class="iinput" value="${c.sla_resolution_hours??''}"></div>
+        </div>
+        <div class="fld"><label>Coverage</label><textarea id="rnCoverage" class="iinput" rows="2">${esc(c.coverage_notes||'')}</textarea></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn" id="rnCancel" onclick="closeFsmRenewModal()">Cancel</button>
+        <button class="btn btn-navy" id="rnSave" onclick="fsmRenewSave('${c.id}')">Renew contract</button>
+      </div>
+    </div></div>`);
+}
+async function fsmRenewSave(id){
+  const g=x=>(document.getElementById(x)?.value||'').trim();
+  const errEl=document.getElementById('fsmRenewError'),btn=document.getElementById('rnSave');
+  errEl.style.display='none';
+  if(!g('rnStart')||!g('rnEnd')){errEl.textContent='Start and end dates are required.';errEl.style.display='block';return;}
+  const num=x=>{const v=g(x);return v?Number(v):null;};
+  btn.disabled=true;btn.textContent='Renewing…';
+  const r=await api('POST','/api/fsm_contracts?resource=contract&action=renew&id='+id,{
+    contract_number:g('rnNumber'),start_date:g('rnStart'),end_date:g('rnEnd'),
+    sla_response_hours:num('rnSlaResp'),sla_resolution_hours:num('rnSlaRes'),coverage_notes:document.getElementById('rnCoverage').value});
+  if(r.error||!r.contract){errEl.textContent=r.error||'Could not renew.';errEl.style.display='block';btn.disabled=false;btn.textContent='Renew contract';return;}
+  A.fsmContracts=null;A.fsmPmSchedules=A.fsmPmSchedules?null:A.fsmPmSchedules;loadFSMContracts();
+  const nc=r.contract;
+  document.getElementById('fsmRenewBody').innerHTML=`<div style="font-size:15px;font-weight:700;color:var(--green,#067647);margin-bottom:8px">✓ Contract renewed</div>
+    <div style="font-size:14px;line-height:1.7">New contract <strong>${esc(nc.contract_number||'')}</strong>, ${esc(nc.start_date)} to ${esc(nc.end_date)}. The previous contract is now Inactive and linked to it. PM schedules continue as before.</div>
+    ${r.gap_tickets>0?`<div style="margin-top:12px;padding:10px 12px;border:1px solid #f79009;background:#fffaeb;border-radius:8px;font-size:13px"><strong>${r.gap_tickets} ticket${r.gap_tickets===1?'':'s'}</strong> were raised while no contract was active and are still unbilled. Apply this renewal to ${r.gap_tickets===1?'it':'them'}? (Tickets already invoiced or paid are never changed.)<div style="margin-top:8px"><button class="btn btn-sm btn-navy" id="rnGapBtn" onclick="fsmApplyGap('${nc.id}')">Apply renewal to ${r.gap_tickets} ticket${r.gap_tickets===1?'':'s'}</button></div></div>`:''}`;
+  document.getElementById('rnCancel').style.display='none';
+  btn.disabled=false;btn.textContent='Close';btn.onclick=closeFsmRenewModal;
+}
+async function fsmApplyGap(newId){
+  const b=document.getElementById('rnGapBtn');if(b){b.disabled=true;b.textContent='Applying…';}
+  const r=await api('POST','/api/fsm_contracts?resource=contract&action=reclassify_gap&id='+newId,{});
+  if(r.error){alert(r.error);if(b){b.disabled=false;b.textContent='Retry';}return;}
+  if(b)b.parentElement.innerHTML=`✓ Updated ${r.updated} ticket${r.updated===1?'':'s'}: now covered by the renewed contract (billing: AMC Included).`;
+  A.fsmTickets=null;
+}
+async function fsmRenewalQuote(id){
+  if(!hasPageAccess('quotes')){alert('You do not have access to the Quotes module.');return;}
+  const c=(A.fsmContracts||[]).find(x=>x.id===id);if(!c)return;
+  const cust=(A.fsmCustomersCache||[]).find(x=>x.id===c.customer_id);
+  const site=(A.fsmSites||[]).find(x=>x.id===c.site_id);
+  const title=`${FSM_CONTRACT_TYPE_LABEL[c.contract_type]||'Contract'} renewal — ${cust?cust.name:''}${site?' — '+site.name:''}${c.contract_number?' ('+c.contract_number+')':''}`;
+  const r=await api('POST','/api/quotes',{title,customer:cust?cust.name:'',quote_data:[mkOption('Option 1')],terms_data:[...DEFAULT_TERMS],vendor_data:[],currency:'AED',exchange_rate:3.6725});
+  if(!r.quote){alert(r.error||'Could not create the quote.');return;}
+  (A.quotes=A.quotes||[]).unshift(r.quote);
+  closeFsmContractModal();closeFsmRenewModal();
+  openQuote(r.quote);
+}
+// Maintenance tab: does an active, in-date contract cover this schedule's site?
+function fsmScheduleCovered(sch){
+  const today=new Date().toISOString().slice(0,10);
+  const site=(A.fsmSites||[]).find(s=>s.id===sch.site_id);
+  return (A.fsmContracts||[]).some(c=>c.is_active&&(!c.end_date||c.end_date>=today)&&(c.site_id?c.site_id===sch.site_id:(site&&c.customer_id===site.customer_id)));
+}
+
 const FSM_CONTRACT_TYPE_LABEL={warranty:'Warranty',amc:'AMC',cmc:'CMC',time_material:'Time & Material',labour_only:'Labour Only',parts_only:'Parts Only',fully_comprehensive:'Fully Comprehensive'};
 
 function fsmContractsListHTML(){
@@ -11794,13 +12034,19 @@ function fsmContractsListHTML(){
   const rows=(list||[]).map(c=>{
     const expiring=c.is_active&&c.end_date&&c.end_date<=soonISO;
     const expired=c.end_date&&c.end_date<today;
+    const numOf=id=>{const x=(list||[]).find(y=>y.id===id);return x?(x.contract_number||'earlier contract'):'';};
+    const lineage=c.renewed_from_id?`<div style="font-size:11px;color:var(--gray-500)">↻ renewal of ${esc(numOf(c.renewed_from_id))}</div>`:'';
+    const stBadge=c.renewed_to_id?`<span class="sbadge s-sent" title="Replaced by ${esc(numOf(c.renewed_to_id))}">Renewed</span>`
+      :!c.is_active?`<span class="sbadge s-cancelled">Inactive</span>`
+      :expired?`<span class="sbadge s-critical">Expired</span>`
+      :`<span class="sbadge s-resolved">Active</span>`;
     return `<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="showFsmContractModal('${c.id}')">
-      <div data-label="Contract #"><strong>${esc(c.contract_number||'—')}</strong></div>
+      <div data-label="Contract #"><strong>${esc(c.contract_number||'—')}</strong>${lineage}</div>
       <div data-label="Customer" style="color:var(--gray-500);font-size:13px">${esc(custName(c.customer_id))}</div>
       <div data-label="Type">${FSM_CONTRACT_TYPE_LABEL[c.contract_type]||c.contract_type}</div>
       <div data-label="Site" style="color:var(--gray-500);font-size:13px">${esc(c.site_id?siteName(c.site_id):'All sites')}</div>
       <div data-label="End Date">${c.end_date?`<span class="sbadge ${expired?'s-critical':expiring?'s-waiting':'s-sent'}">${esc(c.end_date)}</span>`:'—'}</div>
-      <div data-label="Status"><span class="sbadge ${c.is_active?'s-resolved':'s-cancelled'}">${c.is_active?'Active':'Inactive'}</span></div>
+      <div data-label="Status">${stBadge}</div>
     </div>`;
   }).join('');
   return list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
@@ -11862,6 +12108,7 @@ function showFsmContractModal(contractId){
       <div class="fld"><label>Billing Notes</label><textarea id="fsmContractBillingNotes" class="iinput" rows="2">${esc(c?.billing_notes||'')}</textarea></div>
       <div class="fld"><label>Holiday Calendar</label><textarea id="fsmContractHolidays" class="iinput" rows="2">${esc(c?.holiday_calendar_notes||'')}</textarea></div>
       <div class="fld"><label>Escalation Matrix</label><textarea id="fsmContractEscalation" class="iinput" rows="2" placeholder="e.g. L1 Engineer (2h) -> L2 Supervisor (4h) -> L3 Manager (8h)">${esc(c?.escalation_matrix||'')}</textarea></div>
+      ${!isNew?fsmContractRenewBoxHTML(c):''}
       ${!isNew?`<div class="fld"><label>Status</label><select id="fsmContractActive" class="iinput"><option value="true" ${c.is_active?'selected':''}>Active</option><option value="false" ${!c.is_active?'selected':''}>Inactive</option></select></div>`:''}
       <div class="modal-actions">
         <button class="btn" onclick="closeFsmContractModal()">Cancel</button>
@@ -11917,7 +12164,7 @@ function fsmPmListHTML(){
   const rows=(list||[]).map(p=>{
     const overdue=p.is_active&&p.next_due_date<=today;
     return `<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="showFsmPmModal('${p.id}')">
-      <div data-label="Schedule"><strong>${esc(p.name)}</strong></div>
+      <div data-label="Schedule"><strong>${esc(p.name)}</strong>${p.is_active&&A.fsmContracts&&!fsmScheduleCovered(p)?`<div style="font-size:11px;color:#b54708">⚠ no active contract covers this site</div>`:''}</div>
       <div data-label="Site" style="color:var(--gray-500);font-size:13px">${esc(siteName(p.site_id))}</div>
       <div data-label="Frequency" style="color:var(--gray-500);font-size:13px">${FSM_FREQUENCY_LABEL[p.frequency]||p.frequency}</div>
       <div data-label="Next Due"><span class="sbadge ${overdue?'s-critical':'s-sent'}">${esc(p.next_due_date)}</span></div>
@@ -11926,7 +12173,9 @@ function fsmPmListHTML(){
     </div>`;
   }).join('');
   const dueCount=(list||[]).filter(p=>p.is_active&&p.next_due_date<=today).length;
+  const uncovered=A.fsmContracts?(list||[]).filter(p=>p.is_active&&!fsmScheduleCovered(p)).length:0;
   return `<div>
+    ${uncovered?`<div style="padding:10px 12px;border:1px solid #f79009;background:#fffaeb;border-radius:8px;font-size:13px;margin-bottom:12px"><strong>⚠ ${uncovered} active PM schedule${uncovered===1?'':'s'} ${uncovered===1?'has':'have'} no active contract.</strong> Visits generated for ${uncovered===1?'it':'them'} will be flagged and billed as chargeable until the AMC is renewed (Setup &gt; Contracts &gt; open the contract &gt; Renew).</div>`:''}
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <div style="font-size:13px;color:var(--gray-500)">${dueCount} schedule${dueCount===1?'':'s'} due now</div>
       <button class="btn btn-sm" onclick="fsmGeneratePmNow()" ${dueCount?'':'disabled'}>Generate Due Tickets Now</button>
@@ -11940,6 +12189,7 @@ function fsmPmListHTML(){
 async function loadFSMPmSchedules(){
   if(A.fsmSites==null){const sr=await api('GET','/api/fsm_assets?resource=site&action=list');A.fsmSites=Array.isArray(sr)?sr:[];}
   if(A.fsmEngineers==null)await loadFSMEngineers();
+  if(A.fsmContracts==null){const cr=await api('GET','/api/fsm_contracts?resource=contract&action=list');A.fsmContracts=Array.isArray(cr)?cr:[];}
   const r=await api('GET','/api/fsm_pm?resource=schedule&action=list');
   if(r.error){A.fsmPmSchedules=[];alert(r.error);draw();return;}
   A.fsmPmSchedules=Array.isArray(r)?r:[];
@@ -12620,7 +12870,8 @@ const FSM_CHARGEABLE_TYPES=new Set(['chargeable_visit','time_material','fixed_pr
 
 function fsmBillingHTML(t){
   const chargeable=FSM_CHARGEABLE_TYPES.has(t.billing_type);
-  return `<div class="field-grid g2">
+  const gapBanner=t.coverage_gap?`<div style="padding:10px 12px;border:1px solid #f79009;background:#fffaeb;border-radius:8px;font-size:13px;margin-bottom:12px"><strong>⚠ No active contract covered this ticket.</strong> The customer's AMC has lapsed or was never renewed, so this is classed as a chargeable visit. If a renewal is signed, renew the contract (Setup &gt; Contracts) and apply it to this ticket; or set Billing Type to AMC Included below if it should be covered.</div>`:'';
+  return gapBanner+`<div class="field-grid g2">
     <div class="fld"><label>Billing Type</label>
       <select id="fsmBillingType" class="iinput" onchange="fsmBillingTypeChanged()">
         ${Object.keys(FSM_BILLING_TYPE_LABEL).map(k=>`<option value="${k}" ${t.billing_type===k?'selected':''}>${FSM_BILLING_TYPE_LABEL[k]}</option>`).join('')}

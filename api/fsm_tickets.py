@@ -183,6 +183,31 @@ def _find_applicable_contract(sb, company_id, customer_id, site_id):
     return candidates[0] if candidates else None
 
 
+COVER_CONTRACT_TYPES = ("amc", "cmc", "fully_comprehensive")
+
+
+def _has_lapsed_covering_contract(sb, company_id, customer_id, site_id):
+    """Coverage-gap guard: True when this customer/site has (or had) an AMC-type
+    contract but none is active today, i.e. it expired or was switched off and
+    has not been renewed. Such a ticket would otherwise silently become billable."""
+    today = datetime.utcnow().date().isoformat()
+    rows = (
+        sb.table("fsm_contracts")
+        .select("site_id,is_active,end_date")
+        .eq("company_id", company_id)
+        .eq("customer_id", customer_id)
+        .in_("contract_type", list(COVER_CONTRACT_TYPES))
+        .execute()
+        .data or []
+    )
+    for r in rows:
+        if r.get("site_id") and r["site_id"] != site_id:
+            continue
+        if (not r.get("is_active")) or (r.get("end_date") and r["end_date"] < today):
+            return True
+    return False
+
+
 def _log_activity(sb, ticket_id, company_id, event_type, actor_id=None, note=None, metadata=None):
     entry = {
         "id": str(uuid.uuid4()),
@@ -319,6 +344,14 @@ def create_ticket():
     else:
         record["billing_type"], record["billing_status"] = "chargeable_visit", "pending"
 
+    # Coverage-gap guard: flag tickets raised while an AMC has lapsed unrenewed.
+    if not contract:
+        try:
+            if _has_lapsed_covering_contract(sb, company_id, record["customer_id"], record["site_id"]):
+                record["coverage_gap"] = True
+        except Exception:
+            pass
+
     # Module 9: auto-detect repeat failures — same asset, same breakdown-type
     # ticket, resolved/closed within the last REPEAT_FAILURE_WINDOW_DAYS.
     if record["ticket_type"] in CM_TICKET_TYPES and record["asset_id"]:
@@ -336,10 +369,17 @@ def create_ticket():
         )
         record["is_repeat_failure"] = bool(prior.data)
 
-    result = sb.table("fsm_tickets").insert(record).execute()
+    try:
+        result = sb.table("fsm_tickets").insert(record).execute()
+    except Exception:
+        if "coverage_gap" not in record:
+            raise
+        record.pop("coverage_gap")  # column not migrated yet: still create the ticket
+        result = sb.table("fsm_tickets").insert(record).execute()
     created = result.data[0]
 
-    _log_activity(sb, ticket_id, company_id, "created", actor_id=actor_id, note="Ticket created")
+    _log_activity(sb, ticket_id, company_id, "created", actor_id=actor_id,
+                  note="Ticket created" + (" (no active contract: previous AMC has lapsed)" if record.get("coverage_gap") else ""))
 
     if record["site_id"]:
         def _send():
@@ -526,7 +566,16 @@ def update_billing():
     update["updated_at"] = datetime.utcnow().isoformat()
 
     sb = get_sb()
-    result = sb.table("fsm_tickets").update(update).eq("id", ticket_id).eq("company_id", company_id).execute()
+    # Once someone has consciously classed the ticket as covered, the gap flag is resolved.
+    if update.get("billing_type") in ("warranty", "amc_included"):
+        update["coverage_gap"] = False
+    try:
+        result = sb.table("fsm_tickets").update(update).eq("id", ticket_id).eq("company_id", company_id).execute()
+    except Exception:
+        if "coverage_gap" not in update:
+            raise
+        update.pop("coverage_gap")
+        result = sb.table("fsm_tickets").update(update).eq("id", ticket_id).eq("company_id", company_id).execute()
     if not result.data:
         return jsonify({"error": "not found"}), 404
 
