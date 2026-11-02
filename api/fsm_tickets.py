@@ -422,6 +422,61 @@ def get_ticket():
     return jsonify(result.data)
 
 
+def _set_ticket_status(sb, company_id, actor_id, ticket_id, new_status, note=None):
+    """Same SLA-milestone stamping as update_ticket_status(), callable internally
+    (used when finishing a visit resolves the ticket in the same step)."""
+    current = (
+        sb.table("fsm_tickets").select("status,first_response_at")
+        .eq("id", ticket_id).eq("company_id", company_id).single().execute().data
+    )
+    now_iso = datetime.utcnow().isoformat()
+    update = {"status": new_status, "updated_at": now_iso}
+    if current:
+        if new_status != "new" and not current.get("first_response_at"):
+            update["first_response_at"] = now_iso
+        if new_status == "on_site":
+            update["arrived_at"] = now_iso
+        if new_status == "resolved":
+            update["resolved_at"] = now_iso
+        if new_status == "closed":
+            update["closed_at"] = now_iso
+    sb.table("fsm_tickets").update(update).eq("id", ticket_id).eq("company_id", company_id).execute()
+    _log_activity(sb, ticket_id, company_id, "status_change", actor_id=actor_id,
+                  note=f"Status changed to {new_status}" + (f" ({note})" if note else ""))
+
+
+def _ensure_work_order(sb, company_id, ticket, engineer_id):
+    """Assigning an engineer is what creates the visit. If the ticket already has
+    an unfinished work order, hand it to this engineer; if it has none at all,
+    create one dated today (editable). Completed work orders are left alone."""
+    tid = ticket["id"]
+    wos = (
+        sb.table("fsm_work_orders").select("id,completion_notes")
+        .eq("ticket_id", tid).eq("company_id", company_id).eq("is_deleted", False)
+        .execute().data or []
+    )
+    pending = [w for w in wos if not w.get("completion_notes")]
+    if pending:
+        for w in pending:
+            sb.table("fsm_work_orders").update({"engineer_id": engineer_id, "updated_at": datetime.utcnow().isoformat()}) \
+                .eq("id", w["id"]).eq("company_id", company_id).execute()
+        return "updated"
+    if wos:
+        return None
+    desc = (ticket.get("description") or "").strip()
+    sb.table("fsm_work_orders").insert({
+        "id": str(uuid.uuid4()),
+        "company_id": company_id,
+        "ticket_id": tid,
+        "engineer_id": engineer_id,
+        "visit_date": datetime.utcnow().date().isoformat(),
+        "instructions": (ticket.get("subject") or "") + (f" - {desc}" if desc else ""),
+        "checklist": [],
+        "created_at": datetime.utcnow().isoformat(),
+    }).execute()
+    return "created"
+
+
 def update_ticket_status():
     company_id = g.claims['company_id']
     actor_id = g.claims['user_id']
@@ -462,9 +517,10 @@ def update_ticket_status():
     if not result.data:
         return jsonify({"error": "not found"}), 404
 
+    status_note = (payload.get("note") or "").strip()[:300]
     _log_activity(
         sb, ticket_id, company_id, "status_change",
-        actor_id=actor_id, note=f"Status changed to {new_status}",
+        actor_id=actor_id, note=f"Status changed to {new_status}" + (f": {status_note}" if status_note else ""),
     )
 
     return jsonify(result.data[0])
@@ -494,6 +550,13 @@ def assign_ticket():
         return jsonify({"error": "not found"}), 404
 
     _log_activity(sb, ticket_id, company_id, "assigned", actor_id=actor_id, note=f"Assigned to engineer {engineer_id}")
+
+    try:
+        wo_action = _ensure_work_order(sb, company_id, result.data[0], engineer_id)
+        if wo_action == "created":
+            _log_activity(sb, ticket_id, company_id, "note", actor_id=actor_id, note="Work order created automatically on assignment")
+    except Exception:
+        pass  # never block an assignment because the visit record could not be created
 
     def _send():
         eng = sb.table("fsm_engineers").select("email").eq("id", engineer_id).single().execute().data
@@ -725,6 +788,20 @@ def complete_work_order():
 
     ticket_id = result.data[0]["ticket_id"]
     _log_activity(sb, ticket_id, company_id, "completed", note="Work order completed")
+
+    # "Finish visit": resolve the ticket in the same step, unless another work
+    # order on it is still unfinished.
+    if payload.get("finish_ticket"):
+        try:
+            others = (
+                sb.table("fsm_work_orders").select("id,completion_notes")
+                .eq("ticket_id", ticket_id).eq("company_id", company_id).eq("is_deleted", False)
+                .neq("id", wo_id).execute().data or []
+            )
+            if not [w for w in others if not w.get("completion_notes")]:
+                _set_ticket_status(sb, company_id, g.claims.get("user_id"), ticket_id, "resolved", note="visit finished")
+        except Exception:
+            pass
 
     def _send():
         tk = sb.table("fsm_tickets").select("ticket_number,subject,site_id").eq("id", ticket_id).single().execute().data

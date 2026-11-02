@@ -12644,6 +12644,7 @@ function fsmDetailHTML(){
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:0">
       <div class="card">
+        ${fsmVisitActionsHTML(t)}
         <div class="card-title">Update Status</div>
         <select id="fsmStatusSelect" class="iinput" style="width:auto">
           ${statuses.map(s=>`<option value="${s}" ${s===t.status?'selected':''}>${s.replace(/_/g,' ')}</option>`).join('')}
@@ -13043,8 +13044,9 @@ async function saveFsmWorkOrder(ticketId){
 const FSM_ASSET_STATUS_LABELS={completed:'✅ Completed',issue_found:'⚠️ Issue found',not_applicable:'— N/A'};
 const FSM_CHECKLIST_STATUS_LABELS={completed:'✅ Completed',scheduled:'⏳ Scheduled for later',not_performed:'❌ Not performed'};
 
-async function showFsmCompleteWorkOrderModal(woId){
+async function showFsmCompleteWorkOrderModal(woId,finish){
   closeFsmCompleteWorkOrderModal(); // guard against a stale overlay/fetch from a previously-opened work order
+  A._fsmFinishTicket=!!finish;
   const wo=(A.fsmWorkOrders||[]).find(w=>w.id===woId);
   const checklist=(wo?.checklist||[]).map(c=>typeof c==='string'?{text:c,category:'General'}:c);
   document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmWoCompleteOverlay" data-wo-id="${woId}" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)closeFsmCompleteWorkOrderModal()">
@@ -13082,13 +13084,13 @@ async function showFsmCompleteWorkOrderModal(woId){
       <div class="fld"><label>Completion Notes</label>${micFieldWrap('<textarea id="fsmWoCompletionNotes" class="iinput" rows="3" placeholder="What was done, findings, follow-up needed…" style="padding-right:36px"></textarea>')}</div>
       <div class="modal-actions">
         <button class="btn" onclick="closeFsmCompleteWorkOrderModal()">Cancel</button>
-        <button class="btn btn-navy" onclick="completeFsmWorkOrder('${woId}')">Mark Complete</button>
+        <button class="btn btn-navy" onclick="completeFsmWorkOrder('${woId}')">${finish?'Finish visit':'Mark Complete'}</button>
       </div>
     </div>
   </div>`);
   loadFsmWoAssetStatuses(woId);
 }
-function closeFsmCompleteWorkOrderModal(){const el=document.getElementById('fsmWoCompleteOverlay');if(el){fsmMicStopAll(el);el.remove();}A._fsmWoAssets=null;A._fsmWoAssetsWoId=null;}
+function closeFsmCompleteWorkOrderModal(){const el=document.getElementById('fsmWoCompleteOverlay');if(el){fsmMicStopAll(el);el.remove();}A._fsmWoAssets=null;A._fsmWoAssetsWoId=null;A._fsmFinishTicket=false;}
 
 async function loadFsmWoAssetStatuses(woId){
   const el=document.getElementById('fsmWoAssetStatus');
@@ -13117,6 +13119,7 @@ async function loadFsmWoAssetStatuses(woId){
 async function completeFsmWorkOrder(woId){
   const notes=(document.getElementById('fsmWoCompletionNotes')?.value||'').trim();
   if(!notes){alert('Add completion notes first.');return;}
+  const finishTicket=!!A._fsmFinishTicket;
 
   const wo=(A.fsmWorkOrders||[]).find(w=>w.id===woId);
   const baseChecklist=(wo?.checklist||[]).map(c=>typeof c==='string'?{text:c,category:'General'}:{...c});
@@ -13157,11 +13160,12 @@ async function completeFsmWorkOrder(woId){
     checklist:baseChecklist,
     asset_statuses:assetStatuses,
     report_meta,
+    finish_ticket:finishTicket,
   });
   if(r.error){alert(r.error);return;}
   closeFsmCompleteWorkOrderModal();
   A._fsmWoAssets=null;
-  if(A.myJobsMode){A.myJobDetail=null;loadMyJobDetail(A.myJobDetailId);}
+  if(A.myJobsMode){A.myJobDetail=null;A.myJobs=null;loadMyJobDetail(A.myJobDetailId);}
   else loadFSMDetail(A.fsmDetailId);
 }
 
@@ -13466,6 +13470,74 @@ async function api2Blob(path,body){
   return {blob,filename:m?m[1]:(body.filename||'document.pdf')};
 }
 
+// ── Simplified visit actions: Start travelling / Arrived / Finish visit / Can't finish yet ──
+function fsmVisitActionsHTML(t){
+  const pre=['new','acknowledged','assigned','accepted'];
+  const working=['on_site','diagnosis','waiting_customer','waiting_parts','waiting_approval'];
+  const waiting=['waiting_customer','waiting_parts','waiting_approval'].includes(t.status);
+  let btns='',hint='';
+  if(pre.includes(t.status)){
+    btns=`<button class="btn btn-navy" onclick="fsmVisitStep('${t.id}','travelling')">Start travelling</button>`;
+    hint='Tap when you leave for the site.';
+  }else if(t.status==='travelling'){
+    btns=`<button class="btn btn-navy" onclick="fsmVisitStep('${t.id}','on_site')">Arrived on site</button>`;
+  }else if(working.includes(t.status)){
+    btns=`<button class="btn btn-navy" onclick="fsmVisitFinish('${t.id}')">Finish visit</button>
+      <button class="btn" onclick="fsmVisitHold('${t.id}')">Can't finish yet</button>`
+      +(waiting?`<button class="btn btn-sm" onclick="fsmVisitStep('${t.id}','on_site')">Resume work</button>`:'');
+    hint=waiting?'This job is on hold.':'Finish visit completes the work order and resolves the ticket in one step.';
+  }else if(t.status==='resolved'&&!A.myJobsMode){
+    btns=`<button class="btn btn-navy" onclick="fsmVisitStep('${t.id}','closed')">Close ticket</button>`;
+    hint='Visit finished. Close the ticket once billing (if any) is sorted.';
+  }else{
+    return '';
+  }
+  return `<div style="padding:12px;border:1px solid var(--gray-200);border-radius:10px;background:var(--gray-50,#f8fafc);margin-bottom:14px">
+    <div style="font-weight:700;font-size:13px;margin-bottom:8px">Next step</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">${btns}</div>
+    ${hint?`<div style="font-size:12px;color:var(--gray-500);margin-top:8px">${hint}</div>`:''}
+  </div>`;
+}
+async function fsmVisitStep(ticketId,status,note){
+  const res=A.myJobsMode?'my':'ticket';
+  const r=await api('PATCH','/api/fsm_tickets?resource='+res+'&action=update_status&id='+ticketId,{status,note:note||''});
+  if(r.error){alert(r.error);return;}
+  if(A.myJobsMode){A.myJobDetail=null;A.myJobs=null;loadMyJobDetail(ticketId);}
+  else{A.fsmDetail=null;loadFSMDetail(ticketId);}
+}
+async function fsmVisitFinish(ticketId){
+  const pend=(A.fsmWorkOrders||[]).find(w=>!w.completion_notes);
+  if(pend){showFsmCompleteWorkOrderModal(pend.id,true);return;}
+  if(A.myJobsMode){
+    if(confirm('There is no work order on this job. Mark the ticket as resolved anyway?'))fsmVisitStep(ticketId,'resolved','visit finished');
+    return;
+  }
+  // Older ticket with no visit record: create one, then open the completion form.
+  const r=await api('POST','/api/fsm_tickets?resource=work_order&action=create',{ticket_id:ticketId,engineer_id:A.fsmDetail?.assigned_engineer_id||null,visit_date:new Date().toISOString().slice(0,10),instructions:A.fsmDetail?.subject||''});
+  if(r.error){alert(r.error);return;}
+  A.fsmWorkOrders=[...(A.fsmWorkOrders||[]),r];
+  showFsmCompleteWorkOrderModal(r.id,true);
+}
+function fsmVisitHold(ticketId){
+  const old=document.getElementById('fsmHoldOverlay');if(old)old.remove();
+  document.body.insertAdjacentHTML('beforeend',`<div class="modal-overlay" id="fsmHoldOverlay" onmousedown="this._mdSelf=(event.target===this)" onclick="if(event.target===this&&this._mdSelf)this.remove()">
+    <div class="modal" style="max-width:420px">
+      <div class="modal-title">Can't finish yet</div>
+      <div class="fld"><label>Why?</label><select id="fsmHoldReason" class="iinput">
+        <option value="waiting_parts">Waiting for parts</option>
+        <option value="waiting_customer">Waiting for the customer</option>
+        <option value="waiting_approval">Waiting for approval</option></select></div>
+      <div class="fld"><label>Note (what is needed)</label><textarea id="fsmHoldNote" class="iinput" rows="3" placeholder="e.g. Need 2 LED modules P2.5"></textarea></div>
+      <div class="modal-actions"><button class="btn" onclick="document.getElementById('fsmHoldOverlay').remove()">Cancel</button>
+        <button class="btn btn-navy" onclick="fsmVisitHoldSave('${ticketId}')">Put job on hold</button></div>
+    </div></div>`);
+}
+async function fsmVisitHoldSave(ticketId){
+  const reason=document.getElementById('fsmHoldReason').value,note=(document.getElementById('fsmHoldNote').value||'').trim();
+  document.getElementById('fsmHoldOverlay').remove();
+  await fsmVisitStep(ticketId,reason,note);
+}
+
 async function updateFSMStatus(id){
   const status=document.getElementById('fsmStatusSelect')?.value;
   const r=await api('PATCH','/api/fsm_tickets?resource=ticket&action=update_status&id='+id,{status});
@@ -13544,8 +13616,6 @@ async function loadMyJobDetail(id){
 function myJobDetailHTML(){
   const t=A.myJobDetail;
   if(!t)return `<div style="color:var(--gray-500)">Loading…</div>`;
-  const next=MY_JOB_NEXT[t.status];
-  const canHold=['on_site','diagnosis'].includes(t.status);
   return `<div>
     <button class="btn" onclick="A.page='myJobs';draw()">&larr; Back to My Jobs</button>
     <div class="card" style="margin-top:12px">
@@ -13555,12 +13625,8 @@ function myJobDetailHTML(){
       <div style="margin-top:14px">${fsmSlaCardHTML(t)}</div>
     </div>
     <div class="card" style="margin-top:16px">
-      <div class="card-title">Update Status</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-        ${next?`<button class="btn btn-navy" onclick="myJobSetStatus('${t.id}','${next.to}')">${esc(next.label)}</button>`:''}
-        ${canHold?`<button class="btn btn-sm" onclick="myJobSetStatus('${t.id}','waiting_customer')">Waiting on Customer</button>
-          <button class="btn btn-sm" onclick="myJobSetStatus('${t.id}','waiting_parts')">Waiting on Parts</button>`:''}
-      </div>
+      <div class="card-title">Next step</div>
+      <div style="margin-top:8px">${fsmVisitActionsHTML(t)||'<div style="color:var(--gray-500);font-size:13px">Nothing to do right now.</div>'}</div>
       <details style="margin-top:10px">
         <summary style="cursor:pointer;font-size:12px;color:var(--gray-500)">Set status manually</summary>
         <div style="margin-top:8px;display:flex;gap:8px">
