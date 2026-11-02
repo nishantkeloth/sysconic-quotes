@@ -296,7 +296,8 @@ def _gap_ticket_ids(sb, company_id, contract):
             .eq("customer_id", contract["customer_id"])
             .eq("coverage_gap", True)
             .in_("billing_status", ["pending", "not_billable"])
-            .gte("created_at", contract["start_date"])
+            # advance-generated PM tickets are created up to 90 days before their visit
+            .gte("created_at", (date.fromisoformat(contract["start_date"]) - timedelta(days=90)).isoformat())
         )
         if contract.get("site_id"):
             q = q.eq("site_id", contract["site_id"])

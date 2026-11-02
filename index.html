@@ -11477,6 +11477,7 @@ async function showAmcWizard(){
           <div class="fld"><label>Frequency</label><select id="amcFreq" class="iinput" onchange="amcDatesChanged('freq')">${Object.keys(FSM_FREQUENCY_LABEL).map(f=>`<option value="${f}" ${f==='quarterly'?'selected':''}>${FSM_FREQUENCY_LABEL[f]}</option>`).join('')}</select></div>
           <div class="fld"><label>First visit due</label><input id="amcFirstDue" type="date" class="iinput" value="${amcAddMonths(start,3)}"></div>
         </div>
+        <div class="fld"><label>Create each visit ticket this many days ahead <span style="color:var(--gray-500);font-weight:400">(so it shows on the Schedule board)</span></label><input id="amcLead" type="number" min="0" max="90" class="iinput" style="max-width:140px" value="14"></div>
         <div class="fld"><label>Default engineer <span style="color:var(--gray-500);font-weight:400">(optional)</span></label>
           <select id="amcEngineer" class="iinput"><option value="">— Unassigned —</option>${engineers.map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join('')}</select></div>
         <div class="fld"><label>Checklist <span style="color:var(--gray-500);font-weight:400">(one item per line — the engineer ticks these on every visit)</span></label>
@@ -11534,7 +11535,7 @@ async function amcWizardSave(){
       btn.textContent='Creating PM schedule…';
       const freq=g('amcFreq')||'quarterly';
       const checklist=g('amcChecklist').split('\n').map(s=>s.trim()).filter(Boolean).map(text=>({text,done:false}));
-      const r=await api('POST','/api/fsm_pm?resource=schedule&action=create',{name:`${FSM_FREQUENCY_LABEL[freq]} PM - ${siteName}`,site_id:AMCW.siteId,frequency:freq,next_due_date:g('amcFirstDue'),assigned_engineer_id:g('amcEngineer')||null,checklist});
+      const r=await api('POST','/api/fsm_pm?resource=schedule&action=create',{name:`${FSM_FREQUENCY_LABEL[freq]} PM - ${siteName}`,site_id:AMCW.siteId,frequency:freq,next_due_date:g('amcFirstDue'),assigned_engineer_id:g('amcEngineer')||null,checklist,lead_days:Number(g('amcLead')||14)});
       if(r.error||!r.id)throw new Error('PM schedule: '+(r.error||'could not be created'));
       AMCW.pmId=r.id;
     }
@@ -12161,6 +12162,7 @@ function fsmPmListHTML(){
   const siteName=id=>{const s=(A.fsmSites||[]).find(x=>x.id===id);return s?s.name:'';};
   const engName=id=>{const e=(A.fsmEngineers||[]).find(x=>x.id===id);return e?e.name:'';};
   const today=new Date().toISOString().slice(0,10);
+  const readyBy=p=>{const d=new Date();d.setDate(d.getDate()+(p.lead_days??14));return d.toISOString().slice(0,10);};
   const rows=(list||[]).map(p=>{
     const overdue=p.is_active&&p.next_due_date<=today;
     return `<div class="prod-row" style="grid-template-columns:${cols};cursor:pointer" onclick="showFsmPmModal('${p.id}')">
@@ -12172,12 +12174,12 @@ function fsmPmListHTML(){
       <div data-label="Active"><span class="sbadge ${p.is_active?'s-resolved':'s-cancelled'}">${p.is_active?'Active':'Paused'}</span></div>
     </div>`;
   }).join('');
-  const dueCount=(list||[]).filter(p=>p.is_active&&p.next_due_date<=today).length;
+  const dueCount=(list||[]).filter(p=>p.is_active&&p.next_due_date<=readyBy(p)).length;
   const uncovered=A.fsmContracts?(list||[]).filter(p=>p.is_active&&!fsmScheduleCovered(p)).length:0;
   return `<div>
     ${uncovered?`<div style="padding:10px 12px;border:1px solid #f79009;background:#fffaeb;border-radius:8px;font-size:13px;margin-bottom:12px"><strong>⚠ ${uncovered} active PM schedule${uncovered===1?'':'s'} ${uncovered===1?'has':'have'} no active contract.</strong> Visits generated for ${uncovered===1?'it':'them'} will be flagged and billed as chargeable until the AMC is renewed (Setup &gt; Contracts &gt; open the contract &gt; Renew).</div>`:''}
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <div style="font-size:13px;color:var(--gray-500)">${dueCount} schedule${dueCount===1?'':'s'} due now</div>
+      <div style="font-size:13px;color:var(--gray-500)">${dueCount} schedule${dueCount===1?'':'s'} ready to generate <span title="A visit ticket is created this many days before its due date (set per schedule); the daily job does this automatically.">(visit within its lead time)</span></div>
       <button class="btn btn-sm" onclick="fsmGeneratePmNow()" ${dueCount?'':'disabled'}>Generate Due Tickets Now</button>
     </div>
     ${list===null?`<div style="padding:22px;color:var(--gray-500)">Loading…</div>`
@@ -12230,6 +12232,7 @@ function showFsmPmModal(pmId){
         </div>
         <div class="fld"><label>Next Due Date</label><input id="fsmPmNextDue" type="date" class="iinput" value="${p?.next_due_date||''}"></div>
       </div>
+      <div class="fld"><label>Create the visit ticket in advance <span style="color:var(--gray-500);font-weight:400">(days before the due date, so it shows on the Schedule board)</span></label><input id="fsmPmLead" type="number" min="0" max="90" class="iinput" style="max-width:140px" value="${p?.lead_days??14}"></div>
       <div class="fld"><label>Default Engineer <span style="color:var(--gray-500);font-weight:400">(optional)</span></label>
         <select id="fsmPmEngineer" class="iinput">
           <option value="">— Unassigned —</option>
@@ -12273,6 +12276,7 @@ async function saveFsmPmSchedule(pmId){
     frequency:document.getElementById('fsmPmFrequency')?.value||'quarterly',
     assigned_engineer_id:document.getElementById('fsmPmEngineer')?.value||null,
     checklist,
+    lead_days:Number(document.getElementById('fsmPmLead')?.value||14),
   };
   const activeSel=document.getElementById('fsmPmActive');
   if(activeSel)body.is_active=activeSel.value==='true';

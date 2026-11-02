@@ -18,6 +18,27 @@ from api.auth import verify_token, get_sb
 app = Flask(__name__)
 
 VALID_FREQUENCIES = {"monthly", "quarterly", "half_yearly", "yearly"}
+DEFAULT_LEAD_DAYS = 14   # create the visit this many days before it is due
+MAX_LEAD_DAYS = 90
+
+
+def _lead_days(sched):
+    try:
+        v = sched.get("lead_days")
+        v = DEFAULT_LEAD_DAYS if v is None else int(v)
+    except (TypeError, ValueError):
+        v = DEFAULT_LEAD_DAYS
+    return max(0, min(MAX_LEAD_DAYS, v))
+
+
+def _clean_lead(payload):
+    """lead_days from a request body, or None when absent/invalid."""
+    if "lead_days" not in payload:
+        return None
+    try:
+        return max(0, min(MAX_LEAD_DAYS, int(payload["lead_days"])))
+    except (TypeError, ValueError):
+        return None
 FREQUENCY_MONTHS = {"monthly": 1, "quarterly": 3, "half_yearly": 6, "yearly": 12}
 
 CRON_SECRET = os.environ.get('CRON_SECRET')
@@ -143,7 +164,16 @@ def create_schedule():
     }
 
     sb = get_sb()
-    result = sb.table("fsm_pm_schedules").insert(record).execute()
+    lead = _clean_lead(payload)
+    if lead is not None:
+        record["lead_days"] = lead
+    try:
+        result = sb.table("fsm_pm_schedules").insert(record).execute()
+    except Exception:
+        if "lead_days" not in record:
+            raise
+        record.pop("lead_days")  # column not migrated yet: still create the schedule
+        result = sb.table("fsm_pm_schedules").insert(record).execute()
     return jsonify(result.data[0]), 201
 
 
@@ -172,19 +202,29 @@ def update_schedule():
     allowed = {"name", "frequency", "checklist", "assigned_engineer_id",
                "next_due_date", "asset_id", "is_active"}
     update = {k: v for k, v in payload.items() if k in allowed}
+    lead = _clean_lead(payload)
+    if lead is not None:
+        update["lead_days"] = lead
     update["updated_at"] = datetime.utcnow().isoformat()
 
     sb = get_sb()
-    result = sb.table("fsm_pm_schedules").update(update).eq("id", schedule_id).eq("company_id", company_id).execute()
+    try:
+        result = sb.table("fsm_pm_schedules").update(update).eq("id", schedule_id).eq("company_id", company_id).execute()
+    except Exception:
+        if "lead_days" not in update:
+            raise
+        update.pop("lead_days")
+        result = sb.table("fsm_pm_schedules").update(update).eq("id", schedule_id).eq("company_id", company_id).execute()
     if not result.data:
         return jsonify({"error": "not found"}), 404
     return jsonify(result.data[0])
 
 
-def _find_applicable_contract(sb, company_id, customer_id, site_id):
+def _find_applicable_contract(sb, company_id, customer_id, site_id, on_date=None):
     """Same rule as api/fsm_tickets.py: a contract for this exact site first,
-    then a customer-wide one; active and not past its end date."""
-    today = datetime.utcnow().date().isoformat()
+    then a customer-wide one; active and in force on `on_date` (the visit date
+    for advance-generated PM tickets, otherwise today)."""
+    today = on_date or datetime.utcnow().date().isoformat()
 
     def _query(site_filter):
         q = (
@@ -194,11 +234,14 @@ def _find_applicable_contract(sb, company_id, customer_id, site_id):
         q = q.is_("site_id", "null") if site_filter is None else q.eq("site_id", site_filter)
         return q.execute().data or []
 
+    def _in_force(c):
+        return (not c.get("end_date") or c["end_date"] >= today) and (not c.get("start_date") or c["start_date"] <= today)
+
     cands = []
     if site_id:
-        cands = [c for c in _query(site_id) if not c.get("end_date") or c["end_date"] >= today]
+        cands = [c for c in _query(site_id) if _in_force(c)]
     if not cands:
-        cands = [c for c in _query(None) if not c.get("end_date") or c["end_date"] >= today]
+        cands = [c for c in _query(None) if _in_force(c)]
     return cands[0] if cands else None
 
 
@@ -231,15 +274,20 @@ def _generate_for_company(sb, company_id, today, errors=None):
     company only) and the cron endpoint (CRON_SECRET-gated, all companies).
     One bad schedule no longer aborts the rest: failures are collected in
     `errors` (if given) as {schedule, error}."""
-    due = (
+    # Visits are generated ahead of their due date (per-schedule lead_days) so
+    # they appear on the Schedule board in good time, dated on the due date.
+    horizon = (today + timedelta(days=MAX_LEAD_DAYS)).isoformat()
+    candidates = (
         sb.table("fsm_pm_schedules")
         .select("*")
         .eq("company_id", company_id)
         .eq("is_active", True)
-        .lte("next_due_date", today.isoformat())
+        .lte("next_due_date", horizon)
         .execute()
         .data or []
     )
+    due = [s for s in candidates
+           if date.fromisoformat(s["next_due_date"]) <= today + timedelta(days=_lead_days(s))]
     generated = []
     for sched in due:
         try:
@@ -260,7 +308,7 @@ def _generate_for_company(sb, company_id, today, errors=None):
                 "priority": "medium",
                 "status": "new",
                 "source": "pm_schedule",
-                "subject": f"Preventive Maintenance — {sched['name']}",
+                "subject": f"Preventive Maintenance — {sched['name']} ({sched['next_due_date']})",
                 "description": f"Auto-generated from PM schedule ({sched['frequency'].replace('_',' ')}).",
                 "assigned_engineer_id": sched.get("assigned_engineer_id"),
                 "created_at": datetime.utcnow().isoformat(),
@@ -269,8 +317,14 @@ def _generate_for_company(sb, company_id, today, errors=None):
             # lookup or the SLA/billing columns are unavailable, still create the ticket.
             gap = False
             try:
-                contract = _find_applicable_contract(sb, company_id, site["customer_id"], sched["site_id"])
+                # Judge coverage on the VISIT date: an AMC that ends before the visit
+                # means the visit is not covered unless it is renewed first.
+                contract = _find_applicable_contract(sb, company_id, site["customer_id"], sched["site_id"], sched["next_due_date"])
                 ticket.update(_contract_fields(contract))
+                # Planned visits are not measured against the reactive response SLA
+                # (the clock would start weeks before the visit), so drop the deadlines.
+                ticket.pop("sla_response_due_at", None)
+                ticket.pop("sla_resolution_due_at", None)
                 # Coverage-gap guard: a scheduled PM visit with no active contract
                 # would silently become billable, so flag it for follow-up.
                 if not contract:
@@ -296,7 +350,7 @@ def _generate_for_company(sb, company_id, today, errors=None):
             if last_err is not None:
                 raise last_err
             _log_activity(sb, ticket_id, company_id, "created",
-                          note="Ticket auto-created from PM schedule" + (" - NO ACTIVE CONTRACT covers this site (renew the AMC or the visit is billed as chargeable)" if gap else ""))
+                          note="Ticket auto-created from PM schedule" + (f" - NO ACTIVE CONTRACT covers this site on the visit date {sched['next_due_date']} (renew the AMC or the visit is billed as chargeable)" if gap else ""))
 
             sb.table("fsm_work_orders").insert({
                 "id": str(uuid.uuid4()),
